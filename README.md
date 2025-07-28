@@ -100,6 +100,26 @@ The test suite covers:
 - ✅ Selenium WebDriver mocking
 - ✅ Download folder management
 
+## Architecture
+
+The project follows clean code and SOLID principles with modular architecture:
+
+### Modules
+
+- **`config.py`** - Single Responsibility: Configuration management
+- **`browser.py`** - Single Responsibility: Browser lifecycle management
+- **`downloader.py`** - Single Responsibility: File operations and downloads
+- **`csv_processor.py`** - Single Responsibility: CSV file processing
+- **`main.py`** - Single Responsibility: Workflow orchestration
+
+### Design Principles
+
+- **Single Responsibility Principle**: Each module has one clear purpose
+- **Open/Closed Principle**: Easy to extend without modifying existing code
+- **Dependency Inversion**: High-level modules don't depend on low-level modules
+- **Interface Segregation**: Clean interfaces between components
+- **Liskov Substitution**: Components can be easily replaced
+
 ## Configuration
 
 - **Download folder**: `~/Downloads/CoupaDownloads/`
@@ -112,7 +132,11 @@ The test suite covers:
 
 ## Files
 
-- `main.py` - Main automation script
+- `main.py` - Main orchestrator (lean entry point)
+- `config.py` - Configuration and settings
+- `browser.py` - Browser management and WebDriver setup
+- `downloader.py` - File operations and attachment downloading
+- `csv_processor.py` - CSV file reading and PO processing
 - `input.csv` - PO numbers to process
 - `requirements.txt` - Python dependencies
 - `run_tests.py` - Test runner script
@@ -124,7 +148,11 @@ The test suite covers:
 
 ```
 CoupaDownloads/
-├── main.py                 # Main automation script
+├── main.py                 # Main orchestrator (lean entry point)
+├── config.py               # Configuration and settings
+├── browser.py              # Browser management and WebDriver setup
+├── downloader.py           # File operations and attachment downloading
+├── csv_processor.py        # CSV file reading and PO processing
 ├── input.csv               # PO numbers to process
 ├── requirements.txt         # Python dependencies
 ├── run_tests.py            # Test runner script
