@@ -77,7 +77,17 @@ class BrowserManager:
     def _create_browser_options(self, headless: bool = False, custom_download_dir: Optional[str] = None) -> EdgeOptions:
         """Create and configure browser options. Supports headless mode and custom download directory."""
         options = EdgeOptions()
-        options.add_argument("--disable-extensions")
+        
+        # Set profile options FIRST (like in working test)
+        if Config.EDGE_PROFILE_DIR:
+            options.add_argument(f"--user-data-dir={Config.EDGE_PROFILE_DIR}")
+            options.add_argument(f"--profile-directory={Config.EDGE_PROFILE_NAME}")
+        
+        # Ensure browser remains open after script ends (for session persistency)
+        options.add_experimental_option("detach", True)
+        
+        # Other options after profile setup
+        # options.add_argument("--disable-extensions")  # Commented out to allow profile extensions
         options.add_argument("--start-maximized")
         
         # Use custom download directory if provided, otherwise use default
@@ -96,10 +106,9 @@ class BrowserManager:
         if headless:
             options.add_argument("--headless=new")
 
-        # Real-profile reuse
-        if Config.EDGE_PROFILE_DIR:
-            options.add_argument(f"--user-data-dir={Config.EDGE_PROFILE_DIR}")
-            options.add_argument("--profile-directory=Default")
+        # Debug print: show all arguments and experimental options
+        print("[DEBUG] EdgeOptions arguments:", options.arguments)
+        print("[DEBUG] EdgeOptions experimental options:", options.experimental_options)
 
         return options
     
@@ -116,12 +125,51 @@ class BrowserManager:
             print(f"Using local Edge WebDriver: {Config.DRIVER_PATH}")
             return self.driver
         except Exception as e:
-            print(f"Driver initialization failed: {e}")
-            raise
+            if "user data directory is already in use" in str(e):
+                print("⚠️ Profile directory is already in use. Falling back to default browser session.")
+                # Retry without profile options
+                options = self._create_browser_options_without_profile(headless=headless)
+                service = EdgeService(executable_path=Config.DRIVER_PATH)
+                self.driver = webdriver.Edge(service=service, options=options)
+                print(f"✅ Using local Edge WebDriver without profile: {Config.DRIVER_PATH}")
+                return self.driver
+            else:
+                print(f"Driver initialization failed: {e}")
+                raise
+    
+    def _create_browser_options_without_profile(self, headless: bool = False, custom_download_dir: Optional[str] = None) -> EdgeOptions:
+        """Create browser options without profile selection (fallback method)."""
+        options = EdgeOptions()
+        
+        # Ensure browser remains open after script ends (for session persistency)
+        options.add_experimental_option("detach", True)
+        
+        # Other options
+        # options.add_argument("--disable-extensions")  # Commented out to allow profile extensions
+        options.add_argument("--start-maximized")
+        
+        # Use custom download directory if provided, otherwise use default
+        download_dir = custom_download_dir or Config.DOWNLOAD_FOLDER
+        browser_prefs = {
+            "download.default_directory": download_dir,
+            "download.prompt_for_download": False,
+            "download.directory_upgrade": True,
+            "safebrowsing.enabled": False,
+        }
+        
+        options.add_experimental_option("prefs", browser_prefs)
+        options.add_experimental_option("excludeSwitches", ["enable-automation"])
+        options.add_experimental_option("useAutomationExtension", False)
+
+        if headless:
+            options.add_argument("--headless=new")
+
+        return options
     
     def start(self, headless: bool = False) -> webdriver.Edge:
         """Start the browser with cleanup of existing processes. Supports headless mode."""
-        self.check_and_kill_existing_edge_processes()
+        # Comment out process cleanup to avoid interfering with profile sessions
+        # self.check_and_kill_existing_edge_processes()
         return self.initialize_driver(headless=headless)
     
     def cleanup(self) -> None:

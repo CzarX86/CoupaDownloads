@@ -36,6 +36,12 @@ class CoupaDownloader:
         po_entries = CSVProcessor.read_po_numbers_from_csv(csv_file_path)
         valid_entries = CSVProcessor.process_po_numbers(po_entries)
 
+        # Limit number of POs processed if configured
+        from config import Config
+        if Config.PROCESS_MAX_POS is not None:
+            valid_entries = valid_entries[:Config.PROCESS_MAX_POS]
+            print(f"⚡ Limiting to top {Config.PROCESS_MAX_POS} POs for this run.")
+
         if not valid_entries:
             print("❌ No valid PO numbers provided.")
             return []
@@ -202,9 +208,20 @@ class CoupaDownloader:
                 filtered_tb = [line for line in tb_lines if "edgedriver" not in line]
                 print("".join(filtered_tb))
         finally:
-            # Keep browser open for persistent login session or close based on config
             from config import Config
-            if Config.KEEP_BROWSER_OPEN:
+            print(f"[DEBUG] CLOSE_BROWSER_AFTER_EXECUTION: {Config.CLOSE_BROWSER_AFTER_EXECUTION}")
+            print(f"[DEBUG] KEEP_BROWSER_OPEN: {Config.KEEP_BROWSER_OPEN}")
+            if Config.CLOSE_BROWSER_AFTER_EXECUTION:
+                self.browser_manager.cleanup()
+                print("✅ Browser closed after execution (per config).")
+            elif Config.KEEP_BROWSER_OPEN:
+                # Ensure browser is on homepage before leaving open
+                try:
+                    if self.driver and self._is_browser_session_valid():
+                        self.driver.get("https://unilever.coupahost.com")
+                        print("✅ Browser parked on Coupa homepage for session persistency")
+                except Exception as e:
+                    print(f"⚠️ Could not park browser on homepage: {e}")
                 self.browser_manager.keep_browser_open()
             else:
                 self.browser_manager.cleanup()

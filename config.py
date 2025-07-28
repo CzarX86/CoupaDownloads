@@ -21,10 +21,18 @@ class Config:
 
     # Environment variables with defaults
     PAGE_DELAY = float(os.environ.get("PAGE_DELAY", "0"))
-    EDGE_PROFILE_DIR = os.environ.get("EDGE_PROFILE_DIR")
+    # Edge user profile directory (for persistent sessions)
+    EDGE_PROFILE_DIR = os.path.expanduser(os.environ.get("EDGE_PROFILE_DIR", "~/Library/Application Support/Microsoft Edge"))
+    EDGE_PROFILE_NAME = os.environ.get("EDGE_PROFILE_NAME", "Default")  # e.g., 'Default', 'Profile 1'
     LOGIN_TIMEOUT = int(os.environ.get("LOGIN_TIMEOUT", "60"))
     HEADLESS = os.environ.get("HEADLESS", "false").lower() == "true"
-    KEEP_BROWSER_OPEN = os.environ.get("KEEP_BROWSER_OPEN", "true").lower() == "true"
+    KEEP_BROWSER_OPEN = False
+
+    # Whether to close the browser after execution (default: False)
+    CLOSE_BROWSER_AFTER_EXECUTION = True
+
+    # Limit number of POs to process (for testing or partial runs)
+    PROCESS_MAX_POS = int(os.environ.get("PROCESS_MAX_POS", "10")) or None  # None means no limit
 
     # Browser settings
     BROWSER_OPTIONS = {
