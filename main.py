@@ -1,59 +1,31 @@
 import os
 import re
-import shutil
+import shutil  # For file renaming
+import signal
+import subprocess
+import sys
 import time
-import winreg
-from typing import List
 
 from selenium import webdriver
+from selenium.common.exceptions import TimeoutException
 from selenium.webdriver.common.by import By
 from selenium.webdriver.edge.options import Options as EdgeOptions
-from selenium.webdriver.edge.service import Service
+from selenium.webdriver.edge.service import Service as EdgeService
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
-# Manual Driver Setup Instructions:
-# 1. Determine your Edge version via edge://settings/help
-# 2. Download matching driver from:
-#    https://developer.microsoft.com/en-us/microsoft-edge/tools/webdriver/
-# 3. Place driver in 'drivers' folder as: edgedriver_[VERSION].exe
-#    Example: edgedriver_124.0.2478.80.exe
-
-
-def get_edge_version():
-    """Detect installed Edge version using Windows registry"""
-    try:
-        # Try Current User registry first
-        key = winreg.OpenKey(
-            winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Edge\BLBeacon"
-        )
-        version, _ = winreg.QueryValueEx(key, "version")
-        winreg.CloseKey(key)
-        return version
-    except OSError:
-        try:
-            # Fallback to Local Machine registry
-            key = winreg.OpenKey(
-                winreg.HKEY_LOCAL_MACHINE,
-                r"SOFTWARE\WOW6432Node\Microsoft\Edge\BLBeacon",
-            )
-            version, _ = winreg.QueryValueEx(key, "version")
-            winreg.CloseKey(key)
-            return version
-        except OSError as e:
-            raise Exception("Failed to detect Edge version from registry") from e
-
-
 # Configuration
 BASE_URL = "https://unilever.coupahost.com/order_headers/{}"
-DOWNLOAD_FOLDER = r"C:\CoupaDownloads"
+DOWNLOAD_FOLDER = os.path.expanduser("~/Downloads/CoupaDownloads")
 ALLOWED_EXTENSIONS = [".pdf", ".msg", ".docx"]
+PAGE_DELAY = float(os.environ.get("PAGE_DELAY", "0"))  # NEW: debug delay
+EDGE_PROFILE_DIR = os.environ.get("EDGE_PROFILE_DIR")  # NEW: profile reuse
+LOGIN_TIMEOUT = int(os.environ.get("LOGIN_TIMEOUT", "60"))  # Login timeout in seconds
 
-# Create download folder if it doesn't exist
 if not os.path.exists(DOWNLOAD_FOLDER):
     os.makedirs(DOWNLOAD_FOLDER)
 
-# Set up Edge options for visible demonstration
+# Set up Edge options
 options = EdgeOptions()
 options.add_argument("--disable-extensions")
 options.add_argument("--start-maximized")
@@ -69,42 +41,167 @@ options.add_experimental_option(
 options.add_experimental_option("excludeSwitches", ["enable-automation"])
 options.add_experimental_option("useAutomationExtension", False)
 
-# Initialize Edge WebDriver with local driver
-try:
-    edge_version = get_edge_version()
-    driver_path = os.path.join("drivers", f"edgedriver_{edge_version}.exe")
+# NEW: Real-profile reuse
+if EDGE_PROFILE_DIR:
+    options.add_argument(f"--user-data-dir={EDGE_PROFILE_DIR}")
+    options.add_argument("--profile-directory=Default")
 
-    if not os.path.exists(driver_path):
-        raise FileNotFoundError(
-            f"EdgeDriver {edge_version} not found in drivers directory.\n"
-            "Please download manually from:\n"
-            "https://developer.microsoft.com/en-us/microsoft-edge/tools/webdriver/\n"
-            f"and save as: {os.path.basename(driver_path)}"
-        )
+# Use local WebDriver version 138
+DRIVER_PATH = os.path.join(os.path.dirname(__file__), "drivers", "edgedriver_138")
 
-    driver = webdriver.Edge(service=Service(driver_path), options=options)
-    print(f"Using EdgeDriver: {driver_path}")
+# Global driver variable for cleanup
+driver = None
 
-except Exception as e:
-    print(f"Driver initialization failed: {e}")
-    print("Refer to manual setup instructions in comments")
-    raise
+def cleanup_browser_processes():
+    """Kill all Edge browser processes to ensure clean shutdown"""
+    try:
+        if sys.platform == "darwin":  # macOS
+            subprocess.run(["pkill", "-f", "Microsoft Edge"], capture_output=True)
+            subprocess.run(["pkill", "-f", "msedge"], capture_output=True)
+        elif sys.platform == "win32":  # Windows
+            subprocess.run(["taskkill", "/f", "/im", "msedge.exe"], capture_output=True)
+        else:  # Linux
+            subprocess.run(["pkill", "-f", "microsoft-edge"], capture_output=True)
+            subprocess.run(["pkill", "-f", "msedge"], capture_output=True)
+        print("🧹 Cleaned up Edge browser processes")
+    except Exception as e:
+        print(f"⚠️ Warning: Could not clean up Edge processes: {e}")
+
+def check_and_kill_existing_edge_processes():
+    """Check for existing Edge processes and kill them before starting"""
+    try:
+        if sys.platform == "darwin":  # macOS
+            result = subprocess.run(["pgrep", "-f", "Microsoft Edge"], capture_output=True)
+            if result.returncode == 0:
+                print("🔍 Found existing Edge processes. Cleaning up...")
+                cleanup_browser_processes()
+                time.sleep(2)  # Give processes time to close
+        elif sys.platform == "win32":  # Windows
+            result = subprocess.run(["tasklist", "/FI", "IMAGENAME eq msedge.exe"], capture_output=True)
+            if "msedge.exe" in result.stdout.decode():
+                print("🔍 Found existing Edge processes. Cleaning up...")
+                cleanup_browser_processes()
+                time.sleep(2)
+        else:  # Linux
+            result = subprocess.run(["pgrep", "-f", "microsoft-edge"], capture_output=True)
+            if result.returncode == 0:
+                print("🔍 Found existing Edge processes. Cleaning up...")
+                cleanup_browser_processes()
+                time.sleep(2)
+    except Exception as e:
+        print(f"⚠️ Warning: Could not check for existing Edge processes: {e}")
+
+def signal_handler(signum, frame):
+    """Handle interrupt signals for graceful shutdown"""
+    print(f"\n🛑 Received signal {signum}. Shutting down gracefully...")
+    cleanup_browser_processes()
+    if driver:
+        try:
+            driver.quit()
+        except:
+            pass
+    sys.exit(0)
+
+# Register signal handlers
+signal.signal(signal.SIGINT, signal_handler)
+signal.signal(signal.SIGTERM, signal_handler)
+
+# Check if local driver exists
+if not os.path.exists(DRIVER_PATH):
+    print(f"Local WebDriver not found at: {DRIVER_PATH}")
+    print("Please ensure edgedriver_138 is available in the drivers folder.")
+    raise FileNotFoundError(f"WebDriver not found at {DRIVER_PATH}")
+
+def initialize_driver():
+    """Initialize the WebDriver with proper error handling"""
+    global driver
+    try:
+        service = EdgeService(executable_path=DRIVER_PATH)
+        driver = webdriver.Edge(service=service, options=options)
+        print(f"Using local Edge WebDriver: {DRIVER_PATH}")
+        return driver
+    except Exception as e:
+        print(f"Driver initialization failed: {e}")
+        raise
 
 
-def download_attachments_for_po(display_po: str, clean_po: str) -> None:
+def ensure_logged_in(driver):
+    """Detect Coupa login page and automatically monitor for successful login."""
+    if (
+        "login" in driver.current_url
+        or "sign_in" in driver.current_url
+        or "Log in" in driver.title
+    ):
+        print("Detected login page. Please log in manually...")
+        
+        # Monitor for successful login indicators
+        max_wait_time = LOGIN_TIMEOUT  # Maximum time to wait for login
+        start_time = time.time()
+        
+        while time.time() - start_time < max_wait_time:
+            try:
+                # Check for indicators of successful login
+                current_url = driver.current_url
+                page_title = driver.title
+                
+                # Success indicators (URLs that indicate logged-in state)
+                success_indicators = [
+                    "order_headers",  # PO pages
+                    "dashboard",      # Dashboard
+                    "home",          # Home page
+                    "profile",       # Profile page
+                    "settings"       # Settings page
+                ]
+                
+                # Check if we're on a logged-in page
+                if any(indicator in current_url for indicator in success_indicators):
+                    print("✅ Login detected automatically!")
+                    return
+                
+                # Check if we're still on login page
+                if "login" in current_url or "sign_in" in current_url:
+                    print("⏳ Waiting for login completion...", end="\r")
+                    time.sleep(1)
+                    continue
+                
+                # If we're not on login page and not on a known success page,
+                # assume login was successful
+                if "login" not in current_url and "sign_in" not in current_url:
+                    print("✅ Login detected automatically!")
+                    return
+                    
+            except Exception as e:
+                print(f"⚠️ Error checking login status: {e}")
+                time.sleep(1)
+                continue
+        
+        # If we reach here, login timeout occurred
+        print(f"\n❌ Login timeout after {max_wait_time} seconds.")
+        print("Please ensure you've logged in and the page has loaded.")
+        raise TimeoutException("Login timeout - please try again")
+    
+    # If not on login page, assume already logged in
+    print("✅ Already logged in or not on login page.")
+
+
+def download_attachments_for_po(display_po: str, clean_po: str, driver_instance) -> None:
     try:
         url = BASE_URL.format(clean_po)
         print(f"Processing PO #{display_po} (URL: {url})")
-        driver.get(url)
+        driver_instance.get(url)
+        if PAGE_DELAY:
+            print(f"[DEBUG] Sleeping for {PAGE_DELAY} seconds after page load...")
+            time.sleep(PAGE_DELAY)
+        ensure_logged_in(driver_instance)
 
         # Check if page is accessible
-        if "Page not found" in driver.title:
+        if "Page not found" in driver_instance.title:
             print(f"  PO #{display_po} not found. Skipping.")
             return
 
         # Wait for attachments to load
         try:
-            WebDriverWait(driver, 10).until(
+            WebDriverWait(driver_instance, 10).until(
                 EC.presence_of_element_located(
                     (By.CSS_SELECTOR, "span[aria-label*='file attachment']")
                 )
@@ -114,7 +211,7 @@ def download_attachments_for_po(display_po: str, clean_po: str) -> None:
             return
 
         # Find all attachment elements
-        attachments = driver.find_elements(
+        attachments = driver_instance.find_elements(
             By.CSS_SELECTOR, "span[aria-label*='file attachment']"
         )
         if not attachments:
@@ -123,17 +220,23 @@ def download_attachments_for_po(display_po: str, clean_po: str) -> None:
 
         print(f"  Found {len(attachments)} attachments. Downloading...")
 
+        # Track files before download
+        before_files = set(os.listdir(DOWNLOAD_FOLDER))
+
         # Download each attachment individually
         for attachment in attachments:
             try:
                 # Get filename from aria-label
                 aria_label = attachment.get_attribute("aria-label")
-                filename_match = re.search(r"(.+?)\s*file attachment", aria_label)
-                filename = (
-                    filename_match.group(1)
-                    if filename_match
-                    else f"attachment_{attachments.index(attachment)+1}"
-                )
+                if aria_label is None:
+                    filename = f"attachment_{attachments.index(attachment)+1}"
+                else:
+                    filename_match = re.search(r"(.+?)\\s*file attachment", aria_label)
+                    filename = (
+                        filename_match.group(1)
+                        if filename_match
+                        else f"attachment_{attachments.index(attachment)+1}"
+                    )
 
                 # Skip unsupported file types
                 if not any(
@@ -143,7 +246,7 @@ def download_attachments_for_po(display_po: str, clean_po: str) -> None:
                     continue
 
                 # Click the attachment
-                driver.execute_script("arguments[0].scrollIntoView();", attachment)
+                driver_instance.execute_script("arguments[0].scrollIntoView();", attachment)
                 attachment.click()
                 print(f"    Downloading: {filename}")
 
@@ -153,105 +256,67 @@ def download_attachments_for_po(display_po: str, clean_po: str) -> None:
             except Exception as e:
                 print(f"    Failed to download attachment: {str(e)}")
 
-        # Wait for all downloads to complete
-        wait_for_download_complete(DOWNLOAD_FOLDER, timeout=len(attachments) * 10)
+        _wait_for_download_complete(DOWNLOAD_FOLDER, timeout=len(attachments) * 10)
+
+        # NEW: Rename newly downloaded files
+        after_files = set(os.listdir(DOWNLOAD_FOLDER))
+        new_files = after_files - before_files
+        for fname in new_files:
+            orig_path = os.path.join(DOWNLOAD_FOLDER, fname)
+            new_name = f"PO{display_po}_{fname}"
+            new_path = os.path.join(DOWNLOAD_FOLDER, new_name)
+            try:
+                os.rename(orig_path, new_path)
+                print(f"    Renamed {fname} -> {new_name}")
+            except Exception as e:
+                print(f"    Could not rename {fname}: {e}")
 
     except TimeoutException:
         print(f"  Timed out waiting for PO #{display_po} page to load. Skipping.")
     except Exception as e:
         print(f"  Error processing PO #{display_po}: {str(e)}")
 
-        # Process each attachment
-        for span in attachment_spans:
-            try:
-                aria_label = span.get_attribute("aria-label")
-                # Extract filename from aria-label (e.g., "filename.pdf file attachment")
-                filename_match = re.search(r"(.+?)\s*file attachment", aria_label)
-                if not filename_match:
-                    print(
-                        f"Could not extract filename from aria-label for PO #{display_po}: {aria_label}"
-                    )
-                    continue
-                original_filename = filename_match.group(1)
 
-                # Check if the file has an allowed extension
-                if not any(
-                    original_filename.lower().endswith(ext)
-                    for ext in ALLOWED_EXTENSIONS
-                ):
-                    print(
-                        f"Skipping file with unsupported extension for PO #{display_po}: {original_filename}"
-                    )
-                    continue
-
-                # Highlight and click attachment with visual feedback
-                print(f"➡️ Clicking attachment: {original_filename}")
-                driver.execute_script("arguments[0].style.border='3px solid red'", span)
-                time.sleep(1)
-                span.click()
-                driver.execute_script("arguments[0].style.border=''", span)
-                print(f"✔️ Clicked attachment: {original_filename}")
-                time.sleep(1)  # Pause to show click effect
-
-                # Wait for download with timeout
-                print(f"Waiting for download: {original_filename}")
-                downloaded_file = None
-                start_time = time.time()
-                while time.time() - start_time < 30:  # 30-second timeout
-                    time.sleep(1)
-                    # Check for browser's temporary download files
-                    for file in os.listdir(DOWNLOAD_FOLDER):
-                        # Match actual Edge download behavior with possible .crdownload temp files
-                        if file.startswith(
-                            original_filename.split(".")[0]
-                        ) and not file.endswith(".crdownload"):
-                            downloaded_file = file
-                            break
-                    if downloaded_file:
-                        break
-                if not downloaded_file:
-                    print(f"Download timeout for {original_filename} after 30 seconds")
-                    continue
-
-                if not downloaded_file:
-                    print(
-                        f"File download failed for PO #{display_po}: {original_filename}"
-                    )
-                    continue
-
-                # Rename and move the file
-                new_filename = f"{display_po}_{original_filename}"
-                new_filepath = os.path.join(DOWNLOAD_FOLDER, new_filename)
-                original_filepath = os.path.join(DOWNLOAD_FOLDER, downloaded_file)
-
-                # Handle case where file already exists
-                if os.path.exists(new_filepath):
-                    os.remove(new_filepath)  # Overwrite existing file
-                shutil.move(original_filepath, new_filepath)
-                print(f"✔️ File saved as {new_filename}")
-                time.sleep(1)  # Pause to show completion
-
-            except Exception as e:
-                print(
-                    f"Error processing attachment {original_filename} for PO #{display_po}: {e}"
-                )
-                continue
-
-    except Exception as e:
-        print(f"Error processing PO #{display_po}: {e}")
+def _wait_for_download_complete(directory: str, timeout: int = 30):
+    """Wait for all .crdownload files to disappear"""
+    start_time = time.time()
+    while time.time() - start_time < timeout:
+        if not any(f.endswith(".crdownload") for f in os.listdir(directory)):
+            return
+        time.sleep(1)
+    raise TimeoutException(f"Downloads not completed within {timeout} seconds")
 
 
 def main() -> None:
+    driver_instance = None
     try:
-        print(
-            "Paste the list of PO numbers (one per line) and press Enter twice to finish:"
-        )
+        import csv
+
+        # Check and kill any existing Edge processes
+        check_and_kill_existing_edge_processes()
+
+        # Initialize the driver
+        driver_instance = initialize_driver()
+
+        # Get the directory where the script is located
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        csv_file = os.path.join(script_dir, "input.csv")
+
+        if not os.path.exists(csv_file):
+            raise FileNotFoundError(f"PO input file {csv_file} not found")
+
         po_entries = []
-        while True:
-            line = input()
-            if line == "":
-                break
-            po_entries.append(line.strip())
+        with open(csv_file, newline="") as f:
+            reader = csv.reader(f)
+            # Skip header if exists
+            try:
+                header = next(reader)
+            except StopIteration:
+                pass
+
+            for row in reader:
+                if row:  # Skip empty rows
+                    po_entries.append(row[0].strip())  # Get first column value
 
         # Process PO numbers (accept "PO" prefix)
         valid_entries = []
@@ -272,15 +337,25 @@ def main() -> None:
         )
 
         for display_po, clean_po in valid_entries:
-            download_attachments_for_po(display_po, clean_po)
+            download_attachments_for_po(display_po, clean_po, driver_instance)
 
     except KeyboardInterrupt:
         print("\nScript interrupted by user.")
     except Exception as e:
         print(f"Unexpected error: {e}")
     finally:
-        driver.quit()
-        print("Browser closed.")
+        # Clean up browser processes
+        cleanup_browser_processes()
+        
+        # Close the driver if it exists
+        if driver_instance:
+            try:
+                driver_instance.quit()
+                print("✅ Browser closed successfully.")
+            except Exception as e:
+                print(f"⚠️ Warning: Could not close browser cleanly: {e}")
+        else:
+            print("ℹ️ No browser instance to close.")
 
 
 if __name__ == "__main__":
