@@ -231,11 +231,11 @@ class DownloadManager:
                 EC.presence_of_element_located((By.TAG_NAME, "body"))
             )
 
-            # Check for login redirect
+            # Check for login redirect - raise exception for retry mechanism
             if "login" in self.driver.current_url.lower() or "sign_in" in self.driver.current_url.lower():
                 print(f"  🔐 Login required for PO #{display_po}")
                 CSVProcessor.update_po_status(display_po, 'FAILED', error_message='Login required', coupa_url=po_url)
-                return
+                raise Exception("Login required - will retry after login")
 
             # Find attachments
             attachments = self._find_attachments()
@@ -288,8 +288,12 @@ class DownloadManager:
             print(f"  Timed out waiting for PO #{display_po} page to load. Skipping.")
             CSVProcessor.update_po_status(display_po, 'FAILED', error_message='Page load timeout', coupa_url=po_url)
         except Exception as e:
-            print(f"  Error processing PO #{display_po}: {str(e)}")
-            CSVProcessor.update_po_status(display_po, 'FAILED', error_message=str(e)[:100], coupa_url=po_url)
+            # Re-raise login-related exceptions for retry mechanism
+            if "login" in str(e).lower() or "authentication" in str(e).lower() or "sign_in" in str(e).lower():
+                raise e  # Re-raise for retry mechanism
+            else:
+                print(f"  Error processing PO #{display_po}: {str(e)}")
+                CSVProcessor.update_po_status(display_po, 'FAILED', error_message=str(e)[:100], coupa_url=po_url)
 
     def _extract_supplier_name(self) -> str:
         """Extract supplier name from the PO page using cascading selector approach."""
@@ -783,3 +787,32 @@ class LoginManager:
 
         # If not on login page, assume already logged in
         print("✅ Already logged in or not on login page.")
+
+    def is_logged_in(self) -> bool:
+        """Check if currently logged in to Coupa."""
+        try:
+            current_url = self.driver.current_url.lower()
+            
+            # Check if we're on login pages
+            if "login" in current_url or "sign_in" in current_url:
+                return False
+            
+            # Check if we're on logged-in pages
+            success_indicators = [
+                "order_headers",  # PO pages
+                "dashboard",  # Dashboard
+                "home",  # Home page
+                "profile",  # Profile page
+                "settings",  # Settings page
+            ]
+            
+            if any(indicator in current_url for indicator in success_indicators):
+                return True
+            
+            # If we're not on login page and not on a known success page,
+            # assume logged in (could be on any Coupa page)
+            return "login" not in current_url and "sign_in" not in current_url
+            
+        except Exception:
+            # If we can't determine, assume not logged in
+            return False

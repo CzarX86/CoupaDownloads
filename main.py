@@ -46,16 +46,69 @@ class CoupaDownloader:
         return valid_entries
 
     def download_attachments(self, valid_entries: list) -> None:
-        """Download attachments for all valid PO numbers."""
+        """Download attachments for all valid PO numbers with login retry mechanism."""
         if not self.login_manager or not self.download_manager:
             raise RuntimeError("Managers not initialized. Call setup() first.")
 
+        # Track POs that fail due to login issues for retry
+        login_failed_pos = []
+        login_completed = False
+
         for display_po, clean_po in valid_entries:
-            # Ensure logged in before each download
-            self.login_manager.ensure_logged_in()
+            # Check if we need to handle login
+            if not login_completed:
+                try:
+                    # Check if already logged in
+                    if self.login_manager.is_logged_in():
+                        print("🔐 Already logged in - proceeding with downloads")
+                        login_completed = True
+                    else:
+                        # Try to ensure login
+                        self.login_manager.ensure_logged_in()
+                        login_completed = True
+                        print("🔐 Login completed successfully!")
+                    
+                    # If we have any POs that failed due to login, retry them now
+                    if login_failed_pos:
+                        print(f"🔄 Retrying {len(login_failed_pos)} POs that failed due to login...")
+                        for retry_po, retry_clean_po in login_failed_pos:
+                            print(f"  🔄 Retrying PO #{retry_po}...")
+                            try:
+                                self.download_manager.download_attachments_for_po(retry_po, retry_clean_po)
+                            except Exception as retry_error:
+                                error_msg = str(retry_error).lower()
+                                if "login" in error_msg or "authentication" in error_msg or "sign_in" in error_msg:
+                                    print(f"    🔐 PO #{retry_po} still failing due to login - will need manual intervention")
+                                else:
+                                    print(f"    ❌ PO #{retry_po} failed with different error: {retry_error}")
+                        login_failed_pos.clear()  # Clear the retry list
+                        
+                except Exception as login_error:
+                    print(f"🔐 Login still required: {login_error}")
+                    # Continue with current PO, it will likely fail due to login
 
             # Download attachments for this PO
-            self.download_manager.download_attachments_for_po(display_po, clean_po)
+            try:
+                self.download_manager.download_attachments_for_po(display_po, clean_po)
+            except Exception as download_error:
+                error_msg = str(download_error).lower()
+                if "login" in error_msg or "authentication" in error_msg or "sign_in" in error_msg:
+                    print(f"  🔐 PO #{display_po} failed due to login - will retry after login")
+                    login_failed_pos.append((display_po, clean_po))
+                else:
+                    print(f"  ❌ PO #{display_po} failed with error: {download_error}")
+
+        # If we still have POs that failed due to login after processing all entries
+        if login_failed_pos and not login_completed:
+            print(f"\n⚠️ {len(login_failed_pos)} POs failed due to login issues:")
+            for po, _ in login_failed_pos:
+                print(f"  • PO #{po}")
+            print("💡 Please run the script again after logging in manually.")
+        elif login_failed_pos:
+            print(f"\n⚠️ {len(login_failed_pos)} POs still failed after login retry:")
+            for po, _ in login_failed_pos:
+                print(f"  • PO #{po}")
+            print("💡 These POs may need manual investigation.")
 
     def run(self) -> None:
         """Main execution method."""
