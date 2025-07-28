@@ -135,4 +135,128 @@ class BrowserManager:
             except Exception as e:
                 print(f"⚠️ Warning: Could not close browser cleanly: {e}")
         else:
-            print("ℹ️ No browser instance to close.") 
+            print("ℹ️ No browser instance to close.")
+    
+    def create_new_tab(self) -> str:
+        """Create a new tab and return its handle."""
+        if not self.driver:
+            raise RuntimeError("Driver not initialized")
+        
+        # Store current window handle
+        original_handle = self.driver.current_window_handle
+        
+        # Create new tab
+        self.driver.execute_script("window.open('');")
+        
+        # Switch to the new tab
+        new_handle = None
+        for handle in self.driver.window_handles:
+            if handle != original_handle:
+                new_handle = handle
+                break
+        
+        if new_handle:
+            self.driver.switch_to.window(new_handle)
+            print(f"🆕 Created new tab: {new_handle}")
+            return new_handle
+        else:
+            raise RuntimeError("Failed to create new tab")
+    
+    def close_current_tab(self) -> None:
+        """Close the current tab and switch back to the main tab."""
+        if not self.driver:
+            raise RuntimeError("Driver not initialized")
+        
+        try:
+            current_handle = self.driver.current_window_handle
+            all_handles = self.driver.window_handles
+            
+            if len(all_handles) <= 1:
+                print("⚠️ Only one tab remaining, cannot close")
+                return
+            
+            # Close current tab
+            self.driver.close()
+            print(f"🔒 Closed tab: {current_handle}")
+            
+            # Switch to the first remaining tab (should be the main tab)
+            remaining_handles = [h for h in all_handles if h != current_handle]
+            if remaining_handles:
+                self.driver.switch_to.window(remaining_handles[0])
+                print(f"🔄 Switched to main tab: {remaining_handles[0]}")
+            else:
+                print("⚠️ No remaining tabs to switch to")
+                
+        except Exception as e:
+            print(f"⚠️ Error closing tab: {e}")
+            # Try to switch to any available tab
+            try:
+                if self.driver.window_handles:
+                    self.driver.switch_to.window(self.driver.window_handles[0])
+                    print("🔄 Recovered by switching to first available tab")
+            except Exception as recovery_error:
+                print(f"❌ Could not recover from tab error: {recovery_error}")
+    
+    def switch_to_main_tab(self) -> None:
+        """Switch to the main tab (first tab)."""
+        if not self.driver:
+            raise RuntimeError("Driver not initialized")
+        
+        if self.driver.window_handles:
+            main_handle = self.driver.window_handles[0]
+            self.driver.switch_to.window(main_handle)
+            print(f"🔄 Switched to main tab: {main_handle}")
+    
+    def switch_to_tab(self, tab_handle: str) -> None:
+        """Switch to a specific tab by handle."""
+        if not self.driver:
+            raise RuntimeError("Driver not initialized")
+        
+        if tab_handle in self.driver.window_handles:
+            self.driver.switch_to.window(tab_handle)
+            print(f"🔄 Switched to tab: {tab_handle}")
+        else:
+            raise RuntimeError(f"Tab handle {tab_handle} not found")
+    
+    def keep_browser_open(self) -> None:
+        """Keep the browser open instead of closing it."""
+        if self.driver:
+            print("🌐 Keeping browser open for persistent login session")
+            print("💡 You can manually close the browser when done, or run the script again to continue processing")
+            # Don't call cleanup() - let the browser stay open
+        else:
+            print("ℹ️ No browser instance to keep open")
+    
+    def force_cleanup(self) -> None:
+        """Force cleanup and close browser (use when KEEP_BROWSER_OPEN is False)."""
+        self.cleanup()
+    
+    def is_browser_responsive(self) -> bool:
+        """Check if the browser is still responsive."""
+        if not self.driver:
+            return False
+        
+        try:
+            # Try to get the current URL to test responsiveness
+            self.driver.current_url
+            return True
+        except Exception:
+            return False
+    
+    def ensure_browser_responsive(self) -> bool:
+        """Ensure browser is responsive, try to recover if not."""
+        if not self.is_browser_responsive():
+            print("⚠️ Browser not responsive, attempting to recover...")
+            try:
+                # Try to switch to any available window
+                if self.driver and self.driver.window_handles:
+                    self.driver.switch_to.window(self.driver.window_handles[0])
+                    print("✅ Browser recovered")
+                    return True
+                else:
+                    print("❌ No windows available")
+                    return False
+            except Exception as e:
+                print(f"❌ Could not recover browser: {e}")
+                return False
+        return True 

@@ -85,14 +85,85 @@ class CoupaDownloader:
         if not self.handle_login_first():
             return
 
-        # STEP 2: Process all POs after login is confirmed
+        # STEP 2: Process all POs with browser session recovery
         print(f"\n🎯 Processing {len(valid_entries)} POs after successful login...")
         
-        for display_po, clean_po in valid_entries:
+        for i, (display_po, clean_po) in enumerate(valid_entries):
             try:
+                print(f"\n📋 Processing PO #{display_po} ({i+1}/{len(valid_entries)})...")
+                
+                # Check if browser session is still valid
+                if not self._is_browser_session_valid():
+                    print("⚠️ Browser session lost, attempting to recover...")
+                    if not self._recover_browser_session():
+                        print("❌ Could not recover browser session, stopping processing")
+                        break
+                
+                # Process the PO in the current tab (main tab)
                 self.download_manager.download_attachments_for_po(display_po, clean_po)
+                
+                print(f"✅ Completed PO #{display_po}")
+                
             except Exception as download_error:
                 print(f"  ❌ PO #{display_po} failed with error: {download_error}")
+                
+                # Check if it's a browser session error
+                if "no such window" in str(download_error).lower() or "target window already closed" in str(download_error).lower():
+                    print("🔄 Browser session error detected, attempting recovery...")
+                    if not self._recover_browser_session():
+                        print("❌ Could not recover browser session, stopping processing")
+                        break
+                
+                # Continue with next PO
+        
+        # STEP 3: Navigate back to home page after processing all POs
+        print(f"\n🏠 Navigating back to Coupa homepage...")
+        try:
+            if self.driver and self._is_browser_session_valid():
+                self.driver.get("https://unilever.coupahost.com")
+                print("✅ Successfully returned to Coupa homepage")
+        except Exception as home_error:
+            print(f"⚠️ Warning: Could not navigate back to homepage: {home_error}")
+    
+    def _is_browser_session_valid(self) -> bool:
+        """Check if the browser session is still valid."""
+        if not self.driver:
+            return False
+        
+        try:
+            # Try to get the current URL to test if session is still valid
+            self.driver.current_url
+            return True
+        except Exception:
+            return False
+    
+    def _recover_browser_session(self) -> bool:
+        """Attempt to recover the browser session by restarting the browser."""
+        try:
+            print("🔄 Restarting browser session...")
+            
+            # Clean up old session
+            if self.browser_manager:
+                self.browser_manager.force_cleanup()
+            
+            # Restart browser
+            self.driver = self.browser_manager.start(headless=Config.HEADLESS)
+            
+            # Reinitialize managers with new driver
+            self.download_manager = DownloadManager(self.driver)
+            self.login_manager = LoginManager(self.driver)
+            
+            # Try to handle login again
+            if self.handle_login_first():
+                print("✅ Browser session recovered successfully")
+                return True
+            else:
+                print("❌ Could not log in after browser recovery")
+                return False
+                
+        except Exception as e:
+            print(f"❌ Failed to recover browser session: {e}")
+            return False
 
     def run(self) -> None:
         """Main execution method."""
@@ -131,7 +202,12 @@ class CoupaDownloader:
                 filtered_tb = [line for line in tb_lines if "edgedriver" not in line]
                 print("".join(filtered_tb))
         finally:
-            self.browser_manager.cleanup()
+            # Keep browser open for persistent login session or close based on config
+            from config import Config
+            if Config.KEEP_BROWSER_OPEN:
+                self.browser_manager.keep_browser_open()
+            else:
+                self.browser_manager.cleanup()
 
 
 def main() -> None:

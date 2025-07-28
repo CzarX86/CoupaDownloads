@@ -24,6 +24,7 @@ class Config:
     EDGE_PROFILE_DIR = os.environ.get("EDGE_PROFILE_DIR")
     LOGIN_TIMEOUT = int(os.environ.get("LOGIN_TIMEOUT", "60"))
     HEADLESS = os.environ.get("HEADLESS", "false").lower() == "true"
+    KEEP_BROWSER_OPEN = os.environ.get("KEEP_BROWSER_OPEN", "true").lower() == "true"
 
     # Browser settings
     BROWSER_OPTIONS = {
