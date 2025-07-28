@@ -17,6 +17,11 @@ This document tracks the current state, planned features, improvements, and bug 
 ---
 
 ## 🚧 Planned Features & Improvements
+- [ ] **Enhance login persistency** (improve session handling and reduce re-login prompts)
+- [ ] **Handle download of files already present in the download folder** (skip or prompt for overwrite)
+- [ ] **Right-click window remains open during execution** (do not close right-click download window)
+- [ ] **Enhance feedback on terminal during execution for better readability** (improved status, color, and grouping)
+- [ ] **Remove download folder from CSV file** (as it duplicates supplier info)
 - [ ] **Configurable PO filtering** (e.g., by supplier, date, status)
 - [ ] **Email notifications** on completion or failure
 - [ ] **Headless mode improvements** (better support, more reliable)
@@ -31,6 +36,7 @@ This document tracks the current state, planned features, improvements, and bug 
 ---
 
 ## 🐞 Known Issues / Bug Fixes Planned
+- [ ] **Stacktrace being shown on terminal during execution even though set to false in config file**
 - [ ] Occasional browser crash on large batch (monitor and auto-recover)
 - [ ] Edge driver orphan processes (ensure full cleanup)
 - [ ] Some PO pages may require manual login even after session recovery
