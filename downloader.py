@@ -78,6 +78,20 @@ class FileManager:
                         print(f"    Fixed double PO prefix: {filename} -> {clean_filename}")
                     except Exception as e:
                         print(f"    Could not fix {filename}: {e}")
+                elif filename.startswith("PO") and "_" in filename:
+                    # Check for other double PO patterns like PO_PO_ or PO123_PO456_
+                    parts = filename.split("_")
+                    if len(parts) >= 2 and parts[1].startswith("PO"):
+                        # Remove the second PO prefix
+                        clean_filename = f"{parts[0]}_{'_'.join(parts[2:])}"
+                        old_path = os.path.join(download_folder, filename)
+                        new_path = os.path.join(download_folder, clean_filename)
+                        
+                        try:
+                            os.rename(old_path, new_path)
+                            print(f"    Fixed PO pattern: {filename} -> {clean_filename}")
+                        except Exception as e:
+                            print(f"    Could not fix {filename}: {e}")
         except Exception as e:
             print(f"    Error cleaning up double PO prefixes: {e}")
 
@@ -637,8 +651,19 @@ class DownloadManager:
             print(f"    📦 Moving {len(temp_files)} files with proper names...")
             
             for filename in temp_files:
+                # Clean the filename to remove any existing PO prefix
+                clean_filename = filename
+                if filename.startswith("PO"):
+                    # Remove any existing PO prefix from the filename
+                    # This handles cases where the browser downloads files with PO in the name
+                    parts = filename.split("_", 1)  # Split on first underscore
+                    if len(parts) > 1 and parts[0].startswith("PO"):
+                        clean_filename = parts[1]  # Take everything after the first PO_
+                    else:
+                        clean_filename = filename.replace("PO", "", 1)  # Remove first occurrence of PO
+                
                 # Create proper filename with PO prefix
-                proper_filename = f"PO{display_po}_{filename}"
+                proper_filename = f"PO{display_po}_{clean_filename}"
                 
                 source_path = os.path.join(temp_dir, filename)
                 dest_path = os.path.join(supplier_folder, proper_filename)
