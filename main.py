@@ -45,70 +45,48 @@ class CoupaDownloader:
         )
         return valid_entries
 
+    def handle_login_first(self) -> bool:
+        """Handle login before processing any POs to prevent race conditions."""
+        print("🔐 Checking login status...")
+        
+        try:
+            # Navigate to neutral page first (not a specific PO)
+            print("🌐 Navigating to Coupa homepage...")
+            self.driver.get("https://unilever.coupahost.com")
+            
+            # Check if already logged in
+            if self.login_manager.is_logged_in():
+                print("✅ Already logged in - proceeding with downloads")
+                return True
+            else:
+                print("🔐 Login required - please log in now...")
+                # Wait for login completion
+                self.login_manager.ensure_logged_in()
+                print("✅ Login completed successfully!")
+                return True
+                
+        except Exception as login_error:
+            print(f"❌ Login failed: {login_error}")
+            print("💡 Please ensure you're logged into Coupa before running the script.")
+            return False
+
     def download_attachments(self, valid_entries: list) -> None:
-        """Download attachments for all valid PO numbers with login retry mechanism."""
+        """Download attachments for all valid PO numbers after login is confirmed."""
         if not self.login_manager or not self.download_manager:
             raise RuntimeError("Managers not initialized. Call setup() first.")
 
-        # Track POs that fail due to login issues for retry
-        login_failed_pos = []
-        login_completed = False
+        # STEP 1: Handle login FIRST before processing any POs
+        if not self.handle_login_first():
+            return
 
+        # STEP 2: Process all POs after login is confirmed
+        print(f"\n🎯 Processing {len(valid_entries)} POs after successful login...")
+        
         for display_po, clean_po in valid_entries:
-            # Check if we need to handle login
-            if not login_completed:
-                try:
-                    # Check if already logged in
-                    if self.login_manager.is_logged_in():
-                        print("🔐 Already logged in - proceeding with downloads")
-                        login_completed = True
-                    else:
-                        # Try to ensure login
-                        self.login_manager.ensure_logged_in()
-                        login_completed = True
-                        print("🔐 Login completed successfully!")
-                    
-                    # If we have any POs that failed due to login, retry them now
-                    if login_failed_pos:
-                        print(f"🔄 Retrying {len(login_failed_pos)} POs that failed due to login...")
-                        for retry_po, retry_clean_po in login_failed_pos:
-                            print(f"  🔄 Retrying PO #{retry_po}...")
-                            try:
-                                self.download_manager.download_attachments_for_po(retry_po, retry_clean_po)
-                            except Exception as retry_error:
-                                error_msg = str(retry_error).lower()
-                                if "login" in error_msg or "authentication" in error_msg or "sign_in" in error_msg:
-                                    print(f"    🔐 PO #{retry_po} still failing due to login - will need manual intervention")
-                                else:
-                                    print(f"    ❌ PO #{retry_po} failed with different error: {retry_error}")
-                        login_failed_pos.clear()  # Clear the retry list
-                        
-                except Exception as login_error:
-                    print(f"🔐 Login still required: {login_error}")
-                    # Continue with current PO, it will likely fail due to login
-
-            # Download attachments for this PO
             try:
                 self.download_manager.download_attachments_for_po(display_po, clean_po)
             except Exception as download_error:
-                error_msg = str(download_error).lower()
-                if "login" in error_msg or "authentication" in error_msg or "sign_in" in error_msg:
-                    print(f"  🔐 PO #{display_po} failed due to login - will retry after login")
-                    login_failed_pos.append((display_po, clean_po))
-                else:
-                    print(f"  ❌ PO #{display_po} failed with error: {download_error}")
-
-        # If we still have POs that failed due to login after processing all entries
-        if login_failed_pos and not login_completed:
-            print(f"\n⚠️ {len(login_failed_pos)} POs failed due to login issues:")
-            for po, _ in login_failed_pos:
-                print(f"  • PO #{po}")
-            print("💡 Please run the script again after logging in manually.")
-        elif login_failed_pos:
-            print(f"\n⚠️ {len(login_failed_pos)} POs still failed after login retry:")
-            for po, _ in login_failed_pos:
-                print(f"  • PO #{po}")
-            print("💡 These POs may need manual investigation.")
+                print(f"  ❌ PO #{display_po} failed with error: {download_error}")
 
     def run(self) -> None:
         """Main execution method."""
@@ -125,7 +103,6 @@ class CoupaDownloader:
                 print("📭 No POs to process.")
                 return
             
-            print(f"\n🎯 Processing {len(valid_entries)} POs...")
             self.download_attachments(valid_entries)
             
             # Generate final summary report
