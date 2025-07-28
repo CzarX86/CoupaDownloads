@@ -439,8 +439,18 @@ class DownloadManager:
                         print(f"    ⚠️ Could not extract download URL for: {filename}")
                         continue
                     
+                    # Clean the filename to remove any existing PO prefix
+                    clean_filename = filename
+                    if filename.startswith("PO"):
+                        # Remove any existing PO prefix from the filename
+                        parts = filename.split("_", 1)  # Split on first underscore
+                        if len(parts) > 1 and parts[0].startswith("PO"):
+                            clean_filename = parts[1]  # Take everything after the first PO_
+                        else:
+                            clean_filename = filename.replace("PO", "", 1)  # Remove first occurrence of PO
+                    
                     # Create proper filename with PO prefix
-                    proper_filename = f"PO{display_po}_{filename}"
+                    proper_filename = f"PO{display_po}_{clean_filename}"
                     dest_path = os.path.join(supplier_folder, proper_filename)
                     
                     # Handle duplicate filenames
@@ -448,7 +458,7 @@ class DownloadManager:
                     while os.path.exists(dest_path):
                         name, ext = os.path.splitext(filename)
                         proper_filename = f"PO{display_po}_{name}_{counter}{ext}"
-                        dest_path = os.path.join(Config.DOWNLOAD_FOLDER, proper_filename)
+                        dest_path = os.path.join(supplier_folder, proper_filename)
                         counter += 1
                     
                     # Download directly with proper filename
@@ -529,11 +539,21 @@ class DownloadManager:
                     aria_label = attachment.get_attribute("aria-label")
                     filename = self.file_manager.extract_filename_from_aria_label(aria_label, index)
                     
-                    if not self.file_manager.is_supported_file(filename):
-                        print(f"    ⏭️ Skipping unsupported file: {filename}")
+                    # Clean the filename to remove any existing PO prefix
+                    clean_filename = filename
+                    if filename.startswith("PO"):
+                        # Remove any existing PO prefix from the filename
+                        parts = filename.split("_", 1)  # Split on first underscore
+                        if len(parts) > 1 and parts[0].startswith("PO"):
+                            clean_filename = parts[1]  # Take everything after the first PO_
+                        else:
+                            clean_filename = filename.replace("PO", "", 1)  # Remove first occurrence of PO
+                    
+                    if not self.file_manager.is_supported_file(clean_filename):
+                        print(f"    ⏭️ Skipping unsupported file: {clean_filename}")
                         continue
                     
-                    print(f"    🖱️ Right-clicking on: {filename}")
+                    print(f"    🖱️ Right-clicking on: {clean_filename}")
                     
                     # Scroll element into view
                     self.driver.execute_script("arguments[0].scrollIntoView();", attachment)
