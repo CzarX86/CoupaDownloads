@@ -46,18 +46,28 @@ class FileManager:
         """Rename only the newly downloaded files with PO prefix."""
         try:
             for filename in files_to_rename:
-                # Check if file already has PO prefix (either our specific one or any PO prefix)
-                if not filename.startswith(f"PO{po_number}_") and not filename.startswith("PO"):
-                    old_path = os.path.join(download_folder, filename)
-                    new_filename = f"PO{po_number}_{filename}"
-                    new_path = os.path.join(download_folder, new_filename)
-                    try:
-                        os.rename(old_path, new_path)
-                        print(f"    Renamed {filename} -> {new_filename}")
-                    except Exception as e:
-                        print(f"    Could not rename {filename}: {e}")
-                else:
-                    print(f"    Skipping {filename} - already has PO prefix")
+                # Clean the filename to remove any existing PO prefix
+                clean_filename = filename
+                if filename.startswith("PO"):
+                    # Remove any existing PO prefix from the filename
+                    # This handles cases where the browser downloads files with PO in the name
+                    parts = filename.split("_", 1)  # Split on first underscore
+                    if len(parts) > 1 and parts[0].startswith("PO"):
+                        clean_filename = parts[1]  # Take everything after the first PO_
+                    else:
+                        clean_filename = filename.replace("PO", "", 1)  # Remove first occurrence of PO
+                
+                # Create proper filename with PO prefix
+                new_filename = f"PO{po_number}_{clean_filename}"
+                
+                old_path = os.path.join(download_folder, filename)
+                new_path = os.path.join(download_folder, new_filename)
+                
+                try:
+                    os.rename(old_path, new_path)
+                    print(f"    Renamed {filename} -> {new_filename}")
+                except Exception as e:
+                    print(f"    Could not rename {filename}: {e}")
         except Exception as e:
             print(f"    Error renaming files: {e}")
 
