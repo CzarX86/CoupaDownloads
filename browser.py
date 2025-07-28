@@ -74,7 +74,7 @@ class BrowserManager:
         except Exception as e:
             print(f"⚠️ Warning: Could not check for existing Edge processes: {e}")
     
-    def _create_browser_options(self, headless: bool = False, custom_download_dir: str | None = None) -> EdgeOptions:
+    def _create_browser_options(self, headless: bool = False, custom_download_dir: Optional[str] = None) -> EdgeOptions:
         """Create and configure browser options. Supports headless mode and custom download directory."""
         options = EdgeOptions()
         options.add_argument("--disable-extensions")

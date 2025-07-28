@@ -6,7 +6,7 @@ Handles CSV file reading and PO number processing.
 import csv
 import os
 from datetime import datetime
-from typing import List, Tuple, Dict, Any
+from typing import List, Tuple, Dict, Any, Optional
 from config import Config
 
 
@@ -43,15 +43,15 @@ class CSVProcessor:
                     reader = csv.DictReader(csvfile)
                     for row in reader:
                         po_entries.append({
-                            'po_number': row.get('PO_NUMBER', '').strip(),
-                            'status': row.get('STATUS', 'PENDING').strip(),
-                            'supplier': row.get('SUPPLIER', '').strip(),
-                            'attachments_found': int(row.get('ATTACHMENTS_FOUND', 0) or 0),
-                                                         'attachments_downloaded': int(row.get('ATTACHMENTS_DOWNLOADED', 0) or 0),
-                             'last_processed': row.get('LAST_PROCESSED', '').strip(),
-                             'error_message': row.get('ERROR_MESSAGE', '').strip(),
-                             'download_folder': row.get('DOWNLOAD_FOLDER', '').strip(),
-                             'coupa_url': row.get('COUPA_URL', '').strip()
+                            'po_number': (row.get('PO_NUMBER') or '').strip(),
+                            'status': (row.get('STATUS') or 'PENDING').strip(),
+                            'supplier': (row.get('SUPPLIER') or '').strip(),
+                            'attachments_found': int(row.get('ATTACHMENTS_FOUND') or 0),
+                            'attachments_downloaded': int(row.get('ATTACHMENTS_DOWNLOADED') or 0),
+                            'last_processed': (row.get('LAST_PROCESSED') or '').strip(),
+                            'error_message': (row.get('ERROR_MESSAGE') or '').strip(),
+                            'download_folder': (row.get('DOWNLOAD_FOLDER') or '').strip(),
+                            'coupa_url': (row.get('COUPA_URL') or '').strip()
                         })
                 else:
                     # Read simple CSV format and convert to enhanced
@@ -59,17 +59,17 @@ class CSVProcessor:
                     headers = next(reader, [])  # Skip header row
                     
                     for row in reader:
-                        if row and row[0].strip():  # Skip empty rows
+                        if row and len(row) > 0 and (row[0] or '').strip():  # Skip empty rows
                             po_entries.append({
-                                'po_number': row[0].strip(),
+                                'po_number': (row[0] or '').strip(),
                                 'status': 'PENDING',
                                 'supplier': '',
                                 'attachments_found': 0,
-                                                                 'attachments_downloaded': 0,
-                                 'last_processed': '',
-                                 'error_message': '',
-                                 'download_folder': '',
-                                 'coupa_url': ''
+                                'attachments_downloaded': 0,
+                                'last_processed': '',
+                                'error_message': '',
+                                'download_folder': '',
+                                'coupa_url': ''
                             })
                             
         except FileNotFoundError:
@@ -225,7 +225,7 @@ class CSVProcessor:
             print(f"❌ Error writing enhanced CSV: {e}")
 
     @staticmethod
-    def generate_summary_report(csv_file_path: str | None = None) -> Dict[str, Any]:
+    def generate_summary_report(csv_file_path: Optional[str] = None) -> Dict[str, Any]:
         """
         Generate a summary report of processing results.
         

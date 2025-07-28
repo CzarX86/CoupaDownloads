@@ -9,10 +9,11 @@ This script will find and rename files that have patterns like:
 
 import os
 import re
+from typing import Optional
 from config import Config
 
 
-def fix_double_po_prefixes(download_folder: str | None = None) -> None:
+def fix_double_po_prefixes(download_folder: Optional[str] = None) -> None:
     """Fix files with double PO prefixes in the specified folder."""
     
     if download_folder is None:
@@ -113,7 +114,7 @@ def fix_filename(filename: str) -> str:
     return filename
 
 
-def find_problematic_files(download_folder: str | None = None) -> None:
+def find_problematic_files(download_folder: Optional[str] = None) -> None:
     """Find and list files that might have double PO prefixes."""
     
     if download_folder is None:

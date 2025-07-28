@@ -46,30 +46,18 @@ class FileManager:
         """Rename only the newly downloaded files with PO prefix."""
         try:
             for filename in files_to_rename:
-                # Clean the filename to remove any existing PO prefix
-                clean_filename = filename
-                if filename.startswith("PO"):
-                    # Remove any existing PO prefix from the filename
-                    # This handles cases where the browser downloads files with PO in the name
-                    parts = filename.split("_", 1)  # Split on first underscore
-                    if len(parts) > 1 and parts[0].startswith("PO"):
-                        clean_filename = parts[1]  # Take everything after the first PO_
-                    else:
-                        clean_filename = filename.replace("PO", "", 1)  # Remove first occurrence of PO
-                
-                # Create proper filename with PO prefix
-                # Extract clean PO number (remove PO prefix if present)
-                clean_po_number = po_number.replace("PO", "") if po_number.startswith("PO") else po_number
-                new_filename = f"PO{clean_po_number}_{clean_filename}"
-                
-                old_path = os.path.join(download_folder, filename)
-                new_path = os.path.join(download_folder, new_filename)
-                
-                try:
-                    os.rename(old_path, new_path)
-                    print(f"    Renamed {filename} -> {new_filename}")
-                except Exception as e:
-                    print(f"    Could not rename {filename}: {e}")
+                # Check if file already has PO prefix (either our specific one or any PO prefix)
+                if not filename.startswith(f"PO{po_number}_") and not filename.startswith("PO"):
+                    old_path = os.path.join(download_folder, filename)
+                    new_filename = f"PO{po_number}_{filename}"
+                    new_path = os.path.join(download_folder, new_filename)
+                    try:
+                        os.rename(old_path, new_path)
+                        print(f"    Renamed {filename} -> {new_filename}")
+                    except Exception as e:
+                        print(f"    Could not rename {filename}: {e}")
+                else:
+                    print(f"    Skipping {filename} - already has PO prefix")
         except Exception as e:
             print(f"    Error renaming files: {e}")
 
@@ -441,28 +429,16 @@ class DownloadManager:
                         print(f"    ⚠️ Could not extract download URL for: {filename}")
                         continue
                     
-                    # Clean the filename to remove any existing PO prefix
-                    clean_filename = filename
-                    if filename.startswith("PO"):
-                        # Remove any existing PO prefix from the filename
-                        parts = filename.split("_", 1)  # Split on first underscore
-                        if len(parts) > 1 and parts[0].startswith("PO"):
-                            clean_filename = parts[1]  # Take everything after the first PO_
-                        else:
-                            clean_filename = filename.replace("PO", "", 1)  # Remove first occurrence of PO
-                    
                     # Create proper filename with PO prefix
-                    # Extract clean PO number (remove PO prefix if present)
-                    clean_po_number = display_po.replace("PO", "") if display_po.startswith("PO") else display_po
-                    proper_filename = f"PO{clean_po_number}_{clean_filename}"
+                    proper_filename = f"PO{display_po}_{filename}"
                     dest_path = os.path.join(supplier_folder, proper_filename)
                     
                     # Handle duplicate filenames
                     counter = 1
                     while os.path.exists(dest_path):
                         name, ext = os.path.splitext(filename)
-                        proper_filename = f"PO{clean_po_number}_{name}_{counter}{ext}"
-                        dest_path = os.path.join(supplier_folder, proper_filename)
+                        proper_filename = f"PO{display_po}_{name}_{counter}{ext}"
+                        dest_path = os.path.join(Config.DOWNLOAD_FOLDER, proper_filename)
                         counter += 1
                     
                     # Download directly with proper filename
@@ -543,21 +519,11 @@ class DownloadManager:
                     aria_label = attachment.get_attribute("aria-label")
                     filename = self.file_manager.extract_filename_from_aria_label(aria_label, index)
                     
-                    # Clean the filename to remove any existing PO prefix
-                    clean_filename = filename
-                    if filename.startswith("PO"):
-                        # Remove any existing PO prefix from the filename
-                        parts = filename.split("_", 1)  # Split on first underscore
-                        if len(parts) > 1 and parts[0].startswith("PO"):
-                            clean_filename = parts[1]  # Take everything after the first PO_
-                        else:
-                            clean_filename = filename.replace("PO", "", 1)  # Remove first occurrence of PO
-                    
-                    if not self.file_manager.is_supported_file(clean_filename):
-                        print(f"    ⏭️ Skipping unsupported file: {clean_filename}")
+                    if not self.file_manager.is_supported_file(filename):
+                        print(f"    ⏭️ Skipping unsupported file: {filename}")
                         continue
                     
-                    print(f"    🖱️ Right-clicking on: {clean_filename}")
+                    print(f"    🖱️ Right-clicking on: {filename}")
                     
                     # Scroll element into view
                     self.driver.execute_script("arguments[0].scrollIntoView();", attachment)
@@ -701,9 +667,7 @@ class DownloadManager:
                         clean_filename = filename.replace("PO", "", 1)  # Remove first occurrence of PO
                 
                 # Create proper filename with PO prefix
-                # Extract clean PO number (remove PO prefix if present)
-                clean_po_number = display_po.replace("PO", "") if display_po.startswith("PO") else display_po
-                proper_filename = f"PO{clean_po_number}_{clean_filename}"
+                proper_filename = f"PO{display_po}_{clean_filename}"
                 
                 source_path = os.path.join(temp_dir, filename)
                 dest_path = os.path.join(supplier_folder, proper_filename)
@@ -712,7 +676,7 @@ class DownloadManager:
                 counter = 1
                 while os.path.exists(dest_path):
                     name, ext = os.path.splitext(filename)
-                    proper_filename = f"PO{clean_po_number}_{name}_{counter}{ext}"
+                    proper_filename = f"PO{display_po}_{name}_{counter}{ext}"
                     dest_path = os.path.join(supplier_folder, proper_filename)
                     counter += 1
                 
