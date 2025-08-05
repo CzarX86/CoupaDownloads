@@ -19,7 +19,7 @@ class CSVProcessor:
         # Navigate from src/core/ to project root, then to data/input/
         current_dir = os.path.dirname(os.path.abspath(__file__))
         project_root = os.path.dirname(os.path.dirname(os.path.dirname(current_dir)))
-        return os.path.join(project_root, "data", "input", "input.csv")
+        return os.path.join(project_root, "CoupaDownloads", "data", "input", "input.csv")
 
     @staticmethod
     def read_po_numbers_from_csv(csv_file_path: str) -> List[Dict[str, Any]]:

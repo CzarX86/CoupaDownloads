@@ -102,13 +102,17 @@ class BrowserManager:
         options.add_experimental_option("prefs", browser_prefs)
         options.add_experimental_option("excludeSwitches", ["enable-automation"])
         options.add_experimental_option("useAutomationExtension", False)
+        
+        # Suppress verbose browser output
+        if not Config.SHOW_SELENIUM_LOGS:
+            options.add_argument("--log-level=3")  # Only fatal errors
+            options.add_argument("--silent")
+            options.add_argument("--disable-logging")
+            options.add_argument("--disable-dev-shm-usage")
+            options.add_argument("--no-sandbox")
 
         if headless:
             options.add_argument("--headless=new")
-
-        # Debug print: show all arguments and experimental options
-        print("[DEBUG] EdgeOptions arguments:", options.arguments)
-        print("[DEBUG] EdgeOptions experimental options:", options.experimental_options)
 
         return options
     
@@ -120,7 +124,13 @@ class BrowserManager:
 
         try:
             options = self._create_browser_options(headless=headless)
-            service = EdgeService(executable_path=Config.DRIVER_PATH)
+            
+            # Configure service with log suppression
+            service = EdgeService(
+                executable_path=Config.DRIVER_PATH,
+                log_output=subprocess.DEVNULL if not Config.SHOW_SELENIUM_LOGS else None
+            )
+            
             self.driver = webdriver.Edge(service=service, options=options)
             print(f"Using local Edge WebDriver: {Config.DRIVER_PATH}")
             return self.driver
@@ -129,7 +139,10 @@ class BrowserManager:
                 print("⚠️ Profile directory is already in use. Falling back to default browser session.")
                 # Retry without profile options
                 options = self._create_browser_options_without_profile(headless=headless)
-                service = EdgeService(executable_path=Config.DRIVER_PATH)
+                service = EdgeService(
+                    executable_path=Config.DRIVER_PATH,
+                    log_output=subprocess.DEVNULL if not Config.SHOW_SELENIUM_LOGS else None
+                )
                 self.driver = webdriver.Edge(service=service, options=options)
                 print(f"✅ Using local Edge WebDriver without profile: {Config.DRIVER_PATH}")
                 return self.driver
@@ -160,6 +173,14 @@ class BrowserManager:
         options.add_experimental_option("prefs", browser_prefs)
         options.add_experimental_option("excludeSwitches", ["enable-automation"])
         options.add_experimental_option("useAutomationExtension", False)
+        
+        # Suppress verbose browser output
+        if not Config.SHOW_SELENIUM_LOGS:
+            options.add_argument("--log-level=3")  # Only fatal errors
+            options.add_argument("--silent")
+            options.add_argument("--disable-logging")
+            options.add_argument("--disable-dev-shm-usage")
+            options.add_argument("--no-sandbox")
 
         if headless:
             options.add_argument("--headless=new")

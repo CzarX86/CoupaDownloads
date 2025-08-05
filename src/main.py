@@ -5,7 +5,7 @@ Orchestrates the entire workflow using modular components.
 
 from core.browser import BrowserManager
 from core.config import Config
-from core.csv_processor import CSVProcessor
+from core.unified_processor import UnifiedProcessor
 from core.downloader import DownloadManager, LoginManager
 
 
@@ -31,10 +31,10 @@ class CoupaDownloader:
         self.login_manager = LoginManager(self.driver)
 
     def process_po_numbers(self) -> list:
-        """Process PO numbers from CSV file."""
-        csv_file_path = CSVProcessor.get_csv_file_path()
-        po_entries = CSVProcessor.read_po_numbers_from_csv(csv_file_path)
-        valid_entries = CSVProcessor.process_po_numbers(po_entries)
+        """Process PO numbers from input file (CSV or Excel)."""
+        input_file_path = UnifiedProcessor.detect_input_file()
+        po_entries = UnifiedProcessor.read_po_numbers(input_file_path)
+        valid_entries = UnifiedProcessor.process_po_numbers(input_file_path)
 
         # Limit number of POs processed if configured
         from core.config import Config
@@ -46,9 +46,9 @@ class CoupaDownloader:
             print("❌ No valid PO numbers provided.")
             return []
 
-        print(
-            f"Processing {len(valid_entries)} PO(s): {[entry[0] for entry in valid_entries]}"
-        )
+        print(f"📋 Processing {len(valid_entries)} PO(s)...")
+        if Config.VERBOSE_OUTPUT:
+            print(f"   PO list: {[entry[0] for entry in valid_entries]}")
         return valid_entries
 
     def handle_login_first(self) -> bool:
@@ -92,11 +92,12 @@ class CoupaDownloader:
             return
 
         # STEP 2: Process all POs with browser session recovery
-        print(f"\n🎯 Processing {len(valid_entries)} POs after successful login...")
+        print(f"🎯 Processing {len(valid_entries)} POs after successful login...")
         
         for i, (display_po, clean_po) in enumerate(valid_entries):
             try:
-                print(f"\n📋 Processing PO #{display_po} ({i+1}/{len(valid_entries)})...")
+                if Config.VERBOSE_OUTPUT:
+                    print(f"\n📋 Processing PO #{display_po} ({i+1}/{len(valid_entries)})...")
                 
                 # Check if browser session is still valid
                 if not self._is_browser_session_valid():
@@ -108,10 +109,14 @@ class CoupaDownloader:
                 # Process the PO in the current tab (main tab)
                 self.download_manager.download_attachments_for_po(display_po, clean_po)
                 
-                print(f"✅ Completed PO #{display_po}")
+                if Config.VERBOSE_OUTPUT:
+                    print(f"✅ Completed PO #{display_po}")
                 
             except Exception as download_error:
-                print(f"  ❌ PO #{display_po} failed with error: {download_error}")
+                if Config.VERBOSE_OUTPUT:
+                    print(f"  ❌ PO #{display_po} failed with error: {download_error}")
+                else:
+                    print(f"  ❌ PO #{display_po} failed")
                 
                 # Check if it's a browser session error
                 if "no such window" in str(download_error).lower() or "target window already closed" in str(download_error).lower():
@@ -176,8 +181,8 @@ class CoupaDownloader:
         try:
             print("🚀 Starting Coupa Downloader...")
             
-            # Create backup of CSV before processing
-            CSVProcessor.backup_csv()
+            # Create backup of input file before processing
+            UnifiedProcessor.backup_file()
             
             self.setup()
             valid_entries = self.process_po_numbers()
@@ -190,7 +195,7 @@ class CoupaDownloader:
             
             # Generate final summary report
             print("\n🎉 Processing completed!")
-            CSVProcessor.print_summary_report()
+            UnifiedProcessor.print_summary_report()
             
         except KeyboardInterrupt:
             print("\nScript interrupted by user.")

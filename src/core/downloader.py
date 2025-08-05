@@ -66,6 +66,26 @@ class FileManager:
                 new_path = os.path.join(download_folder, new_filename)
                 
                 try:
+                    # Handle existing files based on configuration
+                    if os.path.exists(new_path):
+                        if Config.OVERWRITE_EXISTING_FILES:
+                            if Config.CREATE_BACKUP_BEFORE_OVERWRITE:
+                                # Create backup of existing file
+                                backup_path = new_path + ".backup"
+                                import shutil
+                                shutil.copy2(new_path, backup_path)
+                                if Config.VERBOSE_OUTPUT:
+                                    print(f"    💾 Created backup: {os.path.basename(backup_path)}")
+                            
+                            if Config.VERBOSE_OUTPUT:
+                                print(f"    🔄 Replacing existing file: {new_filename}")
+                            os.remove(new_path)  # Remove existing file
+                        else:
+                            # Skip existing files
+                            if Config.VERBOSE_OUTPUT:
+                                print(f"    ⏭️ Skipping existing file: {new_filename}")
+                            continue
+                    
                     os.rename(old_path, new_path)
                     print(f"    Renamed {filename} -> {new_filename}")
                 except Exception as e:
@@ -155,17 +175,19 @@ class DownloadManager:
     def _find_attachments(self) -> List:
         """Find all attachment elements on the page."""
         attachments = self.driver.find_elements(By.CSS_SELECTOR, Config.ATTACHMENT_SELECTOR)
-        print(f"    Found {len(attachments)} attachment elements using selector: {Config.ATTACHMENT_SELECTOR}")
         
-        # Debug: Print details of each attachment found
-        for i, attachment in enumerate(attachments):
-            try:
-                aria_label = attachment.get_attribute("aria-label")
-                role = attachment.get_attribute("role")
-                class_name = attachment.get_attribute("class")
-                print(f"      Attachment {i+1}: aria-label='{aria_label}', role='{role}', class='{class_name}'")
-            except Exception as e:
-                print(f"      Attachment {i+1}: Error getting attributes - {e}")
+        if Config.VERBOSE_OUTPUT:
+            print(f"    Found {len(attachments)} attachment elements using selector: {Config.ATTACHMENT_SELECTOR}")
+            
+            # Debug: Print details of each attachment found
+            for i, attachment in enumerate(attachments):
+                try:
+                    aria_label = attachment.get_attribute("aria-label")
+                    role = attachment.get_attribute("role")
+                    class_name = attachment.get_attribute("class")
+                    print(f"      Attachment {i+1}: aria-label='{aria_label}', role='{role}', class='{class_name}'")
+                except Exception as e:
+                    print(f"      Attachment {i+1}: Error getting attributes - {e}")
         
         return attachments
 
@@ -178,20 +200,24 @@ class DownloadManager:
                 aria_label, index
             )
 
-            print(f"    Processing attachment {index + 1}: {filename}")
+            if Config.VERBOSE_OUTPUT:
+                print(f"    Processing attachment {index + 1}: {filename}")
 
             # Skip unsupported file types
             if not self.file_manager.is_supported_file(filename):
-                print(f"    Skipping unsupported file: {filename}")
+                if Config.VERBOSE_OUTPUT:
+                    print(f"    Skipping unsupported file: {filename}")
                 return
 
             # Check if element is clickable
             if not attachment.is_enabled():
-                print(f"    Warning: Attachment {index + 1} is not enabled")
+                if Config.VERBOSE_OUTPUT:
+                    print(f"    Warning: Attachment {index + 1} is not enabled")
                 return
 
             if not attachment.is_displayed():
-                print(f"    Warning: Attachment {index + 1} is not displayed")
+                if Config.VERBOSE_OUTPUT:
+                    print(f"    Warning: Attachment {index + 1} is not displayed")
                 return
 
             # Try to click the attachment
@@ -202,40 +228,45 @@ class DownloadManager:
                 
                 # Try regular click first
                 attachment.click()
-                print(f"    Successfully clicked: {filename}")
+                if Config.VERBOSE_OUTPUT:
+                    print(f"    Successfully clicked: {filename}")
             except Exception as click_error:
-                print(f"    Regular click failed, trying JavaScript click: {click_error}")
+                if Config.VERBOSE_OUTPUT:
+                    print(f"    Regular click failed, trying JavaScript click: {click_error}")
                 # Fallback to JavaScript click
                 self.driver.execute_script("arguments[0].click();", attachment)
-                print(f"    JavaScript click successful: {filename}")
+                if Config.VERBOSE_OUTPUT:
+                    print(f"    JavaScript click successful: {filename}")
 
             # Brief pause between downloads
             time.sleep(1)
 
         except Exception as e:
-            print(f"    Failed to download attachment {index + 1}: {str(e)}")
-            print(f"    Aria-label: {aria_label if 'aria_label' in locals() else 'Not available'}")
+            if Config.VERBOSE_OUTPUT:
+                print(f"    Failed to download attachment {index + 1}: {str(e)}")
+                print(f"    Aria-label: {aria_label if 'aria_label' in locals() else 'Not available'}")
 
     def download_attachments_for_po(self, display_po: str, clean_po: str) -> None:
-        """Download all attachments for a specific PO and update CSV status."""
+        """Download all attachments for a specific PO and update file status."""
         from selenium.common.exceptions import TimeoutException
         from selenium.webdriver.common.by import By
         from selenium.webdriver.support.ui import WebDriverWait
         from selenium.webdriver.support import expected_conditions as EC
-        from csv_processor import CSVProcessor
+        from .unified_processor import UnifiedProcessor
 
-        print(f"\n📋 Processing PO #{display_po}...")
+        print(f"📋 Processing PO #{display_po}...")
 
         try:
             # Navigate to PO page
             po_url = Config.BASE_URL.format(clean_po)
-            print(f"  🌐 Navigating to: {po_url}")
+            if Config.VERBOSE_OUTPUT:
+                print(f"  🌐 Navigating to: {po_url}")
             self.driver.get(po_url)
 
             # Check if page exists
             if "Page Not Found" in self.driver.title or "404" in self.driver.title:
                 print(f"  ❌ PO #{display_po} not found")
-                CSVProcessor.update_po_status(display_po, 'FAILED', error_message='PO page not found', coupa_url=po_url)
+                UnifiedProcessor.update_po_status(display_po, 'FAILED', error_message='PO page not found', coupa_url=po_url)
                 return
 
             # Wait for page to load
@@ -246,7 +277,7 @@ class DownloadManager:
             # Check for login redirect - raise exception for retry mechanism
             if "login" in self.driver.current_url.lower() or "sign_in" in self.driver.current_url.lower():
                 print(f"  🔐 Login required for PO #{display_po}")
-                CSVProcessor.update_po_status(display_po, 'FAILED', error_message='Login required', coupa_url=po_url)
+                UnifiedProcessor.update_po_status(display_po, 'FAILED', error_message='Login required', coupa_url=po_url)
                 raise Exception("Login required - will retry after login")
 
             # Find attachments
@@ -255,19 +286,23 @@ class DownloadManager:
             
             if not attachments:
                 print(f"  📭 No attachments found for PO #{display_po}")
-                CSVProcessor.update_po_status(display_po, 'NO_ATTACHMENTS', 
+                UnifiedProcessor.update_po_status(display_po, 'NO_ATTACHMENTS', 
                                             attachments_found=0, attachments_downloaded=0, coupa_url=po_url)
                 return
 
-            print(f"  Found {attachments_found} attachments. Downloading with proper names...")
+            print(f"  📎 Found {attachments_found} attachment(s)")
 
             # Extract supplier name for folder organization
             supplier_name = self._extract_supplier_name()
+            if Config.VERBOSE_OUTPUT and supplier_name:
+                print(f"  🏢 Supplier: {supplier_name}")
             
             # Track downloads before starting
             initial_count = self._count_existing_files(supplier_name)
             
             # Use temporary directory approach for clean downloads
+            if Config.SHOW_DETAILED_PROCESSING:
+                print(f"  📁 Downloading to: {supplier_name}/")
             self._download_with_proper_names(attachments, display_po, supplier_name)
             
             # Count files after download
@@ -285,8 +320,8 @@ class DownloadManager:
                 status = 'FAILED'
                 print(f"  ❌ Failed to download any attachments")
             
-            # Update CSV with results
-            CSVProcessor.update_po_status(
+            # Update file with results
+            UnifiedProcessor.update_po_status(
                 display_po, 
                 status, 
                 supplier=supplier_name,
@@ -295,17 +330,30 @@ class DownloadManager:
                 download_folder=f"{supplier_name}/",
                 coupa_url=po_url
             )
+            
+            # Show human-friendly status
+            if status == 'COMPLETED':
+                print(f"  ✅ Downloaded {attachments_downloaded}/{attachments_found} files")
+            elif status == 'PARTIAL':
+                print(f"  ⚠️ Downloaded {attachments_downloaded}/{attachments_found} files (partial)")
+            elif status == 'FAILED':
+                print(f"  ❌ Failed to download files")
+            elif status == 'NO_ATTACHMENTS':
+                print(f"  📭 No attachments found")
 
         except TimeoutException:
             print(f"  Timed out waiting for PO #{display_po} page to load. Skipping.")
-            CSVProcessor.update_po_status(display_po, 'FAILED', error_message='Page load timeout', coupa_url=po_url)
+            UnifiedProcessor.update_po_status(display_po, 'FAILED', error_message='Page load timeout', coupa_url=po_url)
         except Exception as e:
             # Re-raise login-related exceptions for retry mechanism
             if "login" in str(e).lower() or "authentication" in str(e).lower() or "sign_in" in str(e).lower():
                 raise e  # Re-raise for retry mechanism
             else:
-                print(f"  Error processing PO #{display_po}: {str(e)}")
-                CSVProcessor.update_po_status(display_po, 'FAILED', error_message=str(e)[:100], coupa_url=po_url)
+                if Config.VERBOSE_OUTPUT:
+                    print(f"  Error processing PO #{display_po}: {str(e)}")
+                else:
+                    print(f"  ❌ PO #{display_po} failed")
+                UnifiedProcessor.update_po_status(display_po, 'FAILED', error_message=str(e)[:100], coupa_url=po_url)
 
     def _extract_supplier_name(self) -> str:
         """Extract supplier name from the PO page using cascading selector approach."""
@@ -316,7 +364,8 @@ class DownloadManager:
         # Try CSS selectors first (preferred approach)
         for i, css_selector in enumerate(Config.SUPPLIER_NAME_CSS_SELECTORS, 1):
             try:
-                print(f"  🔍 Trying CSS selector {i}: {css_selector}")
+                if Config.VERBOSE_OUTPUT:
+                    print(f"  🔍 Trying CSS selector {i}: {css_selector}")
                 supplier_element = WebDriverWait(self.driver, 3).until(
                     EC.presence_of_element_located((By.CSS_SELECTOR, css_selector))
                 )
@@ -325,18 +374,22 @@ class DownloadManager:
                 
                 if supplier_name and len(supplier_name) > 2:  # Valid supplier name
                     cleaned_name = self._clean_folder_name(supplier_name)
-                    print(f"  ✅ Found supplier via CSS: {supplier_name} → {cleaned_name}")
+                    if Config.VERBOSE_OUTPUT:
+                        print(f"  ✅ Found supplier via CSS: {supplier_name} → {cleaned_name}")
                     return cleaned_name
                 else:
-                    print(f"  ⚠️ CSS selector found element but text is too short: '{supplier_name}'")
+                    if Config.VERBOSE_OUTPUT:
+                        print(f"  ⚠️ CSS selector found element but text is too short: '{supplier_name}'")
                     
             except Exception as e:
-                print(f"  ❌ CSS selector {i} failed: {str(e)[:50]}...")
+                if Config.VERBOSE_OUTPUT:
+                    print(f"  ❌ CSS selector {i} failed: {str(e)[:50]}...")
                 continue
         
         # Fallback to XPath (your original method)
         try:
-            print(f"  🔄 Falling back to XPath: {Config.SUPPLIER_NAME_XPATH}")
+            if Config.VERBOSE_OUTPUT:
+                print(f"  🔄 Falling back to XPath: {Config.SUPPLIER_NAME_XPATH}")
             supplier_element = WebDriverWait(self.driver, 10).until(
                 EC.presence_of_element_located((By.XPATH, Config.SUPPLIER_NAME_XPATH))
             )
@@ -345,16 +398,20 @@ class DownloadManager:
             
             if supplier_name:
                 cleaned_name = self._clean_folder_name(supplier_name)
-                print(f"  ✅ Found supplier via XPath: {supplier_name} → {cleaned_name}")
+                if Config.VERBOSE_OUTPUT:
+                    print(f"  ✅ Found supplier via XPath: {supplier_name} → {cleaned_name}")
                 return cleaned_name
             else:
-                print(f"  ⚠️ XPath found element but text is empty")
+                if Config.VERBOSE_OUTPUT:
+                    print(f"  ⚠️ XPath found element but text is empty")
                 
         except Exception as e:
-            print(f"  ❌ XPath extraction failed: {e}")
+            if Config.VERBOSE_OUTPUT:
+                print(f"  ❌ XPath extraction failed: {e}")
         
         # Final fallback
-        print(f"  📁 All methods failed, using 'Unknown_Supplier'")
+        if Config.VERBOSE_OUTPUT:
+            print(f"  📁 All methods failed, using 'Unknown_Supplier'")
         return "Unknown_Supplier"
 
     def _clean_folder_name(self, name: str) -> str:
@@ -470,7 +527,10 @@ class DownloadManager:
                 attachment.click()
                 print(f"    ✅ Successfully downloaded: {filename}")
             except Exception as click_error:
-                print(f"    Regular click failed, trying JavaScript click: {click_error}")
+                if Config.VERBOSE_OUTPUT:
+                    print(f"    Regular click failed, trying JavaScript click: {click_error}")
+                else:
+                    print(f"    Regular click failed, trying JavaScript click...")
                 self.driver.execute_script("arguments[0].click();", attachment)
                 print(f"    ✅ JavaScript click successful: {filename}")
 
@@ -511,18 +571,29 @@ class DownloadManager:
                 source_path = os.path.join(temp_dir, filename)
                 dest_path = os.path.join(supplier_folder, proper_filename)
                 
-                # Handle duplicate filenames
-                counter = 1
-                while os.path.exists(dest_path):
-                    name, ext = os.path.splitext(filename)
-                    proper_filename = f"PO{clean_po_number}_{name}_{counter}{ext}"
-                    dest_path = os.path.join(supplier_folder, proper_filename)
-                    counter += 1
+                # Handle existing files based on configuration
+                if os.path.exists(dest_path):
+                    if Config.OVERWRITE_EXISTING_FILES:
+                        if Config.CREATE_BACKUP_BEFORE_OVERWRITE:
+                            # Create backup of existing file
+                            backup_path = dest_path + ".backup"
+                            import shutil
+                            shutil.copy2(dest_path, backup_path)
+                            if Config.VERBOSE_OUTPUT:
+                                print(f"    💾 Created backup: {os.path.basename(backup_path)}")
+                        
+                        if Config.VERBOSE_OUTPUT:
+                            print(f"    🔄 Replacing existing file: {proper_filename}")
+                        os.remove(dest_path)  # Remove existing file
+                    else:
+                        # Skip existing files
+                        if Config.VERBOSE_OUTPUT:
+                            print(f"    ⏭️ Skipping existing file: {proper_filename}")
+                        continue
                 
                 # Move file with proper name
                 shutil.move(source_path, dest_path)
                 print(f"    ✅ Saved as: {proper_filename}")
-                print(f"    Successfully saved: {proper_filename}")
                     
         except Exception as e:
             print(f"    ❌ Error moving files: {e}")

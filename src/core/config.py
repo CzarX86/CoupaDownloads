@@ -70,8 +70,15 @@ class Config:
     ATTACHMENT_WAIT_TIMEOUT = 10
     DOWNLOAD_WAIT_TIMEOUT = 30
 
-    # Toggle Edge WebDriver crash stacktrace reporting
+    # Output verbosity controls
     SHOW_EDGE_CRASH_STACKTRACE = False
+    VERBOSE_OUTPUT = os.environ.get("VERBOSE_OUTPUT", "false").lower() == "true"
+    SHOW_DETAILED_PROCESSING = os.environ.get("SHOW_DETAILED_PROCESSING", "false").lower() == "true"
+    SHOW_SELENIUM_LOGS = os.environ.get("SHOW_SELENIUM_LOGS", "false").lower() == "true"
+    
+    # File handling controls
+    OVERWRITE_EXISTING_FILES = os.environ.get("OVERWRITE_EXISTING_FILES", "true").lower() == "true"
+    CREATE_BACKUP_BEFORE_OVERWRITE = os.environ.get("CREATE_BACKUP_BEFORE_OVERWRITE", "false").lower() == "true"
 
     @classmethod
     def ensure_download_folder_exists(cls) -> None:
