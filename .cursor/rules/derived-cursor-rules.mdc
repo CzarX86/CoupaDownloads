@@ -48,4 +48,5 @@ globs: *
 - Make sure to check cross-platform compatibility.
 - Always ensure that the path structure is correct.
 - In the event of errors, provide human-friendly error messages.
-- In the event of errors, provide human-friendly error messages.
+- Ensure 100% test coverage before committing and pushing to GitHub.
+- Save and close all cursor instances after testing.

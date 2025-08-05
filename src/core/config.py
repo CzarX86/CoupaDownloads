@@ -19,10 +19,10 @@ class Config:
     # File settings
     # Set to empty list to allow all file types, or add specific extensions to restrict
     # Common file types: [".pdf", ".msg", ".docx", ".xlsx", ".txt", ".jpg", ".png", ".zip", ".rar"]
-    ALLOWED_EXTENSIONS: List[str] = []  # Empty list = allow all file types
+    ALLOWED_EXTENSIONS: List[str] = [".pdf", ".msg", ".docx", ".xlsx", ".txt", ".jpg", ".png", ".zip", ".rar", ".csv", ".xml"]  # Allow common file types
     
-    # Alternative: Allow common file types
-    # ALLOWED_EXTENSIONS: List[str] = [".pdf", ".msg", ".docx", ".xlsx", ".txt", ".jpg", ".png", ".zip", ".rar", ".csv", ".xml"]
+    # Alternative: Allow all file types (uncomment to allow everything)
+    # ALLOWED_EXTENSIONS: List[str] = []  # Empty list = allow all file types
 
     # Environment variables with defaults
     PAGE_DELAY = float(os.environ.get("PAGE_DELAY", "0"))

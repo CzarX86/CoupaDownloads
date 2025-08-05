@@ -32,12 +32,17 @@ class TestFileManager:
         assert FileManager.is_supported_file("email.msg")
         assert FileManager.is_supported_file("report.docx")
         assert FileManager.is_supported_file("file.PDF")  # Case insensitive
-        
+        assert FileManager.is_supported_file("data.xlsx")
+        assert FileManager.is_supported_file("text.txt")
+        assert FileManager.is_supported_file("image.jpg")
+        assert FileManager.is_supported_file("archive.zip")
+        assert FileManager.is_supported_file("data.csv")
+        assert FileManager.is_supported_file("config.xml")
+    
         # Invalid extensions
-        assert not FileManager.is_supported_file("image.jpg")
-        assert not FileManager.is_supported_file("text.txt")
-        assert not FileManager.is_supported_file("data.xlsx")
         assert not FileManager.is_supported_file("no_extension")
+        assert not FileManager.is_supported_file("file.xyz")
+        assert not FileManager.is_supported_file("document.exe")
 
     def test_extract_filename_from_aria_label(self):
         """Test filename extraction from aria-label"""
@@ -337,16 +342,15 @@ class TestDownloadManager:
         """Test extracting supplier name using CSS selectors"""
         download_manager = DownloadManager(mock_driver)
         
-        # Mock supplier element
+        # Mock CSS selector to succeed
         supplier_element = Mock(spec=WebElement)
         supplier_element.text = "Test Supplier Inc."
         
-        # Mock find_element to return supplier element
         mock_driver.find_element.return_value = supplier_element
         
         supplier_name = download_manager._extract_supplier_name()
         
-        assert supplier_name == "Test Supplier Inc."
+        assert supplier_name == "Test_Supplier_Inc"
 
     def test_extract_supplier_name_xpath_fallback(self, mock_driver):
         """Test extracting supplier name using XPath fallback"""
@@ -359,12 +363,14 @@ class TestDownloadManager:
         supplier_element = Mock(spec=WebElement)
         supplier_element.text = "Fallback Supplier"
         
-        with patch('selenium.webdriver.common.by.By.XPATH') as mock_xpath:
-            mock_driver.find_element.return_value = supplier_element
+        with patch('selenium.webdriver.support.ui.WebDriverWait') as mock_wait_class:
+            mock_wait_instance = Mock()
+            mock_wait_instance.until.return_value = supplier_element
+            mock_wait_class.return_value = mock_wait_instance
             
             supplier_name = download_manager._extract_supplier_name()
             
-            assert supplier_name == "Fallback Supplier"
+            assert supplier_name == "Fallback_Supplier"
 
     def test_extract_supplier_name_not_found(self, mock_driver):
         """Test extracting supplier name when not found"""

@@ -42,7 +42,11 @@ class FileManager:
             return f"attachment_{index + 1}"
 
         filename_match = re.search(r"(.+?)\s*file attachment", aria_label)
-        return filename_match.group(1) if filename_match else f"attachment_{index + 1}"
+        if filename_match:
+            # Clean up the extracted filename by removing extra whitespace
+            filename = filename_match.group(1).strip()
+            return filename
+        return f"attachment_{index + 1}"
 
     @staticmethod
     def rename_downloaded_files(
@@ -426,6 +430,9 @@ class DownloadManager:
         
         # Remove multiple underscores and trim
         cleaned = re.sub(r'_+', '_', cleaned).strip('_')
+        
+        # Remove trailing periods and underscores
+        cleaned = cleaned.rstrip('._')
         
         # Limit length to avoid filesystem issues
         if len(cleaned) > 100:
