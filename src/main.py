@@ -92,6 +92,9 @@ class CoupaDownloader:
         if not self.handle_login_first():
             return
 
+        # STEP 1.5: Ask user about MSG file processing
+        msg_processing_enabled = self._ask_user_about_msg_processing()
+        
         # STEP 2: Process all POs with browser session recovery
         progress_manager.start_processing(len(valid_entries))
         
@@ -108,7 +111,7 @@ class CoupaDownloader:
                         break
                 
                 # Process the PO in the current tab (main tab)
-                self.download_manager.download_attachments_for_po(display_po, clean_po)
+                self.download_manager.download_attachments_for_po(display_po, clean_po, msg_processing_enabled)
                 
             except Exception as download_error:
                 if Config.VERBOSE_OUTPUT:
@@ -146,6 +149,36 @@ class CoupaDownloader:
         except Exception:
             return False
     
+    def _ask_user_about_msg_processing(self) -> bool:
+        """Ask user if they want to automatically process MSG files."""
+        print("\n📧 MSG File Processing Options")
+        print("=" * 40)
+        print("Would you like to automatically process .msg files?")
+        print("This will:")
+        print("  • Convert .msg files to PDF format")
+        print("  • Extract any attachments from .msg files")
+        print("  • Create subfolders named after the original .msg file")
+        print("  • Organize attachments in these subfolders")
+        print()
+        
+        while True:
+            try:
+                response = input("Enable MSG processing? (y/n): ").strip().lower()
+                if response in ['y', 'yes', '1']:
+                    print("✅ MSG processing enabled")
+                    return True
+                elif response in ['n', 'no', '0']:
+                    print("⏭️ MSG processing disabled")
+                    return False
+                else:
+                    print("❌ Please enter 'y' for yes or 'n' for no")
+            except KeyboardInterrupt:
+                print("\n⏭️ MSG processing disabled (user cancelled)")
+                return False
+            except Exception as e:
+                print(f"❌ Error reading input: {e}")
+                return False
+
     def _recover_browser_session(self) -> bool:
         """Attempt to recover the browser session by restarting the browser."""
         try:

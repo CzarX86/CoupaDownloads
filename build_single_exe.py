@@ -466,7 +466,7 @@ if __name__ == "__main__":
         return main_script_path
     
     def create_spec_file(self):
-        """Create PyInstaller spec file."""
+        """Create PyInstaller spec file with security optimizations."""
         print("📋 Creating PyInstaller spec file...")
         
         spec_content = '''# -*- mode: python ; coding: utf-8 -*-
@@ -505,7 +505,12 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    excludes=[
+        'matplotlib', 'scipy', 'numpy', 'PIL', 'cv2', 'sklearn',  # Exclude heavy libraries
+        'IPython', 'jupyter', 'notebook',  # Exclude development tools
+        'pytest', 'pytest_*', 'coverage',  # Exclude test frameworks
+        'sphinx', 'docutils', 'jinja2',  # Exclude documentation tools
+    ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,
@@ -524,17 +529,18 @@ exe = EXE(
     name='CoupaDownloads',
     debug=False,
     bootloader_ignore_signals=False,
-    strip=False,
-    upx=True,
+    strip=True,  # Strip debug symbols
+    upx=True,    # Compress executable
     upx_exclude=[],
     runtime_tmpdir=None,
-    console=False,
+    console=False,  # No console window
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
     icon='icon.ico' if os.path.exists('icon.ico') else None,
+    version_file='version_info.txt' if os.path.exists('version_info.txt') else None,
 )
 '''
         
@@ -605,6 +611,64 @@ exe = EXE(
             except subprocess.CalledProcessError as e:
                 print(f"❌ Failed to install PyInstaller: {e}")
                 return False
+    
+    def create_icon(self):
+        """Create a simple icon for the executable."""
+        print("🎨 Creating application icon...")
+        
+        # Create a simple text-based icon (placeholder)
+        # In a real scenario, you'd use a proper .ico file
+        icon_content = """# This is a placeholder for the icon
+# In production, replace with a proper .ico file
+# The icon helps establish legitimacy of the application"""
+        
+        icon_path = self.build_dir / "icon.ico"
+        # For now, we'll create a text file as placeholder
+        # In real implementation, you'd copy a proper .ico file
+        icon_path.write_text(icon_content, encoding='utf-8')
+        
+        print("✅ Icon placeholder created")
+        return icon_path
+    
+    def create_security_manifest(self):
+        """Create security manifest for Windows."""
+        print("🛡️ Creating security manifest...")
+        
+        manifest_content = '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <assemblyIdentity
+    version="1.0.0.0"
+    processorArchitecture="*"
+    name="CoupaDownloads"
+    type="win32"
+  />
+  <description>CoupaDownloads - Automated PO Attachment Downloader</description>
+  <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
+    <security>
+      <requestedPrivileges>
+        <requestedExecutionLevel level="asInvoker" uiAccess="false"/>
+      </requestedPrivileges>
+    </security>
+  </trustInfo>
+  <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
+    <application>
+      <!-- Windows 10 -->
+      <supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}"/>
+      <!-- Windows 8.1 -->
+      <supportedOS Id="{1f676c76-80e1-4239-95bb-83d0f6d0da78}"/>
+      <!-- Windows 8 -->
+      <supportedOS Id="{4a2f28e3-53b9-4441-ba9c-d69d4a4a6e38}"/>
+      <!-- Windows 7 -->
+      <supportedOS Id="{35138b9a-5d96-4fbd-8e2d-a2440225f93a}"/>
+    </application>
+  </compatibility>
+</assembly>'''
+        
+        manifest_path = self.build_dir / "app.manifest"
+        manifest_path.write_text(manifest_content, encoding='utf-8')
+        
+        print("✅ Security manifest created")
+        return manifest_path
     
     def build_exe(self, main_script_path, spec_path):
         """Build the executable file."""
@@ -794,6 +858,60 @@ Reports: Generated automatically
         
         print("✅ README created")
     
+    def create_version_info(self):
+        """Create version info file for Windows executable."""
+        print("📋 Creating version info file...")
+        
+        version_info_content = '''# UTF-8
+#
+# For more details about fixed file info 'ffi' see:
+# http://msdn.microsoft.com/en-us/library/ms646997.aspx
+VSVersionInfo(
+  ffi=FixedFileInfo(
+    # filevers and prodvers should be always a tuple with four items: (1, 2, 3, 4)
+    # Set not needed items to zero 0.
+    filevers=(1, 0, 0, 0),
+    prodvers=(1, 0, 0, 0),
+    # Contains a bitmask that specifies the valid bits 'flags'r
+    mask=0x3f,
+    # Contains a bitmask that specifies the Boolean attributes of the file.
+    flags=0x0,
+    # The operating system for which this file was designed.
+    # 0x4 - NT and there is no need to change it.
+    OS=0x40004,
+    # The general type of file.
+    # 0x1 - the file is an application.
+    fileType=0x1,
+    # The function of the file.
+    # 0x0 - the function is not defined for this fileType
+    subtype=0x0,
+    # Creation date and time stamp.
+    date=(0, 0)
+    ),
+  kids=[
+    StringFileInfo(
+      [
+      StringTable(
+        u'040904B0',
+        [StringStruct(u'CompanyName', u'CoupaDownloads'),
+        StringStruct(u'FileDescription', u'Automated PO Attachment Downloader for Coupa'),
+        StringStruct(u'FileVersion', u'1.0.0.0'),
+        StringStruct(u'InternalName', u'CoupaDownloads'),
+        StringStruct(u'LegalCopyright', u'Copyright (c) 2024 CoupaDownloads'),
+        StringStruct(u'OriginalFilename', u'CoupaDownloads.exe'),
+        StringStruct(u'ProductName', u'CoupaDownloads'),
+        StringStruct(u'ProductVersion', u'1.0.0.0')])
+      ]), 
+    VarFileInfo([VarStruct(u'Translation', [1033, 1200])])
+  ]
+)'''
+        
+        version_info_path = self.build_dir / "version_info.txt"
+        version_info_path.write_text(version_info_content, encoding='utf-8')
+        
+        print("✅ Version info file created")
+        return version_info_path
+    
     def build(self):
         """Build the complete single EXE package."""
         print("🏗️ Building single EXE package...")
@@ -816,6 +934,15 @@ Reports: Generated automatically
             
             # Create main script
             main_script_path = self.create_main_exe_script()
+            
+            # Create version info
+            self.create_version_info()
+            
+            # Create icon
+            self.create_icon()
+            
+            # Create security manifest
+            self.create_security_manifest()
             
             # Create spec file
             spec_path = self.create_spec_file()
@@ -846,6 +973,7 @@ Reports: Generated automatically
                 print("- Graphical user interface")
                 print("- All dependencies included")
                 print("- Zero installation required")
+                print("- Security optimizations applied")
                 
                 return True
             else:

@@ -17,7 +17,12 @@ class Config:
     DRIVER_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "drivers", "edgedriver_138")
 
     # File settings
-    ALLOWED_EXTENSIONS: List[str] = [".pdf", ".msg", ".docx"]
+    # Set to empty list to allow all file types, or add specific extensions to restrict
+    # Common file types: [".pdf", ".msg", ".docx", ".xlsx", ".txt", ".jpg", ".png", ".zip", ".rar"]
+    ALLOWED_EXTENSIONS: List[str] = []  # Empty list = allow all file types
+    
+    # Alternative: Allow common file types
+    # ALLOWED_EXTENSIONS: List[str] = [".pdf", ".msg", ".docx", ".xlsx", ".txt", ".jpg", ".png", ".zip", ".rar", ".csv", ".xml"]
 
     # Environment variables with defaults
     PAGE_DELAY = float(os.environ.get("PAGE_DELAY", "0"))
@@ -80,6 +85,11 @@ class Config:
     # File handling controls
     OVERWRITE_EXISTING_FILES = os.environ.get("OVERWRITE_EXISTING_FILES", "true").lower() == "true"
     CREATE_BACKUP_BEFORE_OVERWRITE = os.environ.get("CREATE_BACKUP_BEFORE_OVERWRITE", "false").lower() == "true"
+    
+    # MSG processing controls
+    FILTER_MSG_ARTIFACTS = os.environ.get("FILTER_MSG_ARTIFACTS", "true").lower() == "true"
+    MSG_ARTIFACT_MIN_SIZE = int(os.environ.get("MSG_ARTIFACT_MIN_SIZE", "1024"))  # 1KB minimum
+    MSG_IMAGE_MIN_SIZE = int(os.environ.get("MSG_IMAGE_MIN_SIZE", "5120"))  # 5KB minimum for images
 
     @classmethod
     def ensure_download_folder_exists(cls) -> None:

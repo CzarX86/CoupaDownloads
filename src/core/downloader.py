@@ -29,6 +29,10 @@ class FileManager:
     @staticmethod
     def is_supported_file(filename: str) -> bool:
         """Check if file has supported extension."""
+        # If no extensions are specified, allow all files
+        if not Config.ALLOWED_EXTENSIONS:
+            return True
+        # Otherwise, check if file has any of the allowed extensions
         return any(filename.lower().endswith(ext) for ext in Config.ALLOWED_EXTENSIONS)
 
     @staticmethod
@@ -247,7 +251,7 @@ class DownloadManager:
                 print(f"    Failed to download attachment {index + 1}: {str(e)}")
                 print(f"    Aria-label: {aria_label if 'aria_label' in locals() else 'Not available'}")
 
-    def download_attachments_for_po(self, display_po: str, clean_po: str) -> None:
+    def download_attachments_for_po(self, display_po: str, clean_po: str, msg_processing_enabled: bool = False) -> None:
         """Download all attachments for a specific PO and update file status."""
         from selenium.common.exceptions import TimeoutException
         from selenium.webdriver.common.by import By
@@ -309,7 +313,7 @@ class DownloadManager:
             # Use temporary directory approach for clean downloads
             if Config.SHOW_DETAILED_PROCESSING:
                 print(f"   📁 Downloading to: {supplier_name}/")
-            self._download_with_proper_names(attachments, display_po, supplier_name)
+            self._download_with_proper_names(attachments, display_po, supplier_name, msg_processing_enabled)
             
             # Count files after download
             final_count = self._count_existing_files(supplier_name)
@@ -451,13 +455,13 @@ class DownloadManager:
             print(f"  📁 Using main download folder instead")
             return Config.DOWNLOAD_FOLDER
 
-    def _download_with_proper_names(self, attachments, display_po: str, supplier_name: str = "Unknown_Supplier") -> None:
+    def _download_with_proper_names(self, attachments, display_po: str, supplier_name: str = "Unknown_Supplier", msg_processing_enabled: bool = False) -> None:
         """Download attachments using only the temporary directory method (most reliable)."""
         print(f"    📁 Using temporary directory method for {len(attachments)} attachments...")
         supplier_folder = self._create_supplier_folder(supplier_name)
-        self._try_temp_directory_method(attachments, display_po, supplier_folder)
+        self._try_temp_directory_method(attachments, display_po, supplier_folder, msg_processing_enabled)
 
-    def _try_temp_directory_method(self, attachments, display_po: str, supplier_folder: str) -> None:
+    def _try_temp_directory_method(self, attachments, display_po: str, supplier_folder: str, msg_processing_enabled: bool = False) -> None:
         """Fallback to temporary directory method."""
         import tempfile
         import shutil
@@ -487,7 +491,7 @@ class DownloadManager:
                 self._wait_for_download_complete(temp_dir, timeout=len(attachments) * 10)
                 
                 # Move files with proper names to final destination
-                self._move_files_with_proper_names(temp_dir, display_po, supplier_folder)
+                self._move_files_with_proper_names(temp_dir, display_po, supplier_folder, msg_processing_enabled)
                 
             finally:
                 # Restore original download directory
@@ -583,7 +587,7 @@ class DownloadManager:
         except Exception:
             return 0  # Could not determine file size
 
-    def _move_files_with_proper_names(self, temp_dir: str, display_po: str, supplier_folder: str) -> None:
+    def _move_files_with_proper_names(self, temp_dir: str, display_po: str, supplier_folder: str, msg_processing_enabled: bool = False) -> None:
         """Move files from temp directory to final destination with proper PO prefixes."""
         import shutil
         
@@ -638,6 +642,15 @@ class DownloadManager:
                 # Move file with proper name
                 shutil.move(source_path, dest_path)
                 print(f"    ✅ Saved as: {proper_filename}")
+                
+                # Process MSG files if enabled
+                if msg_processing_enabled and clean_filename.lower().endswith('.msg'):
+                    try:
+                        from .msg_processor import msg_processor
+                        clean_po_number = display_po.replace("PO", "") if display_po.startswith("PO") else display_po
+                        msg_processor.process_msg_file(dest_path, clean_po_number, supplier_folder)
+                    except Exception as msg_error:
+                        print(f"    ❌ MSG processing failed for {proper_filename}: {msg_error}")
                     
         except Exception as e:
             print(f"    ❌ Error moving files: {e}")

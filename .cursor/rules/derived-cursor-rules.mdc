@@ -17,11 +17,19 @@ globs: *
 - CORRECTED_PROGRESS_IMPLEMENTATION.md: A document explaining the corrected progress implementation based on the user's actual requirements
 - TEST_RESULTS_SUMMARY.md: A test results summary document showing the successful testing of the enhanced progress system
 - STACK_TRACE_SUPPRESSION.md: Documentation for the stack trace suppression solution
+- ENHANCED_PROGRESS_SUMMARY.md: Summary of the enhanced progress system implementation
+- FINAL_TEST_SUMMARY.md: Final test summary for the enhanced progress system
+- FILE_TYPE_RESTRICTIONS.md: Documentation explaining the file type restriction changes
+- MSG_PROCESSING_FEATURE.md: Documentation for the new MSG processing feature
+
 ## TECH STACK
 
 - pandas>=1.5.0
 - openpyxl>=3.0.0
 - psutil>=5.8.0
+- extract-msg>=0.41.0
+- weasyprint>=60.0
+- pdfkit>=1.0.0
 
 ## FILE SYSTEM RULES
 
