@@ -23,10 +23,18 @@ def test_enhanced_progress():
         # Initialize the downloader
         downloader = CoupaDownloader()
         
-        # Test with just 3 POs to demonstrate the progress system
-        test_pos = ["PO15363269", "PO15826591", "PO16277411"]
+        # Setup the downloader (this initializes managers)
+        downloader.setup()
         
-        print(f"📋 Testing with {len(test_pos)} POs: {test_pos}")
+        # Test with just 3 POs to demonstrate the progress system
+        # Format as (display_po, clean_po) tuples as expected by download_attachments
+        test_pos = [
+            ("PO15363269", "PO15363269"),
+            ("PO15826591", "PO15826591"), 
+            ("PO16277411", "PO16277411")
+        ]
+        
+        print(f"📋 Testing with {len(test_pos)} POs: {[po[0] for po in test_pos]}")
         print()
         
         # Process the test POs

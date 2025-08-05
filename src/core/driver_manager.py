@@ -30,7 +30,8 @@ class DriverManager:
     def _get_project_root(self) -> str:
         """Get the project root directory."""
         current_dir = os.path.dirname(os.path.abspath(__file__))
-        return os.path.dirname(os.path.dirname(os.path.dirname(current_dir)))
+        # From src/core/ go up to src/, then to project root
+        return os.path.dirname(os.path.dirname(current_dir))
     
     def _get_platform(self) -> str:
         """Get the current platform identifier."""
@@ -233,13 +234,20 @@ class DriverManager:
     
     def get_driver_path(self) -> str:
         """Get the path to the EdgeDriver, downloading if necessary."""
-        # Check if driver already exists
-        driver_name = "msedgedriver.exe" if self.platform == "win64" else "msedgedriver"
-        driver_path = os.path.join(self.drivers_dir, driver_name)
+        # Check for existing drivers with different naming patterns
+        possible_driver_names = [
+            "msedgedriver.exe" if self.platform == "win64" else "msedgedriver",
+            "edgedriver",
+            "edgedriver_138",
+            "edgedriver_137",
+            "edgedriver_136"
+        ]
         
-        if os.path.exists(driver_path):
-            print(f"✅ EdgeDriver found: {driver_path}")
-            return driver_path
+        for driver_name in possible_driver_names:
+            driver_path = os.path.join(self.drivers_dir, driver_name)
+            if os.path.exists(driver_path):
+                print(f"✅ EdgeDriver found: {driver_path}")
+                return driver_path
         
         # Driver doesn't exist, download it
         print("🔍 EdgeDriver not found. Starting automatic download...")

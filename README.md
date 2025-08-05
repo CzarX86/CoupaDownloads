@@ -18,29 +18,16 @@
 
 ## 🚀 Quick Start
 
-### Option 1: Interactive Portable Package (Recommended)
+### Windows (Recommended)
 
-1. **Download** the interactive portable ZIP for your platform
-2. **Double-click** the launcher script
-3. **Follow** the interactive prompts
-4. **Edit** the input file when it opens automatically
-5. **Confirm** to start processing
+1. **Download** `CoupaDownloads.exe`
+2. **Double-click** to run
+3. **Add** your PO numbers
+4. **Click** "Start Download"
 
-### Option 2: Standard Portable Package
+That's it! No installation, no dependencies, no setup required.
 
-1. **Download** the portable ZIP for your platform
-2. **Extract** the ZIP file
-3. **Edit** `data/input/input.csv` with your PO numbers
-4. **Run** the launcher script
-
-### Option 3: Windows Users (One-Click Installation)
-
-1. **Download** and extract the project
-2. **Double-click** `install_windows.bat`
-3. **Edit** `data\input\input.csv` with your PO numbers
-4. **Run** `python src\main.py`
-
-### Option 4: All Platforms
+### Alternative: Source Installation
 
 1. **Run**: `python install.py`
 2. **Edit** `data/input/input.csv` with your PO numbers
@@ -54,29 +41,23 @@ That's it! The tool handles everything automatically:
 - ✅ Opens browser and waits for login
 - ✅ Downloads all attachments automatically
 
-**Interactive Portable Package Advantages:**
+**Single EXE Advantages:**
 
-- 🎒 **Zero Installation**: No Python installation required
-- 📦 **ZIP Mode**: Runs directly from ZIP (no extraction)
-- 🎮 **Interactive**: Guides user through entire process
-- 🛡️ **Secure**: Uses temporary directories
-- 🔧 **Stable Driver**: Pre-downloaded compatible EdgeDriver
-- 🚀 **One-Click**: Just run the launcher
-
-**Standard Portable Package Advantages:**
-
-- 🎒 **Zero Installation**: No Python installation required
-- 📦 **Complete Package**: All dependencies included
-- 🔧 **Stable Driver**: Pre-downloaded compatible EdgeDriver
-- 🚀 **One-Click**: Just extract and run
+- 🎒 **Zero Setup**: No Python, no drivers, no libraries
+- 📦 **Single File**: Everything in one EXE
+- 🚀 **One-Click**: Just run and use
+- 🛡️ **Secure**: No system modifications
+- 📱 **Portable**: Copy to any Windows machine
+- 🖥️ **GUI Interface**: User-friendly graphical interface
 
 ## 📋 What You Need
 
-### For Portable Package
+### For Single EXE (Recommended)
 
-- **Microsoft Edge** (automatically detected)
-- **Coupa Access** (valid login credentials)
-- **Internet Connection** (for downloads)
+- **Windows 10/11** (64-bit)
+- **Microsoft Edge** browser
+- **Internet connection**
+- **Coupa access** (valid login)
 
 ### For Source Installation
 
@@ -206,30 +187,24 @@ python test_installation.py
 python run_tests.py
 ```
 
-## 📦 Building Portable Packages
+## 📦 Building Single EXE
 
-### Interactive Portable Package (Recommended)
+### Windows (Recommended)
 
 ```bash
-python build_portable_interactive.py
+python build_single_exe.py
 ```
 
-### Simple Portable Package
+This creates a single `CoupaDownloads.exe` file that includes:
+- All Python dependencies
+- Stable EdgeDriver
+- Graphical user interface
+- Complete system functionality
+
+### Alternative: Source Installation
 
 ```bash
-python build_portable_simple.py
-```
-
-### Advanced Portable Package (with embedded Python)
-
-```bash
-python build_portable_advanced.py
-```
-
-### Basic Portable Package
-
-```bash
-python build_portable.py
+python install.py
 ```
 
 ## 🔍 Troubleshooting

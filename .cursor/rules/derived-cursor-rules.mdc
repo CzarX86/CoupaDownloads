@@ -7,7 +7,21 @@ globs: *
 
 ## PROJECT DOCUMENTATION & CONTEXT SYSTEM
 
+- Excel Compatibility Guide: Explains the Excel compatibility features.
+- EXCEL_COMPATIBILITY_SUMMARY.md: Explains what was implemented for Excel compatibility
+- EXCEL_COMPATIBILITY_SUMMARY.md: Creates a final summary document that explains what was implemented for Excel compatibility
+- OUTPUT_IMPROVEMENTS.md: Documentation for the output improvements
+- EXCEL_COMPATIBILITY_SUMMARY.md: A final summary document that explains what was implemented for Excel compatibility
+- COMPLETE_SOLUTION.md: A complete solution summary that addresses both the file duplication and verbose output issues
+- ENHANCED_PROGRESS_SYSTEM.md: Creates documentation for the enhanced progress feedback system
+- CORRECTED_PROGRESS_IMPLEMENTATION.md: A document explaining the corrected progress implementation based on the user's actual requirements
+- TEST_RESULTS_SUMMARY.md: A test results summary document showing the successful testing of the enhanced progress system
+- STACK_TRACE_SUPPRESSION.md: Documentation for the stack trace suppression solution
 ## TECH STACK
+
+- pandas>=1.5.0
+- openpyxl>=3.0.0
+- psutil>=5.8.0
 
 ## FILE SYSTEM RULES
 
