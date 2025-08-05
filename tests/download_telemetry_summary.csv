@@ -1,0 +1,4 @@
+method,attempts,successes,failures
+direct,9,0,21
+right_click,8,0,9
+temp_dir,9,8,12

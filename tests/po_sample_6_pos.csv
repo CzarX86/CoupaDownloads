@@ -1,0 +1,7 @@
+po_number,status,supplier,attachments_found,attachments_downloaded,coupa_url,last_processed,error_message
+PO15495542,NO_ATTACHMENTS,,0,0,https://unilever.coupahost.com/order_headers/15495542,2025-07-28 12:43:52,
+PO16165279,PARTIAL,Ernst_and_Young_LLP-0000337414,2,1,https://unilever.coupahost.com/order_headers/16165279,2025-07-28 12:47:47,
+PO15826591,COMPLETED,ERNST_AND_YOUNG_LLP-0001118312,1,1,https://unilever.coupahost.com/order_headers/15826591,2025-07-28 12:45:17,
+PO16234040,FAILED,,0,0,https://unilever.coupahost.com/order_headers/16234040,2025-07-28 12:50:47,PO page not found
+PO15873456,COMPLETED,ERNST_AND_YOUNG_LLP-0001118312,1,1,https://unilever.coupahost.com/order_headers/15873456,2025-07-28 12:45:25,
+PO15873457,PENDING,,0,0,,,

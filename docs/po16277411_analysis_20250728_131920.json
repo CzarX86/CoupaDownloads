@@ -1,0 +1,14 @@
+{
+  "po_number": "PO16277411",
+  "status": "PARTIAL",
+  "attachments_found": 2,
+  "attachments_downloaded": 1,
+  "success_rate": 50.0,
+  "recommendations": [
+    "Retry with increased timeout",
+    "Check second attachment characteristics",
+    "Implement retry logic for failed attachments",
+    "Monitor download progress granularly",
+    "Use alternative download methods for problematic files"
+  ]
+}
