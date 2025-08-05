@@ -2,7 +2,7 @@
 
 ## Overview
 
-The Coupa PO Attachment Downloader is an automated tool that downloads attachments (PDF, MSG, DOCX, and more) from Coupa Purchase Orders. It processes multiple POs in batch, automatically renames files with PO prefixes, converts MSG files to PDF format, and generates detailed Excel reports.
+The Coupa PO Attachment Downloader is an automated tool that downloads attachments from Coupa Purchase Orders. It processes multiple POs in batch, automatically renames files with PO prefixes, converts MSG files to PDF format, extracts email attachments, and generates detailed Excel reports with comprehensive analytics.
 
 ## What You Need Before Starting
 
@@ -16,7 +16,7 @@ The Coupa PO Attachment Downloader is an automated tool that downloads attachmen
 
 ### Step 1: Prepare Your PO Numbers
 
-You can use either CSV or Excel format for your input file:
+You can use either CSV or Excel format for your input file. The tool automatically detects which format you're using.
 
 #### Option A: Excel Format (Recommended)
 
@@ -46,6 +46,7 @@ PO15362783
 - No extra spaces or special characters
 - The tool will automatically detect and use whichever file format you provide
 - The tool will automatically clean and validate your PO numbers
+- Input files are automatically backed up before processing
 
 ### Step 2: Install Required Libraries
 
@@ -89,6 +90,8 @@ The tool works with default settings, but you can customize:
 - `HEADLESS=true` - Run without browser window (advanced users)
 - `LOGIN_TIMEOUT=60` - Login detection timeout in seconds
 - `VERBOSE_OUTPUT=true` - Show detailed processing information
+- `SHOW_DETAILED_PROCESSING=true` - Show step-by-step processing details
+- `SHOW_SELENIUM_LOGS=true` - Show browser automation logs
 
 **Example (macOS/Linux):**
 
@@ -144,6 +147,7 @@ Enable MSG processing? (y/n):
 - Convert MSG files to readable PDF format
 - Extract attachments from within MSG files
 - Organize files in subfolders for better organization
+- Filter out small artifacts and duplicates
 
 **Choose 'n' if you want to:**
 
@@ -152,7 +156,7 @@ Enable MSG processing? (y/n):
 
 ### Step 6: Monitor the Process
 
-The tool will show you detailed progress:
+The tool provides enhanced progress tracking with time estimates and file size information:
 
 ```
 🔐 Checking login status...
@@ -165,16 +169,18 @@ Would you like to automatically process .msg files?
 Enable MSG processing? (y/n): y
 ✅ MSG processing enabled
 
-🎯 Processing 3 POs after successful login...
+🚀 Starting processing of 3 POs...
 
-📋 Processing PO #PO15262984 (1/3)...
-📎 Found 2 attachments
-✅ Downloaded: PO15262984_invoice.pdf
-✅ Downloaded: PO15262984_contract.docx
+📋 PO15262984...........67% | 2m 15s elapsed | ~1m 10s remaining
+   📎 2 file(s) found
+   📥 Starting download of 2 file(s)...
+   ✅ PO15262984_invoice.pdf 2.3MB/2.3MB (100%)
+   ✅ PO15262984_contract.docx 1.1MB/1.1MB (100%)
 
-📋 Processing PO #PO15327452 (2/3)...
-📎 Found 1 attachment
-✅ Downloaded: PO15327452_specification.pdf
+📋 PO15327452...........89% | 3m 25s elapsed | ~0m 25s remaining
+   📎 1 file(s) found
+   📥 Starting download of 1 file(s)...
+   ✅ PO15327452_specification.pdf 5.7MB/5.7MB (100%)
 ```
 
 ### Step 7: Find Your Downloads
@@ -185,7 +191,7 @@ Enable MSG processing? (y/n): y
 
 - Files are automatically renamed with PO prefixes
 - Example: `PO15262984_invoice.pdf`
-- All supported file types: PDF, MSG, DOCX, XLSX, TXT, JPG, PNG, ZIP, RAR, CSV, XML
+- All file types are supported by default (PDF, MSG, DOCX, XLSX, TXT, JPG, PNG, ZIP, RAR, CSV, XML)
 
 **If MSG processing was enabled:**
 
@@ -195,7 +201,8 @@ Enable MSG processing? (y/n): y
 ├── PO15262984_contract.docx
 ├── PO15327452_specification.pdf
 ├── PO15327452_email.msg/
-│   ├── PO15327452_email.pdf
+│   ├── PO15327452_MSG_email.pdf
+│   ├── PO15327452_MSG_email.msg
 │   ├── attachment1.pdf
 │   └── attachment2.docx
 └── ...
@@ -219,25 +226,41 @@ The tool automatically generates detailed Excel reports:
 - Processing timestamps
 - Download folder locations
 - Supplier information (when available)
+- File sizes and types
+- Processing duration per PO
 
 ### Enhanced Progress Tracking
 
-The tool provides real-time progress updates:
+The tool provides comprehensive real-time progress updates:
 
 - **Overall progress**: Shows current PO and total count with time estimates
 - **Individual PO progress**: Shows attachments found and downloaded with file sizes
+- **Time tracking**: Shows elapsed time and estimated remaining time
+- **File size progress**: Shows download progress with file sizes
 - **Error handling**: Continues processing even if individual POs fail
 - **Session recovery**: Automatically recovers from browser crashes
-- **Time tracking**: Shows elapsed time and estimated remaining time
+- **Performance metrics**: Tracks processing speed and efficiency
 
 ### MSG File Processing
 
-When enabled, the tool can:
+When enabled, the tool provides advanced MSG processing:
 
-- **Convert MSG to PDF**: Makes email files readable
+- **Convert MSG to PDF**: Makes email files readable using multiple conversion methods
 - **Extract attachments**: Pulls out files embedded in emails
 - **Organize files**: Creates subfolders for better organization
-- **Filter artifacts**: Removes small files and duplicates
+- **Filter artifacts**: Removes small files and duplicates based on configurable size thresholds
+- **Multiple conversion methods**: Uses LibreOffice, Python libraries, or fallback methods
+- **Consistent naming**: Maintains consistent file naming conventions
+
+### Browser Session Management
+
+The tool includes robust browser session handling:
+
+- **Automatic login detection**: Detects when you're logged in
+- **Session persistence**: Maintains login across browser restarts
+- **Crash recovery**: Automatically recovers from browser crashes
+- **Profile management**: Uses your existing Edge profile for persistent sessions
+- **Homepage parking**: Returns browser to Coupa homepage after processing
 
 ### Telemetry and Analytics
 
@@ -255,6 +278,8 @@ The tool tracks detailed performance metrics:
 - Error frequencies
 - Processing durations
 - Browser performance data
+- File size distributions
+- Processing efficiency metrics
 
 ### Testing and Validation
 
@@ -276,6 +301,8 @@ python run_tests.py --type fast
 - Integration tests: Complete workflow testing
 - File operation tests: Download and renaming validation
 - CSV/Excel processing tests: Input file validation
+- MSG processing tests: Email conversion and attachment extraction
+- Browser automation tests: Login and navigation validation
 
 ## Troubleshooting
 
@@ -318,6 +345,13 @@ python run_tests.py --type fast
 - Ensure you have the required dependencies installed
 - Check if the MSG file is corrupted
 - Try processing without MSG conversion first
+- Check if LibreOffice is installed for better conversion
+
+**7. "Browser session lost"**
+
+- The tool automatically attempts to recover browser sessions
+- If recovery fails, restart the tool
+- Check your internet connection stability
 
 ### Error Messages Explained
 
@@ -326,6 +360,7 @@ python run_tests.py --type fast
 - **"Download timeout"**: The file took too long to download
 - **"Browser session lost"**: The browser crashed or was closed unexpectedly
 - **"MSG conversion failed"**: The MSG file couldn't be converted to PDF
+- **"Session recovery failed"**: Could not restore browser session after crash
 
 ## Performance Tips
 
@@ -335,6 +370,7 @@ python run_tests.py --type fast
 4. **Regular Breaks**: For large batches, the tool handles breaks automatically
 5. **Monitor Resources**: Check CPU and memory usage during processing
 6. **MSG Processing**: Only enable if you need email conversion (adds processing time)
+7. **Browser Settings**: Keep browser updated for best performance
 
 ## File Types Supported
 
@@ -360,6 +396,8 @@ The tool supports all common file types by default, including:
 - **Progress tracking**: Detailed logging of all operations
 - **Backup creation**: Input files are backed up before processing
 - **File organization**: Automatic renaming and folder structure
+- **Crash recovery**: Automatic browser session recovery
+- **Safe file handling**: Prevents overwriting existing files unless configured
 
 ## Support and Maintenance
 
@@ -411,13 +449,18 @@ export PROCESS_MAX_POS=5 && python src/main.py
 - `HEADLESS` - Run without browser window
 - `LOGIN_TIMEOUT` - Login detection timeout
 - `VERBOSE_OUTPUT` - Show detailed processing information
+- `SHOW_DETAILED_PROCESSING` - Show step-by-step details
+- `SHOW_SELENIUM_LOGS` - Show browser automation logs
 
-**New Features:**
+**Current Features:**
 
 - **Excel Support**: Can read from both CSV and Excel files
 - **MSG Processing**: Convert email files to PDF and extract attachments
-- **Enhanced Progress**: Real-time progress tracking with recovery
+- **Enhanced Progress**: Real-time progress tracking with time estimates
 - **Better Error Handling**: Continues processing even with failures
-- **File Type Support**: Handles many more file types than before
+- **File Type Support**: Handles all common file types
+- **Session Recovery**: Automatic browser crash recovery
+- **Performance Analytics**: Detailed telemetry and reporting
+- **Automatic Setup**: Self-contained installation and configuration
 
 That's it! The tool handles everything else automatically. Enjoy your automated Coupa downloads!

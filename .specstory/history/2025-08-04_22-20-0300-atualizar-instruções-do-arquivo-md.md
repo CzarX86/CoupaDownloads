@@ -460,90 +460,55 @@ The updated documentation now accurately reflects the current state of the proje
 
 _**User**_
 
-read the project current status and the .md file we're maintaining, review it entirely
+read the project current status and the .md file we're maintaining, review and update it entirely making sure it reflects current project state.
 
 ---
 
 _**Assistant**_
 
-I'll read the current project status and review the entire USAGE_INSTRUCTIONS.md file to ensure it's comprehensive and accurate.
+I'll analyze the current project state and thoroughly review and update the USAGE_INSTRUCTIONS.md file to ensure it accurately reflects all current features and capabilities.
 
 
 ---
 
-Read file: USAGE_INSTRUCTIONS.md
+Read file: src/main.py
 
 ---
 
-Now let me check the current project structure and key files to ensure the documentation is accurate:
-
+Read file: src/core/config.py
 
 ---
 
 <details>
-            <summary>Listed current directory • **43** results</summary>
+            <summary>Listed directory src/core • **11** results</summary>
         
 | Name |
 |-------|
-| 📄 `build_exe_from_macos.py` |
-| 📁 `.github` |
-| 📁 `output` |
-| 📁 `build` |
-| 📁 `scripts` |
-| 📄 `USAGE_INSTRUCTIONS.md` |
-| 📁 `.git` |
-| 📄 `README.md` |
-| 📄 `build_single_exe.py` |
-| 📄 `security_setup.py` |
-| 📁 `venv` |
-| 📄 `requirements.txt` |
-| 📁 `docs` |
-| 📄 `.cursorignore` |
-| 📄 `build_portable_interactive.py` |
-| 📄 `build_portable_advanced.py` |
-| 📄 `build_portable.py` |
-| 📄 `build_portable_simple.py` |
-| 📄 `test_installation.py` |
-| 📄 `README_WINDOWS.md` |
-| 📁 `.specstory` |
-| 📄 `install.py` |
-| 📄 `install_windows.ps1` |
-| 📄 `install_windows.bat` |
-| 📁 `.cursor` |
-| 📁 `tests` |
-| 📄 `.cursorindexingignore` |
-| 📄 `.DS_Store` |
-| 📄 `browser.py` |
-| 📄 `main.py` |
+| 📁 `__pycache__` |
+| 📄 `msg_processor.py` |
 | 📄 `config.py` |
 | 📄 `downloader.py` |
-| 📁 `data` |
-| 📁 `src` |
-| 📄 `run_tests.py` |
-| 📄 `pytest.ini` |
-| 📁 `__pycache__` |
-| 📁 `.pytest_cache` |
-| 📄 `.gitignore` |
-| 📁 `drivers` |
-| 📁 `.vscode` |
-| 📁 `.venv` |
-| 📁 `.qodo` |
+| 📄 `driver_manager.py` |
+| 📄 `progress_manager.py` |
+| 📄 `browser.py` |
+| 📄 `csv_processor.py` |
+| 📄 `excel_processor.py` |
+| 📄 `unified_processor.py` |
+| 📄 `__init__.py` |
 
 </details>
 
 ---
 
-<details>
-            <summary>Listed directory data • **4** results</summary>
-        
-| Name |
-|-------|
-| 📄 `.DS_Store` |
-| 📁 `input` |
-| 📁 `backups` |
-| 📁 `output` |
+Read file: src/core/msg_processor.py
 
-</details>
+---
+
+Read file: src/core/progress_manager.py
+
+---
+
+Read file: requirements.txt
 
 ---
 
@@ -571,274 +536,86 @@ Now let me check the current project structure and key files to ensure the docum
 
 ---
 
-Read file: install.py
+Read file: USAGE_INSTRUCTIONS.md
 
 ---
 
-Read file: run_tests.py
-
----
-
-Read file: src/core/progress_manager.py
-
----
-
-Read file: src/core/msg_processor.py
-
----
-
-Now let me check if there are any missing files or features that should be documented:
+Now I'll thoroughly review and update the USAGE_INSTRUCTIONS.md file to ensure it accurately reflects the current project state, including all the latest features and capabilities I've discovered.
 
 
 ---
 
-<details>
-            <summary>Searched codebase "install_windows" • **2** results</summary>
-        
-| File |
-|------|
-| `/Users/juliocezaradao/Projects/CoupaDownloads/install_windows.bat` |
-| `/Users/juliocezaradao/Projects/CoupaDownloads/install_windows.ps1` |
-
-</details>
-
----
-
-Read file: install_windows.bat
-
----
-
-Read file: install_windows.ps1
-
----
-
-Now let me check if there are any other important features or files that should be documented:
 
 
 ---
 
-<details>
-            <summary>Listed directory src/core • **11** results</summary>
-        
-| Name |
-|-------|
-| 📄 `msg_processor.py` |
-| 📁 `__pycache__` |
-| 📄 `config.py` |
-| 📄 `downloader.py` |
-| 📄 `driver_manager.py` |
-| 📄 `progress_manager.py` |
-| 📄 `browser.py` |
-| 📄 `csv_processor.py` |
-| 📄 `excel_processor.py` |
-| 📄 `unified_processor.py` |
-| 📄 `__init__.py` |
-
-</details>
+Read file: USAGE_INSTRUCTIONS.md
 
 ---
 
-Read file: src/core/driver_manager.py
+Perfect! I have successfully updated the USAGE_INSTRUCTIONS.md file to accurately reflect the current state of the project. Here's a summary of the comprehensive updates I made:
 
----
+## Major Updates Made:
 
-Based on my comprehensive review of the project and the USAGE_INSTRUCTIONS.md file, I can see that the documentation is quite comprehensive and accurate. However, I notice a few areas that could be improved or clarified. Let me provide a summary of my review:
+### 1. **Enhanced Overview**
+- Updated to reflect the comprehensive analytics and MSG processing capabilities
+- Added mention of email attachment extraction and detailed Excel reports
 
-## Project Status Review Summary
+### 2. **Improved Step-by-Step Instructions**
+- Added automatic file format detection explanation
+- Enhanced installation instructions with more details about what automatic installation handles
+- Added new environment variables for detailed processing and Selenium logs
+- Updated progress monitoring section with enhanced time tracking and file size information
 
-### ✅ **What's Well Documented:**
+### 3. **Enhanced Progress Tracking Section**
+- Added comprehensive description of the new progress tracking features
+- Included time estimates, file size progress, and performance metrics
+- Added session recovery and crash handling information
 
-1. **Core Features**: Excel/CSV support, MSG processing, progress tracking, error handling
-2. **Installation**: Both automatic and manual installation methods
-3. **Usage Flow**: Step-by-step instructions from setup to execution
-4. **Troubleshooting**: Common issues and solutions
-5. **Advanced Features**: Testing, telemetry, file organization
+### 4. **Advanced MSG Processing**
+- Detailed explanation of MSG file processing capabilities
+- Added information about multiple conversion methods
+- Included filtering and organization features
+- Added troubleshooting for MSG processing issues
 
-### �� **Areas That Could Be Enhanced:**
+### 5. **Browser Session Management**
+- New section explaining robust browser session handling
+- Added automatic login detection and session persistence
+- Included crash recovery and profile management features
 
-1. **Driver Management**: The documentation mentions EdgeDriver but doesn't explain the automatic download feature
-2. **Platform-Specific Instructions**: Could be clearer about Windows vs macOS/Linux differences
-3. **File Type Restrictions**: The config shows all file types are allowed by default, but this isn't clearly explained
-4. **Session Management**: Browser session recovery and persistence features could be better explained
+### 6. **Enhanced Troubleshooting**
+- Added new troubleshooting items for browser session issues
+- Updated error message explanations
+- Added MSG processing troubleshooting
+- Included session recovery troubleshooting
 
-### 📝 **Minor Updates Needed:**
+### 7. **Performance and Safety Features**
+- Added comprehensive performance tips
+- Enhanced safety features list with crash recovery and safe file handling
+- Updated file type support with note about configurable restrictions
 
-Let me make a few targeted improvements to the documentation:
+### 8. **Current Features Summary**
+- Added a "Current Features" section highlighting all major capabilities
+- Included session recovery, performance analytics, and automatic setup
+- Updated environment variables list with new options
 
+### 9. **Enhanced Examples**
+- Updated progress monitoring examples to show the new time tracking and file size information
+- Added more detailed file organization examples
+- Included comprehensive environment variable examples
 
----
+The updated documentation now accurately reflects:
+- ✅ Excel and CSV input file support
+- ✅ Enhanced progress tracking with time estimates
+- ✅ Advanced MSG file processing with multiple conversion methods
+- ✅ Browser session recovery and crash handling
+- ✅ Comprehensive telemetry and analytics
+- ✅ All current environment variables and configuration options
+- ✅ Enhanced troubleshooting and error handling
+- ✅ Performance optimization features
+- ✅ Safety and backup features
 
-<details><summary>Edit file: USAGE_INSTRUCTIONS.md</summary>
-
-undefined
-
-**Chunk 1**
-Lines added: 6, lines removed: 1
-
-```diff
-@@ -72,5 +72,10 @@
-  6. **Wait for installation to complete**
-  
-- **Note**: The automatic installation will handle everything for you, including downloading the correct EdgeDriver for your system.
-+ **Note**: The automatic installation will handle everything for you, including:
-+ - Creating virtual environment
-+ - Installing Python dependencies
-+ - Downloading the correct EdgeDriver for your system
-+ - Setting up necessary directories
-+ - Creating sample input files
-  
-  ### Step 3: Configure Settings (Optional)
-```
-
-</details>
-
----
-
-<details><summary>Edit file: USAGE_INSTRUCTIONS.md</summary>
-
-undefined
-
-**Chunk 1**
-Lines added: 2, lines removed: 1
-
-```diff
-@@ -294,5 +294,6 @@
-  
-  - Ensure Microsoft Edge is installed
-- - Check that the WebDriver is in the `drivers/` folder
-+ - The tool automatically downloads the correct EdgeDriver for your system
-+ - If automatic download fails, check your internet connection
-  - Try running without headless mode: `export HEADLESS=false`
-  
-```
-
-</details>
-
----
-
-The string to replace was not found in the file.
-
----
-
-<details><summary>Edit file: USAGE_INSTRUCTIONS.md</summary>
-
-undefined
-
-**Chunk 1**
-Lines added: 2, lines removed: undefined
-
-```diff
-@@ -334,4 +334,6 @@
-  
-  ## File Types Supported
-+ 
-+ The tool supports all common file types by default, including:
-  
-  - **PDF files**: Invoices, contracts, specifications
-```
-
-**Chunk 2**
-Lines added: 2, lines removed: undefined
-
-```diff
-@@ -343,4 +345,6 @@
-  - **Archive files**: ZIP, RAR
-  - **Data files**: CSV, XML
-+ 
-+ **Note**: You can restrict file types by modifying the configuration if needed.
-  
-  ## Safety Features
-```
-
-</details>
-
----
-
-<details><summary>Edit file: USAGE_INSTRUCTIONS.md</summary>
-
-undefined
-
-**Chunk 1**
-Lines added: 3, lines removed: 2
-
-```diff
-@@ -222,8 +222,9 @@
-  The tool provides real-time progress updates:
-  
-- - **Overall progress**: Shows current PO and total count
-- - **Individual PO progress**: Shows attachments found and downloaded
-+ - **Overall progress**: Shows current PO and total count with time estimates
-+ - **Individual PO progress**: Shows attachments found and downloaded with file sizes
-  - **Error handling**: Continues processing even if individual POs fail
-  - **Session recovery**: Automatically recovers from browser crashes
-+ - **Time tracking**: Shows elapsed time and estimated remaining time
-  
-  ### MSG File Processing
-```
-
-</details>
-
----
-
-Now let me add a section about the automatic driver management feature:
-
-
----
-
-<details><summary>Edit file: USAGE_INSTRUCTIONS.md</summary>
-
-undefined
-
-**Chunk 1**
-Lines added: 2, lines removed: undefined
-
-```diff
-@@ -119,4 +119,6 @@
-  
-  **Note**: If you used automatic installation, the virtual environment is already activated.
-+ 
-+ **Automatic EdgeDriver Management**: The tool automatically detects your Microsoft Edge version and downloads the compatible EdgeDriver, so you don't need to manually install or configure it.
-  
-  ### Step 5: MSG File Processing Options
-```
-
-</details>
-
----
-
-## Final Review Summary
-
-After reviewing the entire project and documentation, here's my assessment:
-
-### ✅ **Documentation Quality: EXCELLENT**
-
-The USAGE_INSTRUCTIONS.md file is comprehensive, well-structured, and accurately reflects the current state of the project. It includes:
-
-1. **Complete Feature Coverage**: All major features are documented
-2. **User-Friendly Instructions**: Step-by-step guidance for non-technical users
-3. **Troubleshooting**: Comprehensive error handling and solutions
-4. **Advanced Features**: Testing, telemetry, and configuration options
-5. **Safety Features**: Backup, error recovery, and file organization
-
-### 🔧 **Minor Improvements Made:**
-
-1. **Enhanced Installation Notes**: Clarified what automatic installation includes
-2. **Driver Management**: Added explanation of automatic EdgeDriver download
-3. **File Type Support**: Clarified that all file types are supported by default
-4. **Progress Tracking**: Added details about time tracking and file size display
-5. **Browser Troubleshooting**: Updated to reflect automatic driver management
-
-### 📊 **Project Status Assessment:**
-
-The project is in excellent condition with:
-- **Robust Architecture**: Modular design with clear separation of concerns
-- **Comprehensive Testing**: Extensive test suite with multiple categories
-- **Advanced Features**: MSG processing, Excel support, progress tracking
-- **Cross-Platform Support**: Works on Windows, macOS, and Linux
-- **User-Friendly**: Automatic installation and configuration
-- **Production Ready**: Error handling, recovery, and detailed logging
-
-The documentation now accurately reflects all these capabilities and provides clear, user-friendly instructions for end users (not developers) as requested. The instructions are in English and cover the complete workflow from installation to successful file downloads.
+The documentation is now comprehensive, user-friendly, and accurately represents the current state of the project with all its advanced features and capabilities.
 
 ---
 
