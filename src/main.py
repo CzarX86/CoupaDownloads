@@ -7,6 +7,7 @@ from core.browser import BrowserManager
 from core.config import Config
 from core.unified_processor import UnifiedProcessor
 from core.downloader import DownloadManager, LoginManager
+from core.progress_manager import progress_manager
 
 
 class CoupaDownloader:
@@ -92,31 +93,28 @@ class CoupaDownloader:
             return
 
         # STEP 2: Process all POs with browser session recovery
-        print(f"🎯 Processing {len(valid_entries)} POs after successful login...")
+        progress_manager.start_processing(len(valid_entries))
         
         for i, (display_po, clean_po) in enumerate(valid_entries):
             try:
-                if Config.VERBOSE_OUTPUT:
-                    print(f"\n📋 Processing PO #{display_po} ({i+1}/{len(valid_entries)})...")
+                # Start PO processing with progress indicator
+                progress_manager.start_po(display_po)
                 
                 # Check if browser session is still valid
                 if not self._is_browser_session_valid():
-                    print("⚠️ Browser session lost, attempting to recover...")
+                    print("   ⚠️ Browser session lost, attempting to recover...")
                     if not self._recover_browser_session():
-                        print("❌ Could not recover browser session, stopping processing")
+                        print("   ❌ Could not recover browser session, stopping processing")
                         break
                 
                 # Process the PO in the current tab (main tab)
                 self.download_manager.download_attachments_for_po(display_po, clean_po)
                 
-                if Config.VERBOSE_OUTPUT:
-                    print(f"✅ Completed PO #{display_po}")
-                
             except Exception as download_error:
                 if Config.VERBOSE_OUTPUT:
-                    print(f"  ❌ PO #{display_po} failed with error: {download_error}")
+                    print(f"   ❌ PO #{display_po} failed with error: {download_error}")
                 else:
-                    print(f"  ❌ PO #{display_po} failed")
+                    print(f"   ❌ PO #{display_po} failed")
                 
                 # Check if it's a browser session error
                 if "no such window" in str(download_error).lower() or "target window already closed" in str(download_error).lower():
@@ -194,7 +192,7 @@ class CoupaDownloader:
             self.download_attachments(valid_entries)
             
             # Generate final summary report
-            print("\n🎉 Processing completed!")
+            progress_manager.processing_completed()
             UnifiedProcessor.print_summary_report()
             
         except KeyboardInterrupt:

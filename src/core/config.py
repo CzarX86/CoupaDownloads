@@ -22,7 +22,8 @@ class Config:
     # Environment variables with defaults
     PAGE_DELAY = float(os.environ.get("PAGE_DELAY", "0"))
     # Edge user profile directory (for persistent sessions)
-    EDGE_PROFILE_DIR = os.path.expanduser(os.environ.get("EDGE_PROFILE_DIR", "~/Library/Application Support/Microsoft Edge"))
+    _default_edge_profile = "~/Library/Application Support/Microsoft Edge" if os.name != 'nt' else "%LOCALAPPDATA%/Microsoft/Edge/User Data"
+    EDGE_PROFILE_DIR = os.path.expanduser(os.environ.get("EDGE_PROFILE_DIR", _default_edge_profile))
     EDGE_PROFILE_NAME = os.environ.get("EDGE_PROFILE_NAME", "Default")  # e.g., 'Default', 'Profile 1'
     LOGIN_TIMEOUT = int(os.environ.get("LOGIN_TIMEOUT", "60"))
     HEADLESS = os.environ.get("HEADLESS", "false").lower() == "true"

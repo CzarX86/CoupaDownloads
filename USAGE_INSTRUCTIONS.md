@@ -37,10 +37,27 @@ PO15362783
 
 ### Step 2: Install Required Libraries
 
+#### Option A: Automatic Installation (Recommended)
+
+**Windows:**
+- Double-click `install_windows.bat` OR
+- Right-click `install_windows.ps1` → "Run with PowerShell"
+
+**All Platforms:**
+- Run: `python install.py`
+
+#### Option B: Manual Installation
+
 1. **Open Terminal/Command Prompt**
 2. **Navigate to the project folder**: `cd /path/to/CoupaDownloads`
-3. **Install Python dependencies**: `pip install -r requirements.txt`
-4. **Wait for installation to complete**
+3. **Create virtual environment**: `python -m venv venv`
+4. **Activate virtual environment**:
+   - Windows: `venv\Scripts\activate`
+   - macOS/Linux: `source venv/bin/activate`
+5. **Install Python dependencies**: `pip install -r requirements.txt`
+6. **Wait for installation to complete**
+
+**Note**: The automatic installation will handle everything for you, including downloading the correct EdgeDriver for your system.
 
 ### Step 3: Configure Settings (Optional)
 
@@ -68,13 +85,18 @@ python src/main.py
 
 ### Step 4: Run the Downloader
 
-1. **Start the tool**: `python src/main.py`
-2. **Wait for browser to open**: The tool will automatically launch Microsoft Edge
-3. **Login to Coupa**:
+1. **Activate virtual environment** (if using manual installation):
+   - Windows: `venv\Scripts\activate`
+   - macOS/Linux: `source venv/bin/activate`
+2. **Start the tool**: `python src/main.py`
+3. **Wait for browser to open**: The tool will automatically launch Microsoft Edge
+4. **Login to Coupa**:
    - The browser will navigate to Coupa
    - Log in manually if prompted
    - The tool will automatically detect when you're logged in
-4. **Monitor progress**: Watch the terminal for real-time updates
+5. **Monitor progress**: Watch the terminal for real-time updates
+
+**Note**: If you used automatic installation, the virtual environment is already activated.
 
 ### Step 5: Monitor the Process
 
@@ -256,7 +278,12 @@ python run_tests.py --type fast
 **Essential Commands:**
 
 ```bash
-# Install dependencies
+# Automatic installation (recommended)
+python install.py
+
+# Manual installation
+python -m venv venv
+source venv/bin/activate  # or venv\Scripts\activate on Windows
 pip install -r requirements.txt
 
 # Run the tool

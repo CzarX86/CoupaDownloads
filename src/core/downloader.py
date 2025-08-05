@@ -15,6 +15,7 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
 from .config import Config
+from .progress_manager import progress_manager
 
 
 class FileManager:
@@ -254,13 +255,11 @@ class DownloadManager:
         from selenium.webdriver.support import expected_conditions as EC
         from .unified_processor import UnifiedProcessor
 
-        print(f"📋 Processing PO #{display_po}...")
-
         try:
             # Navigate to PO page
             po_url = Config.BASE_URL.format(clean_po)
             if Config.VERBOSE_OUTPUT:
-                print(f"  🌐 Navigating to: {po_url}")
+                print(f"   🌐 Navigating to: {po_url}")
             self.driver.get(po_url)
 
             # Check if page exists
@@ -280,29 +279,33 @@ class DownloadManager:
                 UnifiedProcessor.update_po_status(display_po, 'FAILED', error_message='Login required', coupa_url=po_url)
                 raise Exception("Login required - will retry after login")
 
-            # Find attachments
+                        # Find attachments
             attachments = self._find_attachments()
             attachments_found = len(attachments)
             
+            # Report found attachments
+            progress_manager.found_attachments(attachments_found)
+            
             if not attachments:
-                print(f"  📭 No attachments found for PO #{display_po}")
                 UnifiedProcessor.update_po_status(display_po, 'NO_ATTACHMENTS', 
-                                            attachments_found=0, attachments_downloaded=0, coupa_url=po_url)
+                                                attachments_found=0, attachments_downloaded=0, coupa_url=po_url)
+                progress_manager.po_completed('NO_ATTACHMENTS')
                 return
-
-            print(f"  📎 Found {attachments_found} attachment(s)")
 
             # Extract supplier name for folder organization
             supplier_name = self._extract_supplier_name()
             if Config.VERBOSE_OUTPUT and supplier_name:
-                print(f"  🏢 Supplier: {supplier_name}")
+                print(f"   🏢 Supplier: {supplier_name}")
+            
+            # Start download process
+            progress_manager.start_download(attachments_found)
             
             # Track downloads before starting
             initial_count = self._count_existing_files(supplier_name)
             
             # Use temporary directory approach for clean downloads
             if Config.SHOW_DETAILED_PROCESSING:
-                print(f"  📁 Downloading to: {supplier_name}/")
+                print(f"   📁 Downloading to: {supplier_name}/")
             self._download_with_proper_names(attachments, display_po, supplier_name)
             
             # Count files after download

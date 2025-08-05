@@ -321,3 +321,25 @@ Isso tornaria o projeto verdadeiramente "plug & play" no Windows!
 
 ---
 
+_**User**_
+
+sim, torne o projeto plug&play
+download automatico do edge driver deve identificar qual a versao do edge instalada no systema atualmente e baixar driver compatível.
+
+---
+
+_**Assistant**_
+
+Perfeito! Vou tornar o projeto plug & play para Windows com download automático do EdgeDriver compatível. Vou criar um sistema completo que detecta a versão do Edge e baixa o driver correto automaticamente.
+
+
+---
+
+
+
+---
+
+
+
+---
+

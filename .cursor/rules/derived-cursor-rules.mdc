@@ -18,3 +18,10 @@ globs: *
 ## TESTING
 
 ## WORKFLOW & RELEASE RULES
+
+- Always commit changes with descriptive messages.
+- Before pushing, ensure all tests pass.
+- Use feature branches for new development.
+- Make sure to check cross-platform compatibility.
+- Always ensure that the path structure is correct.
+- In the event of errors, provide human-friendly error messages.

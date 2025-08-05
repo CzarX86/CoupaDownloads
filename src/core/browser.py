@@ -15,6 +15,7 @@ from selenium.webdriver.edge.options import Options as EdgeOptions
 from selenium.webdriver.edge.service import Service as EdgeService
 
 from .config import Config
+from .driver_manager import DriverManager
 
 
 class BrowserManager:
@@ -22,6 +23,7 @@ class BrowserManager:
     
     def __init__(self):
         self.driver: Optional[webdriver.Edge] = None
+        self.driver_manager = DriverManager()
         self._setup_signal_handlers()
     
     def _setup_signal_handlers(self) -> None:
@@ -118,21 +120,24 @@ class BrowserManager:
     
     def initialize_driver(self, headless: bool = False) -> webdriver.Edge:
         """Initialize the WebDriver with proper error handling. Supports headless mode."""
-        # Check if local driver exists
-        if not Config.DRIVER_PATH or not os.path.exists(Config.DRIVER_PATH):
-            raise FileNotFoundError(f"WebDriver not found at {Config.DRIVER_PATH}")
-
         try:
+            # Get driver path automatically (download if needed)
+            driver_path = self.driver_manager.get_driver_path()
+            
+            # Verify driver works
+            if not self.driver_manager.verify_driver(driver_path):
+                raise RuntimeError("EdgeDriver verification failed")
+            
             options = self._create_browser_options(headless=headless)
             
             # Configure service with log suppression
             service = EdgeService(
-                executable_path=Config.DRIVER_PATH,
+                executable_path=driver_path,
                 log_output=subprocess.DEVNULL if not Config.SHOW_SELENIUM_LOGS else None
             )
             
             self.driver = webdriver.Edge(service=service, options=options)
-            print(f"Using local Edge WebDriver: {Config.DRIVER_PATH}")
+            print(f"✅ Using Edge WebDriver: {driver_path}")
             return self.driver
         except Exception as e:
             if "user data directory is already in use" in str(e):
@@ -140,11 +145,11 @@ class BrowserManager:
                 # Retry without profile options
                 options = self._create_browser_options_without_profile(headless=headless)
                 service = EdgeService(
-                    executable_path=Config.DRIVER_PATH,
+                    executable_path=driver_path,
                     log_output=subprocess.DEVNULL if not Config.SHOW_SELENIUM_LOGS else None
                 )
                 self.driver = webdriver.Edge(service=service, options=options)
-                print(f"✅ Using local Edge WebDriver without profile: {Config.DRIVER_PATH}")
+                print(f"✅ Using Edge WebDriver without profile: {driver_path}")
                 return self.driver
             else:
                 print(f"Driver initialization failed: {e}")
