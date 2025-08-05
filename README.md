@@ -217,22 +217,26 @@ python install.py
 ## 🛡️ Security & Trust
 
 ### Digital Signature
+
 - **Self-signed certificate** for development
 - **Timestamp server** for authenticity
 - **Verifiable signature** in file properties
 
 ### Windows Defender Compatibility
+
 - **Optimized build** to avoid false positives
 - **Clean execution patterns**
 - **Professional metadata**
 - **Security manifest** included
 
 ### File Integrity
+
 - **MD5/SHA256 checksums** provided
 - **Verification instructions** included
 - **Transparent operations**
 
 ### If Security Warnings Appear:
+
 1. **Windows Defender**: Click "More info" → "Run anyway"
 2. **SmartScreen**: Click "More info" → "Run anyway"
 3. **Verify checksums** match provided values
@@ -243,23 +247,28 @@ python install.py
 ### Common Issues
 
 **"Windows Defender blocks the file"**
+
 - Click "More info" and "Run anyway"
 - Add to Windows Defender exclusions if needed
 - Verify checksums match expected values
 
 **"Python not found"**
+
 - Download Python from https://python.org
 - Check "Add Python to PATH" during installation
 
 **"Edge not found"**
+
 - Install Microsoft Edge from https://microsoft.com/edge
 - Tool will attempt to download driver anyway
 
 **"Permission denied"**
+
 - Run as Administrator (Windows)
 - Check antivirus settings
 
 **"Driver download failed"**
+
 - Check internet connection
 - Try running installer again
 

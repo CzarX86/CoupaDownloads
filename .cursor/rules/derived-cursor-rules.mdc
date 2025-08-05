@@ -30,6 +30,7 @@ globs: *
 - extract-msg>=0.41.0
 - weasyprint>=60.0
 - pdfkit>=1.0.0
+- requests>=2.31.0
 
 ## FILE SYSTEM RULES
 
@@ -46,4 +47,5 @@ globs: *
 - Use feature branches for new development.
 - Make sure to check cross-platform compatibility.
 - Always ensure that the path structure is correct.
+- In the event of errors, provide human-friendly error messages.
 - In the event of errors, provide human-friendly error messages.

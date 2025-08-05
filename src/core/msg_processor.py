@@ -39,26 +39,18 @@ class MSGProcessor:
             # Remove any existing PO prefix from the original filename
             clean_msg_name = msg_name_without_ext
             
-            # Handle cases where filename already has PO prefix
-            if clean_msg_name.upper().startswith('PO'):
-                # Split by underscore to check for PO + numbers pattern
-                parts = clean_msg_name.split('_', 1)
-                if len(parts) > 1 and parts[0].upper().startswith('PO') and parts[0][2:].isdigit():
-                    # Remove the PO + numbers part, keep the rest
-                    clean_msg_name = parts[1]
-                else:
-                    # Just remove "PO" prefix
-                    clean_msg_name = clean_msg_name[2:]
+            # Handle cases where filename already has PO prefix (recursive to handle multiple PO prefixes)
+            clean_msg_name = self._remove_po_prefixes(clean_msg_name)
             
-            # Create subfolder with consistent naming (same as PDF)
-            subfolder_name = f"PO{po_number}_{clean_msg_name}"
+            # Create subfolder with consistent naming (same as PDF) - using MSG prefix
+            subfolder_name = f"PO{po_number}_MSG_{clean_msg_name}"
             subfolder_path = os.path.join(supplier_folder, subfolder_name)
             
             # Create the subfolder
             os.makedirs(subfolder_path, exist_ok=True)
             print(f"    📁 Created subfolder: {subfolder_name}")
             
-            # Convert MSG to PDF (save in supplier folder with PO prefix)
+            # Convert MSG to PDF (save in supplier folder with PO_MSG prefix)
             pdf_path = self._convert_msg_to_pdf(msg_file_path, supplier_folder, po_number, clean_msg_name)
             
             # If PDF was created, also copy it to subfolder for organization
@@ -71,7 +63,7 @@ class MSGProcessor:
             attachments_extracted = self._extract_attachments(msg_file_path, subfolder_path, po_number)
             
             # Move original MSG file to subfolder with consistent naming
-            msg_dest_filename = f"PO{po_number}_{clean_msg_name}.msg"
+            msg_dest_filename = f"PO{po_number}_MSG_{clean_msg_name}.msg"
             msg_dest_path = os.path.join(subfolder_path, msg_dest_filename)
             shutil.move(msg_file_path, msg_dest_path)
             print(f"    📧 Moved original MSG: {msg_dest_filename}")
@@ -102,7 +94,7 @@ class MSGProcessor:
             Optional[str]: Path to created PDF file, or None if failed
         """
         try:
-            pdf_filename = f"PO{po_number}_{msg_name}.pdf"
+            pdf_filename = f"PO{po_number}_MSG_{msg_name}.pdf"
             pdf_path = os.path.join(output_folder, pdf_filename)
             
             # Try different conversion methods
@@ -206,8 +198,14 @@ class MSGProcessor:
                     .body {{
                         font-size: 16px;
                         line-height: 1.8;
-                        white-space: pre-wrap;
                         word-wrap: break-word;
+                    }}
+                    .body p {{
+                        margin: 0 0 16px 0;
+                    }}
+                    .body br {{
+                        display: block;
+                        margin: 8px 0;
                     }}
                     .footer {{
                         margin-top: 30px;
@@ -231,7 +229,7 @@ class MSGProcessor:
                         <p><strong>CC:</strong> {msg.cc or 'None'}</p>
                     </div>
                     
-                    <div class="body">{msg.body or 'No body content'}</div>
+                    <div class="body">{self._format_email_body(msg.body) or 'No body content'}</div>
                     
                     <div class="footer">
                         <p>Converted from MSG file on {msg.date or 'Unknown date'}</p>
@@ -455,6 +453,62 @@ class MSGProcessor:
         except Exception as e:
             print(f"    ❌ Attachment extraction failed: {e}")
             return 0
+    
+    def _remove_po_prefixes(self, filename: str) -> str:
+        """
+        Recursively remove PO prefixes from filename.
+        
+        Args:
+            filename: Filename that may contain PO prefixes
+            
+        Returns:
+            str: Filename with PO prefixes removed
+        """
+        if not filename.upper().startswith('PO'):
+            return filename
+        
+        # Split by underscore to check for PO + numbers pattern
+        parts = filename.split('_', 1)
+        if len(parts) > 1 and parts[0].upper().startswith('PO') and parts[0][2:].isdigit():
+            # Remove the PO + numbers part, recursively check the rest
+            remaining = parts[1]
+            return self._remove_po_prefixes(remaining)
+        else:
+            # Just remove "PO" prefix and recursively check the rest
+            remaining = filename[2:]
+            return self._remove_po_prefixes(remaining)
+    
+    def _format_email_body(self, body: str) -> str:
+        """
+        Format email body with proper paragraphs and spacing.
+        
+        Args:
+            body: Raw email body text
+            
+        Returns:
+            str: Formatted HTML with proper paragraphs
+        """
+        if not body:
+            return ''
+        
+        # Convert line breaks to HTML
+        # First, normalize line endings
+        body = body.replace('\r\n', '\n').replace('\r', '\n')
+        
+        # Split into paragraphs (double line breaks)
+        paragraphs = body.split('\n\n')
+        
+        # Process each paragraph
+        formatted_paragraphs = []
+        for paragraph in paragraphs:
+            if paragraph.strip():
+                # Replace single line breaks with <br> tags within paragraphs
+                paragraph_html = paragraph.replace('\n', '<br>')
+                # Wrap in <p> tag
+                formatted_paragraphs.append(f'<p>{paragraph_html}</p>')
+        
+        # Join paragraphs with proper spacing
+        return '\n'.join(formatted_paragraphs)
     
     def _should_filter_attachment(self, filename: str, attachment) -> bool:
         """

@@ -2,12 +2,13 @@
 
 ## Overview
 
-The Coupa PO Attachment Downloader is an automated tool that downloads attachments (PDF, MSG, DOCX) from Coupa Purchase Orders. It processes multiple POs in batch, automatically renames files with PO prefixes, and generates detailed reports.
+The Coupa PO Attachment Downloader is an automated tool that downloads attachments (PDF, MSG, DOCX, and more) from Coupa Purchase Orders. It processes multiple POs in batch, automatically renames files with PO prefixes, converts MSG files to PDF format, and generates detailed Excel reports.
 
 ## What You Need Before Starting
 
 - **Coupa Access**: Valid login credentials for your Coupa instance
 - **Python**: Python 3.7 or higher installed on your computer
+- **Microsoft Edge**: Latest version of Microsoft Edge browser
 - **Internet Connection**: Stable internet connection for downloading files
 - **PO Numbers**: List of Purchase Order numbers you want to process
 
@@ -15,13 +16,23 @@ The Coupa PO Attachment Downloader is an automated tool that downloads attachmen
 
 ### Step 1: Prepare Your PO Numbers
 
+You can use either CSV or Excel format for your input file:
+
+#### Option A: Excel Format (Recommended)
+
+1. **Open the input file**: Navigate to `data/input/input.xlsx`
+2. **Add your PO numbers**: Replace the existing content with your PO numbers
+3. **Save the file**: Ensure the file is saved in Excel format (.xlsx)
+
+#### Option B: CSV Format
+
 1. **Open the input file**: Navigate to `data/input/input.csv`
 2. **Add your PO numbers**: Replace the existing content with your PO numbers
 3. **Save the file**: Ensure the file is saved with the correct format
 
-**Example format:**
+**Example format (both CSV and Excel):**
 
-```csv
+```
 PO_NUMBER
 PO15262984
 PO15327452
@@ -33,6 +44,7 @@ PO15362783
 - One PO number per line
 - Include the "PO" prefix
 - No extra spaces or special characters
+- The tool will automatically detect and use whichever file format you provide
 - The tool will automatically clean and validate your PO numbers
 
 ### Step 2: Install Required Libraries
@@ -59,7 +71,13 @@ PO15362783
 5. **Install Python dependencies**: `pip install -r requirements.txt`
 6. **Wait for installation to complete**
 
-**Note**: The automatic installation will handle everything for you, including downloading the correct EdgeDriver for your system.
+**Note**: The automatic installation will handle everything for you, including:
+
+- Creating virtual environment
+- Installing Python dependencies
+- Downloading the correct EdgeDriver for your system
+- Setting up necessary directories
+- Creating sample input files
 
 ### Step 3: Configure Settings (Optional)
 
@@ -70,6 +88,7 @@ The tool works with default settings, but you can customize:
 - `PROCESS_MAX_POS=10` - Limit to first 10 POs (useful for testing)
 - `HEADLESS=true` - Run without browser window (advanced users)
 - `LOGIN_TIMEOUT=60` - Login detection timeout in seconds
+- `VERBOSE_OUTPUT=true` - Show detailed processing information
 
 **Example (macOS/Linux):**
 
@@ -96,18 +115,55 @@ python src/main.py
    - The browser will navigate to Coupa
    - Log in manually if prompted
    - The tool will automatically detect when you're logged in
-5. **Monitor progress**: Watch the terminal for real-time updates
+5. **Choose MSG processing option**: The tool will ask if you want to automatically process MSG files
+6. **Monitor progress**: Watch the terminal for real-time updates
 
 **Note**: If you used automatic installation, the virtual environment is already activated.
 
-### Step 5: Monitor the Process
+**Automatic EdgeDriver Management**: The tool automatically detects your Microsoft Edge version and downloads the compatible EdgeDriver, so you don't need to manually install or configure it.
 
-The tool will show you:
+### Step 5: MSG File Processing Options
+
+When you run the tool, it will ask about MSG file processing:
+
+```
+📧 MSG File Processing Options
+========================================
+Would you like to automatically process .msg files?
+This will:
+  • Convert .msg files to PDF format
+  • Extract any attachments from .msg files
+  • Create subfolders named after the original .msg file
+  • Organize attachments in these subfolders
+
+Enable MSG processing? (y/n):
+```
+
+**Choose 'y' if you want to:**
+
+- Convert MSG files to readable PDF format
+- Extract attachments from within MSG files
+- Organize files in subfolders for better organization
+
+**Choose 'n' if you want to:**
+
+- Download MSG files as-is without processing
+- Keep the original file structure
+
+### Step 6: Monitor the Process
+
+The tool will show you detailed progress:
 
 ```
 🔐 Checking login status...
 🌐 Navigating to Coupa homepage...
 ✅ Already logged in - proceeding with downloads
+
+📧 MSG File Processing Options
+========================================
+Would you like to automatically process .msg files?
+Enable MSG processing? (y/n): y
+✅ MSG processing enabled
 
 🎯 Processing 3 POs after successful login...
 
@@ -121,7 +177,7 @@ The tool will show you:
 ✅ Downloaded: PO15327452_specification.pdf
 ```
 
-### Step 6: Find Your Downloads
+### Step 7: Find Your Downloads
 
 **Download Location**: `~/Downloads/CoupaDownloads/`
 
@@ -129,15 +185,19 @@ The tool will show you:
 
 - Files are automatically renamed with PO prefixes
 - Example: `PO15262984_invoice.pdf`
-- All supported file types: PDF, MSG, DOCX
+- All supported file types: PDF, MSG, DOCX, XLSX, TXT, JPG, PNG, ZIP, RAR, CSV, XML
 
-**Folder Structure:**
+**If MSG processing was enabled:**
 
 ```
 ~/Downloads/CoupaDownloads/
 ├── PO15262984_invoice.pdf
 ├── PO15262984_contract.docx
 ├── PO15327452_specification.pdf
+├── PO15327452_email.msg/
+│   ├── PO15327452_email.pdf
+│   ├── attachment1.pdf
+│   └── attachment2.docx
 └── ...
 ```
 
@@ -158,6 +218,26 @@ The tool automatically generates detailed Excel reports:
 - Error messages (if any)
 - Processing timestamps
 - Download folder locations
+- Supplier information (when available)
+
+### Enhanced Progress Tracking
+
+The tool provides real-time progress updates:
+
+- **Overall progress**: Shows current PO and total count with time estimates
+- **Individual PO progress**: Shows attachments found and downloaded with file sizes
+- **Error handling**: Continues processing even if individual POs fail
+- **Session recovery**: Automatically recovers from browser crashes
+- **Time tracking**: Shows elapsed time and estimated remaining time
+
+### MSG File Processing
+
+When enabled, the tool can:
+
+- **Convert MSG to PDF**: Makes email files readable
+- **Extract attachments**: Pulls out files embedded in emails
+- **Organize files**: Creates subfolders for better organization
+- **Filter artifacts**: Removes small files and duplicates
 
 ### Telemetry and Analytics
 
@@ -195,7 +275,7 @@ python run_tests.py --type fast
 - Unit tests: Individual function testing
 - Integration tests: Complete workflow testing
 - File operation tests: Download and renaming validation
-- CSV processing tests: Input file validation
+- CSV/Excel processing tests: Input file validation
 
 ## Troubleshooting
 
@@ -203,7 +283,7 @@ python run_tests.py --type fast
 
 **1. "No valid PO numbers provided"**
 
-- Check your `data/input/input.csv` file format
+- Check your `data/input/input.csv` or `data/input/input.xlsx` file format
 - Ensure PO numbers include the "PO" prefix
 - Remove any extra spaces or special characters
 
@@ -217,7 +297,8 @@ python run_tests.py --type fast
 **3. "Browser not starting"**
 
 - Ensure Microsoft Edge is installed
-- Check that the WebDriver is in the `drivers/` folder
+- The tool automatically downloads the correct EdgeDriver for your system
+- If automatic download fails, check your internet connection
 - Try running without headless mode: `export HEADLESS=false`
 
 **4. "Downloads not appearing"**
@@ -232,12 +313,19 @@ python run_tests.py --type fast
 - Check your internet connection speed
 - Close other browser tabs and applications
 
+**6. "MSG processing errors"**
+
+- Ensure you have the required dependencies installed
+- Check if the MSG file is corrupted
+- Try processing without MSG conversion first
+
 ### Error Messages Explained
 
 - **"PO number not found"**: The PO doesn't exist or you don't have access
 - **"No attachments found"**: The PO exists but has no downloadable attachments
 - **"Download timeout"**: The file took too long to download
 - **"Browser session lost"**: The browser crashed or was closed unexpectedly
+- **"MSG conversion failed"**: The MSG file couldn't be converted to PDF
 
 ## Performance Tips
 
@@ -246,12 +334,22 @@ python run_tests.py --type fast
 3. **Close Other Apps**: Free up system resources
 4. **Regular Breaks**: For large batches, the tool handles breaks automatically
 5. **Monitor Resources**: Check CPU and memory usage during processing
+6. **MSG Processing**: Only enable if you need email conversion (adds processing time)
 
 ## File Types Supported
 
+The tool supports all common file types by default, including:
+
 - **PDF files**: Invoices, contracts, specifications
-- **MSG files**: Email attachments
+- **MSG files**: Email attachments (can be converted to PDF)
 - **DOCX files**: Word documents, contracts, specifications
+- **XLSX files**: Excel spreadsheets
+- **TXT files**: Text documents
+- **Image files**: JPG, PNG
+- **Archive files**: ZIP, RAR
+- **Data files**: CSV, XML
+
+**Note**: You can restrict file types by modifying the configuration if needed.
 
 ## Safety Features
 
@@ -260,6 +358,8 @@ python run_tests.py --type fast
 - **Session management**: Handles login timeouts and browser crashes
 - **File validation**: Only downloads supported file types
 - **Progress tracking**: Detailed logging of all operations
+- **Backup creation**: Input files are backed up before processing
+- **File organization**: Automatic renaming and folder structure
 
 ## Support and Maintenance
 
@@ -300,7 +400,7 @@ export PROCESS_MAX_POS=5 && python src/main.py
 
 **Key Files:**
 
-- `data/input/input.csv` - Your PO numbers
+- `data/input/input.xlsx` or `data/input/input.csv` - Your PO numbers
 - `data/output/` - Generated reports
 - `~/Downloads/CoupaDownloads/` - Downloaded files
 - `tests/` - Telemetry and test data
@@ -310,5 +410,14 @@ export PROCESS_MAX_POS=5 && python src/main.py
 - `PROCESS_MAX_POS` - Limit number of POs
 - `HEADLESS` - Run without browser window
 - `LOGIN_TIMEOUT` - Login detection timeout
+- `VERBOSE_OUTPUT` - Show detailed processing information
+
+**New Features:**
+
+- **Excel Support**: Can read from both CSV and Excel files
+- **MSG Processing**: Convert email files to PDF and extract attachments
+- **Enhanced Progress**: Real-time progress tracking with recovery
+- **Better Error Handling**: Continues processing even with failures
+- **File Type Support**: Handles many more file types than before
 
 That's it! The tool handles everything else automatically. Enjoy your automated Coupa downloads!
