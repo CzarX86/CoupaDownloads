@@ -291,6 +291,9 @@ class DownloadManager:
                                                 attachments_found=0, attachments_downloaded=0, coupa_url=po_url)
                 progress_manager.po_completed('NO_ATTACHMENTS')
                 return
+                
+            # Start download process
+            progress_manager.start_download(attachments_found)
 
             # Extract supplier name for folder organization
             supplier_name = self._extract_supplier_name()
@@ -312,16 +315,16 @@ class DownloadManager:
             final_count = self._count_existing_files(supplier_name)
             attachments_downloaded = final_count - initial_count
             
+            # Report download completion
+            progress_manager.download_completed(attachments_downloaded, attachments_found)
+            
             # Update CSV status based on results
             if attachments_downloaded == attachments_found:
                 status = 'COMPLETED'
-                print(f"  ✅ Successfully downloaded all {attachments_downloaded} attachments")
             elif attachments_downloaded > 0:
                 status = 'PARTIAL'
-                print(f"  ⚠️ Downloaded {attachments_downloaded} of {attachments_found} attachments")
             else:
                 status = 'FAILED'
-                print(f"  ❌ Failed to download any attachments")
             
             # Update file with results
             UnifiedProcessor.update_po_status(
@@ -334,15 +337,8 @@ class DownloadManager:
                 coupa_url=po_url
             )
             
-            # Show human-friendly status
-            if status == 'COMPLETED':
-                print(f"  ✅ Downloaded {attachments_downloaded}/{attachments_found} files")
-            elif status == 'PARTIAL':
-                print(f"  ⚠️ Downloaded {attachments_downloaded}/{attachments_found} files (partial)")
-            elif status == 'FAILED':
-                print(f"  ❌ Failed to download files")
-            elif status == 'NO_ATTACHMENTS':
-                print(f"  📭 No attachments found")
+            # Report PO completion
+            progress_manager.po_completed(status, attachments_downloaded, attachments_found)
 
         except TimeoutException:
             print(f"  Timed out waiting for PO #{display_po} page to load. Skipping.")
@@ -485,7 +481,7 @@ class DownloadManager:
             try:
                 # Download each attachment to temp directory
                 for index, attachment in enumerate(attachments):
-                    self._download_attachment_simple(attachment, index)
+                    self._download_attachment_simple(attachment, index, len(attachments))
 
                 # Wait for downloads to complete in temp directory
                 self._wait_for_download_complete(temp_dir, timeout=len(attachments) * 10)
@@ -504,23 +500,21 @@ class DownloadManager:
                 except Exception as e:
                     print(f"    ⚠️ Could not restore download directory: {e}")
 
-    def _download_attachment_simple(self, attachment, index: int) -> None:
+    def _download_attachment_simple(self, attachment, index: int, total_attachments: int) -> None:
         """Download a single attachment with simplified logic."""
         try:
             # Get filename from aria-label
             aria_label = attachment.get_attribute("aria-label")
             filename = self.file_manager.extract_filename_from_aria_label(aria_label, index)
 
-            print(f"    Processing attachment {index + 1}: {filename}")
-
             # Skip unsupported file types
             if not self.file_manager.is_supported_file(filename):
-                print(f"    Skipping unsupported file: {filename}")
+                progress_manager.attachment_skipped(filename, "unsupported type")
                 return
 
             # Check if element is clickable
             if not attachment.is_enabled() or not attachment.is_displayed():
-                print(f"    Warning: Attachment {index + 1} is not clickable")
+                progress_manager.attachment_skipped(filename, "not clickable")
                 return
 
             # Try to click the attachment
@@ -528,19 +522,22 @@ class DownloadManager:
                 self.driver.execute_script("arguments[0].scrollIntoView();", attachment)
                 time.sleep(0.5)
                 attachment.click()
-                print(f"    ✅ Successfully downloaded: {filename}")
+                progress_manager.attachment_downloaded(filename, index + 1, total_attachments)
             except Exception as click_error:
                 if Config.VERBOSE_OUTPUT:
                     print(f"    Regular click failed, trying JavaScript click: {click_error}")
                 else:
                     print(f"    Regular click failed, trying JavaScript click...")
                 self.driver.execute_script("arguments[0].click();", attachment)
-                print(f"    ✅ JavaScript click successful: {filename}")
+                progress_manager.attachment_downloaded(filename, index + 1, total_attachments)
 
             time.sleep(1)  # Brief pause between downloads
 
         except Exception as e:
-            print(f"    ❌ Failed to download attachment {index + 1}: {str(e)}")
+            if Config.VERBOSE_OUTPUT:
+                print(f"    ❌ Failed to download attachment {index + 1}: {str(e)}")
+            else:
+                print(f"    ❌ Failed to download attachment {index + 1}")
 
     def _move_files_with_proper_names(self, temp_dir: str, display_po: str, supplier_folder: str) -> None:
         """Move files from temp directory to final destination with proper PO prefixes."""
@@ -610,7 +607,7 @@ class DownloadManager:
 
         # Download each attachment
         for index, attachment in enumerate(attachments):
-            self._download_attachment_simple(attachment, index)
+            self._download_attachment_simple(attachment, index, len(attachments))
 
         # Wait for downloads to complete
         self._wait_for_download_complete(supplier_folder, timeout=len(attachments) * 10)

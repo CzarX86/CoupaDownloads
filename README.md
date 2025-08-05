@@ -18,13 +18,19 @@
 
 ## 🚀 Quick Start
 
-### Windows Users (One-Click Installation)
+### Option 1: Portable Package (Recommended)
+1. **Download** the portable ZIP for your platform
+2. **Extract** the ZIP file
+3. **Edit** `data/input/input.csv` with your PO numbers
+4. **Run** the launcher script
+
+### Option 2: Windows Users (One-Click Installation)
 1. **Download** and extract the project
 2. **Double-click** `install_windows.bat`
 3. **Edit** `data\input\input.csv` with your PO numbers
 4. **Run** `python src\main.py`
 
-### All Platforms
+### Option 3: All Platforms
 1. **Run**: `python install.py`
 2. **Edit** `data/input/input.csv` with your PO numbers
 3. **Run**: `python src/main.py`
@@ -36,8 +42,20 @@ That's it! The tool handles everything automatically:
 - ✅ Opens browser and waits for login
 - ✅ Downloads all attachments automatically
 
+**Portable Package Advantages:**
+- 🎒 **Zero Installation**: No Python installation required
+- 📦 **Complete Package**: All dependencies included
+- 🔧 **Stable Driver**: Pre-downloaded compatible EdgeDriver
+- 🚀 **One-Click**: Just extract and run
+
 ## 📋 What You Need
 
+### For Portable Package
+- **Microsoft Edge** (automatically detected)
+- **Coupa Access** (valid login credentials)
+- **Internet Connection** (for downloads)
+
+### For Source Installation
 - **Python 3.8+** (automatically detected)
 - **Microsoft Edge** (automatically detected)
 - **Coupa Access** (valid login credentials)
@@ -148,6 +166,23 @@ python test_installation.py
 ### Run Tests
 ```bash
 python run_tests.py
+```
+
+## 📦 Building Portable Packages
+
+### Simple Portable Package
+```bash
+python build_portable_simple.py
+```
+
+### Advanced Portable Package (with embedded Python)
+```bash
+python build_portable_advanced.py
+```
+
+### Basic Portable Package
+```bash
+python build_portable.py
 ```
 
 ## 🔍 Troubleshooting

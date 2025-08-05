@@ -9646,9 +9646,208 @@ Lines added: 1, lines removed: undefined
 
 ---
 
+<details><summary>Edit file: src/main.py</summary>
+
+undefined
+
+**Chunk 1**
+Lines added: 5, lines removed: 5
+
+```diff
+@@ -94,16 +94,16 @@
+  
+          # STEP 2: Process all POs with browser session recovery
+-         print(f"🎯 Processing {len(valid_entries)} POs after successful login...")
++         progress_manager.start_processing(len(valid_entries))
+          
+          for i, (display_po, clean_po) in enumerate(valid_entries):
+              try:
+-                 if Config.VERBOSE_OUTPUT:
+-                     print(f"\n📋 Processing PO #{display_po} ({i+1}/{len(valid_entries)})...")
++                 # Start PO processing with progress indicator
++                 progress_manager.start_po(display_po)
+                  
+                  # Check if browser session is still valid
+                  if not self._is_browser_session_valid():
+-                     print("⚠️ Browser session lost, attempting to recover...")
++                     print("   ⚠️ Browser session lost, attempting to recover...")
+                      if not self._recover_browser_session():
+-                         print("❌ Could not recover browser session, stopping processing")
++                         print("   ❌ Could not recover browser session, stopping processing")
+                          break
+                  
+```
+
+</details>
+
+---
+
+<details><summary>Edit file: src/main.py</summary>
+
+undefined
+
+**Chunk 1**
+Lines added: 2, lines removed: 5
+
+```diff
+@@ -111,12 +111,9 @@
+                  self.download_manager.download_attachments_for_po(display_po, clean_po)
+                  
+-                 if Config.VERBOSE_OUTPUT:
+-                     print(f"✅ Completed PO #{display_po}")
+-                 
+              except Exception as download_error:
+                  if Config.VERBOSE_OUTPUT:
+-                     print(f"  ❌ PO #{display_po} failed with error: {download_error}")
++                     print(f"   ❌ PO #{display_po} failed with error: {download_error}")
+                  else:
+-                     print(f"  ❌ PO #{display_po} failed")
++                     print(f"   ❌ PO #{display_po} failed")
+                  
+                  # Check if it's a browser session error
+```
+
+</details>
+
+---
+
+<details><summary>Edit file: src/main.py</summary>
+
+undefined
+
+**Chunk 1**
+Lines added: 1, lines removed: 1
+
+```diff
+@@ -193,5 +193,5 @@
+              
+              # Generate final summary report
+-             print("\n🎉 Processing completed!")
++             progress_manager.processing_completed()
+              UnifiedProcessor.print_summary_report()
+              
+```
+
+</details>
+
+---
+
+Now let me update the downloader to use the enhanced progress manager:
 
 
 ---
+
+The string to replace was not found in the file.
+
+---
+
+Let me check the imports in the downloader file:
+
+
+---
+
+Read file: src/core/downloader.py
+
+---
+
+<details><summary>Edit file: src/core/downloader.py</summary>
+
+undefined
+
+**Chunk 1**
+Lines added: 1, lines removed: undefined
+
+```diff
+@@ -16,4 +16,5 @@
+  
+  from .config import Config
++ from .progress_manager import progress_manager
+  
+  
+```
+
+</details>
+
+---
+
+Now let me update the download_attachments_for_po method to use the enhanced progress manager:
+
+
+---
+
+<details><summary>Edit file: src/core/downloader.py</summary>
+
+undefined
+
+**Chunk 1**
+Lines added: 1, lines removed: 3
+
+```diff
+@@ -255,12 +255,10 @@
+          from selenium.webdriver.support import expected_conditions as EC
+          from .unified_processor import UnifiedProcessor
+- 
+-         print(f"📋 Processing PO #{display_po}...")
+  
+          try:
+              # Navigate to PO page
+              po_url = Config.BASE_URL.format(clean_po)
+              if Config.VERBOSE_OUTPUT:
+-                 print(f"  🌐 Navigating to: {po_url}")
++                 print(f"   🌐 Navigating to: {po_url}")
+              self.driver.get(po_url)
+  
+```
+
+</details>
+
+---
+
+<details><summary>Edit file: src/core/downloader.py</summary>
+
+undefined
+
+**Chunk 1**
+Lines added: 6, lines removed: 3
+
+```diff
+@@ -280,12 +280,15 @@
+                  raise Exception("Login required - will retry after login")
+  
+-             # Find attachments
++                         # Find attachments
+              attachments = self._find_attachments()
+              attachments_found = len(attachments)
++             
++             # Report found attachments
++             progress_manager.found_attachments(attachments_found)
+              
+              if not attachments:
+-                 print(f"  📭 No attachments found for PO #{display_po}")
+                  UnifiedProcessor.update_po_status(display_po, 'NO_ATTACHMENTS', 
+-                                             attachments_found=0, attachments_downloaded=0, coupa_url=po_url)
++                                                 attachments_found=0, attachments_downloaded=0, coupa_url=po_url)
++                 progress_manager.po_completed('NO_ATTACHMENTS')
+                  return
+  
+```
+
+</details>
+
+---
+
+Cancelled
+
+---
+
+_**User**_
+
+overal progress %, time elapsed and extimated would also be desirable.
+
+
+---
+
+_**Assistant**_
 
 
 

@@ -1,6 +1,6 @@
 """
 Progress Manager
-Handles enhanced progress feedback with percentages and status indicators.
+Handles enhanced progress feedback with percentages, time tracking, and status indicators.
 """
 
 import time
@@ -17,12 +17,16 @@ class ProgressManager:
         self.current_po = None
         self.current_attachments = 0
         self.downloaded_attachments = 0
+        self.completed_pos = 0
+        self.failed_pos = 0
         
     def start_processing(self, total_pos: int) -> None:
         """Start processing with total PO count."""
         self.start_time = time.time()
         self.total_pos = total_pos
         self.current_po_index = 0
+        self.completed_pos = 0
+        self.failed_pos = 0
         print(f"🚀 Starting processing of {total_pos} POs...")
         
     def start_po(self, po_number: str) -> None:
@@ -32,8 +36,17 @@ class ProgressManager:
         self.current_attachments = 0
         self.downloaded_attachments = 0
         
-        progress = (self.current_po_index / self.total_pos) * 100
-        print(f"📋 PO{po_number}{'.' * (20 - len(po_number))}{progress:.0f}%")
+        # Calculate overall progress
+        overall_progress = (self.current_po_index / self.total_pos) * 100
+        elapsed_time = self.get_elapsed_time()
+        estimated_total = self._estimate_total_time()
+        estimated_remaining = max(0, estimated_total - elapsed_time)
+        
+        # Format time strings
+        elapsed_str = self._format_time(elapsed_time)
+        remaining_str = self._format_time(estimated_remaining)
+        
+        print(f"📋 PO{po_number}{'.' * (15 - len(po_number))}{overall_progress:.0f}% | {elapsed_str} elapsed | ~{remaining_str} remaining")
         
     def found_attachments(self, count: int) -> None:
         """Report found attachments."""
@@ -77,20 +90,50 @@ class ProgressManager:
     def po_completed(self, status: str, success_count: int = 0, total_count: int = 0) -> None:
         """Report PO completion."""
         if status == 'COMPLETED':
+            self.completed_pos += 1
             print(f"   ✅ PO{self.current_po} completed: {success_count}/{total_count} files")
         elif status == 'PARTIAL':
+            self.completed_pos += 1
             print(f"   ⚠️ PO{self.current_po} partial: {success_count}/{total_count} files")
         elif status == 'FAILED':
+            self.failed_pos += 1
             print(f"   ❌ PO{self.current_po} failed")
         elif status == 'NO_ATTACHMENTS':
+            self.completed_pos += 1
             print(f"   📭 PO{self.current_po} no attachments")
             
     def processing_completed(self) -> None:
         """Report overall processing completion."""
         if self.start_time:
             elapsed_time = time.time() - self.start_time
-            print(f"\n🎉 Processing completed in {elapsed_time:.1f} seconds")
-            print(f"📊 Processed {self.total_pos} POs")
+            elapsed_str = self._format_time(elapsed_time)
+            print(f"\n🎉 Processing completed in {elapsed_str}")
+            print(f"📊 Summary: {self.completed_pos} completed, {self.failed_pos} failed, {self.total_pos} total")
+            
+    def _estimate_total_time(self) -> float:
+        """Estimate total processing time based on current progress."""
+        if self.current_po_index <= 1:
+            # Use a default estimate for the first PO
+            return self.total_pos * 30  # 30 seconds per PO as default
+        
+        elapsed_time = self.get_elapsed_time()
+        if elapsed_time <= 0:
+            return 0
+            
+        # Calculate average time per PO and estimate total
+        avg_time_per_po = elapsed_time / self.current_po_index
+        return avg_time_per_po * self.total_pos
+        
+    def _format_time(self, seconds: float) -> str:
+        """Format time in human-readable format."""
+        if seconds < 60:
+            return f"{seconds:.0f}s"
+        elif seconds < 3600:
+            minutes = seconds / 60
+            return f"{minutes:.0f}m"
+        else:
+            hours = seconds / 3600
+            return f"{hours:.1f}h"
             
     def get_elapsed_time(self) -> float:
         """Get elapsed time since start."""

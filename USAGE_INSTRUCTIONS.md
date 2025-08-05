@@ -40,10 +40,12 @@ PO15362783
 #### Option A: Automatic Installation (Recommended)
 
 **Windows:**
+
 - Double-click `install_windows.bat` OR
 - Right-click `install_windows.ps1` → "Run with PowerShell"
 
 **All Platforms:**
+
 - Run: `python install.py`
 
 #### Option B: Manual Installation
