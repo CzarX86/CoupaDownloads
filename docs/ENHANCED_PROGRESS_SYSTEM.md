@@ -8,21 +8,21 @@ The enhanced progress feedback system provides detailed, human-oriented progress
 
 ### 1. Overall Progress Tracking
 
-- **Progress Percentage**: Shows overall completion percentage for all POs
+- **Progress Percentage**: Shows time-based completion percentage for the entire batch
 - **Time Elapsed**: Displays how much time has passed since starting
 - **Time Remaining**: Estimates remaining time based on current processing speed
-- **PO Counter**: Shows current PO number and total count
+- **Time Estimation**: Based on average processing time per PO
 
 ### 2. Individual PO Progress
 
-- **PO Status Line**: `📋 PO123456.......10% | 2s elapsed | ~5m remaining`
+- **PO Status Line**: `📋 PO123456.......20% | 2s elapsed | ~5m remaining`
 - **Attachment Discovery**: `📎 3 file(s) found` or `📭 No attachments found`
-- **Download Progress**: Shows individual file download progress with percentages
+- **Download Progress**: Shows individual file download progress with file sizes
 
 ### 3. File Download Tracking
 
 - **Download Start**: `📥 Starting download of 3 file(s)...`
-- **Individual Files**: `✅ file_1.pdf (1/3) 33%`
+- **Individual Files**: `✅ file_1.pdf 1.0MB/1.0MB (100%)`
 - **Skipped Files**: `⏭️ file_2.pdf (download failed)`
 - **Download Summary**: `🎉 All 3 files downloaded successfully`
 
@@ -42,12 +42,12 @@ The enhanced progress feedback system provides detailed, human-oriented progress
 
 ```
 🚀 Starting processing of 10 POs...
-📋 POPO123456.......10% | 0s elapsed | ~5m remaining
+📋 POPO123456.......0% | 0s elapsed | ~5m remaining
    📎 3 file(s) found
    📥 Starting download of 3 file(s)...
-   ✅ file_1.pdf (1/3) 33%
-   ✅ file_2.pdf (2/3) 67%
-   ✅ file_3.pdf (3/3) 100%
+   ✅ file_1.pdf 1.0MB/1.0MB (100%)
+   ✅ file_2.pdf 2.0MB/2.0MB (100%)
+   ✅ file_3.pdf 3.0MB/3.0MB (100%)
    🎉 All 3 files downloaded successfully
    ✅ POPO123456 completed: 3/3 files
 📋 POPO234567.......20% | 2s elapsed | ~9s remaining

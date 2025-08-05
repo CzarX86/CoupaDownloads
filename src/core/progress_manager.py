@@ -36,17 +36,22 @@ class ProgressManager:
         self.current_attachments = 0
         self.downloaded_attachments = 0
         
-        # Calculate overall progress
-        overall_progress = (self.current_po_index / self.total_pos) * 100
+        # Calculate time-based overall progress
         elapsed_time = self.get_elapsed_time()
         estimated_total = self._estimate_total_time()
-        estimated_remaining = max(0, estimated_total - elapsed_time)
+        
+        if estimated_total > 0:
+            time_progress = min(100, (elapsed_time / estimated_total) * 100)
+            estimated_remaining = max(0, estimated_total - elapsed_time)
+        else:
+            time_progress = 0
+            estimated_remaining = 0
         
         # Format time strings
         elapsed_str = self._format_time(elapsed_time)
         remaining_str = self._format_time(estimated_remaining)
         
-        print(f"📋 PO{po_number}{'.' * (15 - len(po_number))}{overall_progress:.0f}% | {elapsed_str} elapsed | ~{remaining_str} remaining")
+        print(f"📋 PO{po_number}{'.' * (15 - len(po_number))}{time_progress:.0f}% | {elapsed_str} elapsed | ~{remaining_str} remaining")
         
     def found_attachments(self, count: int) -> None:
         """Report found attachments."""
@@ -61,15 +66,33 @@ class ProgressManager:
         if attachment_count > 0:
             print(f"   📥 Starting download of {attachment_count} file(s)...")
             
-    def attachment_downloaded(self, filename: str, index: int, total: int) -> None:
-        """Report successful attachment download."""
+    def attachment_downloaded(self, filename: str, bytes_downloaded: int, total_bytes: int) -> None:
+        """Report successful attachment download with size-based progress."""
         self.downloaded_attachments += 1
-        download_progress = (self.downloaded_attachments / total) * 100
+        
+        # Calculate size-based progress
+        if total_bytes > 0:
+            size_progress = (bytes_downloaded / total_bytes) * 100
+            size_str = f"{self._format_file_size(bytes_downloaded)}/{self._format_file_size(total_bytes)}"
+        else:
+            size_progress = 100
+            size_str = "completed"
         
         # Truncate filename if too long
         display_name = filename[:30] + "..." if len(filename) > 30 else filename
         
-        print(f"   ✅ {display_name} ({self.downloaded_attachments}/{total}) {download_progress:.0f}%")
+        print(f"   ✅ {display_name} {size_str} ({size_progress:.0f}%)")
+        
+    def _format_file_size(self, bytes_size: int) -> str:
+        """Format file size in human-readable format."""
+        if bytes_size < 1024:
+            return f"{bytes_size}B"
+        elif bytes_size < 1024 * 1024:
+            return f"{bytes_size / 1024:.1f}KB"
+        elif bytes_size < 1024 * 1024 * 1024:
+            return f"{bytes_size / (1024 * 1024):.1f}MB"
+        else:
+            return f"{bytes_size / (1024 * 1024 * 1024):.1f}GB"
         
     def attachment_skipped(self, filename: str, reason: str) -> None:
         """Report skipped attachment."""

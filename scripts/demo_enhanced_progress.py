@@ -52,11 +52,13 @@ def demo_progress_system():
             progress_manager.start_download(attachment_count)
             time.sleep(0.3)
             
-            # Simulate file downloads
+            # Simulate file downloads with size-based progress
             if expected_status == "COMPLETED":
                 for i in range(attachment_count):
                     filename = f"file_{i+1}.pdf"
-                    progress_manager.attachment_downloaded(filename, i+1, attachment_count)
+                    # Simulate different file sizes
+                    file_size = (i + 1) * 1024 * 1024  # 1MB, 2MB, 3MB, etc.
+                    progress_manager.attachment_downloaded(filename, file_size, file_size)
                     time.sleep(0.2)
                 progress_manager.download_completed(attachment_count, attachment_count)
                 progress_manager.po_completed("COMPLETED", attachment_count, attachment_count)
@@ -64,8 +66,9 @@ def demo_progress_system():
             elif expected_status == "PARTIAL":
                 for i in range(attachment_count):
                     filename = f"file_{i+1}.pdf"
+                    file_size = (i + 1) * 1024 * 1024  # 1MB, 2MB, 3MB, etc.
                     if i < attachment_count - 1:  # Skip last file
-                        progress_manager.attachment_downloaded(filename, i+1, attachment_count)
+                        progress_manager.attachment_downloaded(filename, file_size, file_size)
                     else:
                         progress_manager.attachment_skipped(filename, "download failed")
                     time.sleep(0.2)

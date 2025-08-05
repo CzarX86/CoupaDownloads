@@ -517,19 +517,33 @@ class DownloadManager:
                 progress_manager.attachment_skipped(filename, "not clickable")
                 return
 
+            # Try to get file size if available (this might not be possible with Selenium)
+            file_size = self._get_file_size_from_element(attachment)
+            
             # Try to click the attachment
             try:
                 self.driver.execute_script("arguments[0].scrollIntoView();", attachment)
                 time.sleep(0.5)
                 attachment.click()
-                progress_manager.attachment_downloaded(filename, index + 1, total_attachments)
+                
+                # For now, we'll use a placeholder since we can't easily get real-time download progress
+                # In a real implementation, you'd track the actual downloaded bytes
+                downloaded_bytes = file_size if file_size else 0
+                total_bytes = file_size if file_size else 0
+                
+                progress_manager.attachment_downloaded(filename, downloaded_bytes, total_bytes)
             except Exception as click_error:
                 if Config.VERBOSE_OUTPUT:
                     print(f"    Regular click failed, trying JavaScript click: {click_error}")
                 else:
                     print(f"    Regular click failed, trying JavaScript click...")
                 self.driver.execute_script("arguments[0].click();", attachment)
-                progress_manager.attachment_downloaded(filename, index + 1, total_attachments)
+                
+                # Same placeholder for JavaScript click
+                downloaded_bytes = file_size if file_size else 0
+                total_bytes = file_size if file_size else 0
+                
+                progress_manager.attachment_downloaded(filename, downloaded_bytes, total_bytes)
 
             time.sleep(1)  # Brief pause between downloads
 
@@ -538,6 +552,36 @@ class DownloadManager:
                 print(f"    ❌ Failed to download attachment {index + 1}: {str(e)}")
             else:
                 print(f"    ❌ Failed to download attachment {index + 1}")
+                
+    def _get_file_size_from_element(self, attachment_element) -> int:
+        """Try to extract file size from attachment element."""
+        try:
+            # Try different attributes that might contain file size
+            size_attributes = ['data-size', 'data-filesize', 'title', 'aria-label']
+            
+            for attr in size_attributes:
+                value = attachment_element.get_attribute(attr)
+                if value:
+                    # Look for size patterns like "2.5 MB", "1.2KB", etc.
+                    import re
+                    size_match = re.search(r'(\d+(?:\.\d+)?)\s*(KB|MB|GB|B)', value, re.IGNORECASE)
+                    if size_match:
+                        size_value = float(size_match.group(1))
+                        unit = size_match.group(2).upper()
+                        
+                        # Convert to bytes
+                        if unit == 'B':
+                            return int(size_value)
+                        elif unit == 'KB':
+                            return int(size_value * 1024)
+                        elif unit == 'MB':
+                            return int(size_value * 1024 * 1024)
+                        elif unit == 'GB':
+                            return int(size_value * 1024 * 1024 * 1024)
+            
+            return 0  # Could not determine file size
+        except Exception:
+            return 0  # Could not determine file size
 
     def _move_files_with_proper_names(self, temp_dir: str, display_po: str, supplier_folder: str) -> None:
         """Move files from temp directory to final destination with proper PO prefixes."""
