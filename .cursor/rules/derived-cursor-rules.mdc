@@ -21,6 +21,7 @@ globs: *
 - FINAL_TEST_SUMMARY.md: Final test summary for the enhanced progress system
 - FILE_TYPE_RESTRICTIONS.md: Documentation explaining the file type restriction changes
 - MSG_PROCESSING_FEATURE.md: Documentation for the new MSG processing feature
+- FINAL_RELEASE_SUMMARY.md: This document summarizes the final state of the Coupa Downloads automation project after comprehensive testing and review.
 
 ## TECH STACK
 
