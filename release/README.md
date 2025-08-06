@@ -1,0 +1,114 @@
+# 🚀 CoupaDownloads - Windows Release
+
+## ✨ What's New in This Release
+
+This release includes everything you need to run CoupaDownloads on Windows:
+
+- ✅ **Automatic EdgeDriver download** - No manual driver management needed
+- ✅ **Enhanced driver compatibility** - Works with Edge 116-120
+- ✅ **One-click setup** - Just run `setup_windows.bat`
+- ✅ **All dependencies included** - No internet required after setup
+- ✅ **Comprehensive error handling** - Better troubleshooting
+
+## 🎯 Quick Start
+
+### Step 1: Download and Extract
+1. Download the ZIP file from GitHub releases
+2. Extract to a folder (e.g., `C:\CoupaDownloads`)
+
+### Step 2: Run Setup
+```cmd
+# Double-click or run:
+setup_windows.bat
+```
+
+### Step 3: Edit Your PO Numbers
+Edit `data\input\input.csv` with your PO numbers:
+```csv
+PO_NUMBER
+PO15262984
+PO15327452
+PO15362783
+```
+
+### Step 4: Run the Application
+```cmd
+# Activate virtual environment
+venv\Scripts\activate
+
+# Run the application
+python src\main.py
+```
+
+## 🔧 What the Setup Does
+
+1. **Checks Python installation**
+2. **Downloads EdgeDrivers automatically**
+3. **Creates virtual environment**
+4. **Installs all dependencies**
+5. **Sets up sample files**
+6. **Configures everything**
+
+## 📁 Release Contents
+
+```
+CoupaDownloads/
+├── setup_windows.bat          # Windows installer
+├── download_drivers.bat       # Driver download script
+├── requirements.txt           # Python dependencies
+├── drivers/                   # EdgeDriver versions (downloaded)
+├── src/                      # Application source code
+├── data/
+│   ├── input/               # Your PO numbers here
+│   ├── output/              # Generated reports
+│   └── backups/             # Backup files
+└── README.md                # This file
+```
+
+## 🛠️ Troubleshooting
+
+### Python Not Found
+- Download Python from [python.org](https://python.org)
+- Check "Add Python to PATH" during installation
+
+### Edge Browser Issues
+- Install Microsoft Edge from [microsoft.com/edge](https://www.microsoft.com/edge)
+- Update to latest version
+
+### Driver Download Issues
+- Check internet connection
+- Run Command Prompt as Administrator
+- Disable antivirus temporarily
+
+### Permission Errors
+- Run Command Prompt as Administrator
+- Or run PowerShell with: `Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser`
+
+## 🎉 Success Indicators
+
+You'll know it's working when:
+- ✅ Python version shows (3.8 or higher)
+- ✅ EdgeDrivers download successfully
+- ✅ Virtual environment activates (shows `(venv)` in prompt)
+- ✅ Dependencies install without errors
+- ✅ Browser opens when running the application
+
+## 📞 Support
+
+If you encounter issues:
+1. Check the troubleshooting section above
+2. Ensure Microsoft Edge is installed and updated
+3. Run Command Prompt as Administrator
+4. Check your internet connection
+
+## 🔄 Updates
+
+To update to a new release:
+1. Download the new ZIP file
+2. Extract to a new folder
+3. Run `setup_windows.bat` again
+4. Copy your PO numbers from the old `data\input\input.csv`
+
+---
+
+**Ready to use!** Just run `setup_windows.bat` and you're good to go! 🚀

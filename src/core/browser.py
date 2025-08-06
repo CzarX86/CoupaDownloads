@@ -121,7 +121,7 @@ class BrowserManager:
     def initialize_driver(self, headless: bool = False) -> webdriver.Edge:
         """Initialize the WebDriver with proper error handling. Supports headless mode."""
         try:
-            # Get driver path automatically (download if needed)
+            # Get driver path (user must provide drivers manually)
             driver_path = self.driver_manager.get_driver_path()
             
             # Verify driver works

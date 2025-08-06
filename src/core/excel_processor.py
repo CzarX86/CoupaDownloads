@@ -18,8 +18,9 @@ class ExcelProcessor:
         """Get the full path to the input Excel file."""
         # Navigate from src/core/ to project root, then to data/input/
         current_dir = os.path.dirname(os.path.abspath(__file__))
-        project_root = os.path.dirname(os.path.dirname(os.path.dirname(current_dir)))
-        return os.path.join(project_root, "CoupaDownloads", "data", "input", "input.xlsx")
+        # Go up from src/core/ to src/ to project root
+        project_root = os.path.dirname(os.path.dirname(current_dir))
+        return os.path.join(project_root, "data", "input", "input.xlsx")
 
     @staticmethod
     def read_po_numbers_from_excel(excel_file_path: str) -> List[Dict[str, Any]]:

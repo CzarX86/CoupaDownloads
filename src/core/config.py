@@ -13,8 +13,11 @@ class Config:
 
     # Base URLs and paths
     BASE_URL = "https://unilever.coupahost.com/order_headers/{}"
-    DOWNLOAD_FOLDER = os.path.expanduser("~/Downloads/CoupaDownloads")
-    DRIVER_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "drivers", "edgedriver_138")
+    DOWNLOAD_FOLDER = os.path.expanduser("~/Downloads/PO_Attachments")
+    # Go up from src/core/ to src/ to project root, then to drivers/
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.dirname(os.path.dirname(current_dir))
+    DRIVER_PATH = os.path.join(project_root, "drivers", "edgedriver_138")
 
     # File settings
     # Set to empty list to allow all file types, or add specific extensions to restrict
@@ -102,5 +105,6 @@ class Config:
         """Get the path to the input CSV file."""
         # Navigate from src/core/ to project root, then to data/input/
         current_dir = os.path.dirname(os.path.abspath(__file__))
-        project_root = os.path.dirname(os.path.dirname(os.path.dirname(current_dir)))
+        # Go up from src/core/ to src/ to project root
+        project_root = os.path.dirname(os.path.dirname(current_dir))
         return os.path.join(project_root, "data", "input", "input.csv")
