@@ -31,8 +31,8 @@ class DriverManager:
         
     def _get_project_root(self) -> str:
         """Get the project root directory."""
-        # From src/core/ go up to src/, then to project root
-        return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        # FIXED: From src/core/ go up to src/, then to project root, then to workspace root
+        return os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     
     def _get_platform(self) -> str:
         """Get the current platform identifier."""
@@ -329,15 +329,15 @@ class DriverManager:
     def get_compatible_driver_version(self, edge_version: str) -> str:
         """Get the compatible EdgeDriver version from the web."""
         major_version = edge_version.split('.')[0]
-        url = f"{self.EDGEDRIVER_BASE_URL}/LATEST_RELEASE_{major_version}_stable"
+        url = f"{self.EDGEDRIVER_BASE_URL}/LATEST_RELEASE_{major_version}"
         try:
             response = requests.get(url, timeout=10)
             response.raise_for_status()
-            # The response is XML, we need to parse it to find the version
-            content = response.text
-            version_match = re.search(r'<Name>([0-9.]+)/</Name>', content)
-            if version_match:
-                driver_version = version_match.group(1)
+            
+            # FIXED: Response is plain text, not XML
+            driver_version = response.text.strip()
+            
+            if driver_version and re.match(r'^\d+\.\d+\.\d+\.\d+$', driver_version):
                 print(f"🔧 Found compatible driver version online: {driver_version}")
                 return driver_version
             else:
