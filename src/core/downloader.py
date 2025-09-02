@@ -54,6 +54,8 @@ class FileManager:
         po_number: str, files_to_rename: set, download_folder: str
     ) -> None:
         """Rename downloaded files with PO prefix."""
+        filename_counter = {}  # Track how many times each filename has been used
+        
         for filename in files_to_rename:
             if filename.startswith(po_number):
                 continue  # Already has PO prefix
@@ -63,7 +65,17 @@ class FileManager:
             file_name_without_ext = os.path.splitext(filename)[0]
 
             # Create new filename with PO prefix
-            new_filename = f"{po_number}_{file_name_without_ext}{file_ext}"
+            base_filename = f"{po_number}_{file_name_without_ext}{file_ext}"
+            
+            # Handle duplicate filenames by adding counter suffix
+            if base_filename in filename_counter:
+                filename_counter[base_filename] += 1
+                # Add counter suffix before extension
+                name_without_ext = os.path.splitext(base_filename)[0]
+                new_filename = f"{name_without_ext}_{filename_counter[base_filename]}{file_ext}"
+            else:
+                filename_counter[base_filename] = 1
+                new_filename = base_filename
 
             # Rename file
             old_path = os.path.join(download_folder, filename)
@@ -491,6 +503,7 @@ class DownloadManager:
         import shutil
         
         downloaded_files = []
+        filename_counter = {}  # Track how many times each filename has been used
         
         try:
             # Get list of files in temp directory
@@ -513,7 +526,16 @@ class DownloadManager:
                 else:
                     clean_name = f"{display_po}_{file_name_without_ext}"
                 
-                proper_filename = f"{clean_name}{file_ext}"
+                # Handle duplicate filenames by adding counter suffix
+                base_filename = f"{clean_name}{file_ext}"
+                if base_filename in filename_counter:
+                    filename_counter[base_filename] += 1
+                    # Add counter suffix before extension
+                    name_without_ext = os.path.splitext(base_filename)[0]
+                    proper_filename = f"{name_without_ext}_{filename_counter[base_filename]}{file_ext}"
+                else:
+                    filename_counter[base_filename] = 1
+                    proper_filename = base_filename
                 
                 source_path = os.path.join(temp_dir, filename)
                 dest_path = os.path.join(download_folder, proper_filename)

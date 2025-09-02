@@ -21,9 +21,74 @@ class CoupaDownloader:
         self.download_manager = None
         self.login_manager = None
         self.excel_processor = ExcelProcessor()
+        self.custom_download_folder = None
+
+    def prompt_for_download_folder(self) -> str:
+        """Prompt user for download folder with fallback to default."""
+        import os
+        
+        # Get current default download folder
+        default_folder = Config.DOWNLOAD_FOLDER
+        
+        print(f"📁 Current download folder: {default_folder}")
+        print("💡 Press Enter to use the default folder, or enter a custom path:")
+        
+        try:
+            user_input = input("📂 Download folder path: ").strip()
+            
+            if not user_input:
+                # User pressed Enter, use default
+                print(f"✅ Using default folder: {default_folder}")
+                return default_folder
+            
+            # User provided a custom path
+            custom_path = os.path.expanduser(user_input)  # Handle ~ for home directory
+            
+            # Validate the path
+            if os.path.exists(custom_path):
+                if os.path.isdir(custom_path):
+                    print(f"✅ Using custom folder: {custom_path}")
+                    return custom_path
+                else:
+                    print(f"❌ Path exists but is not a directory: {custom_path}")
+                    print(f"✅ Falling back to default folder: {default_folder}")
+                    return default_folder
+            else:
+                # Path doesn't exist, ask if user wants to create it
+                print(f"❌ Path doesn't exist: {custom_path}")
+                create_choice = input("Create this directory? (y/N): ").strip().lower()
+                
+                if create_choice in ['y', 'yes']:
+                    try:
+                        os.makedirs(custom_path, exist_ok=True)
+                        print(f"✅ Created and using custom folder: {custom_path}")
+                        return custom_path
+                    except Exception as e:
+                        print(f"❌ Failed to create directory: {e}")
+                        print(f"✅ Falling back to default folder: {default_folder}")
+                        return default_folder
+                else:
+                    print(f"✅ Using default folder: {default_folder}")
+                    return default_folder
+                    
+        except KeyboardInterrupt:
+            print("\n⏹️ User cancelled folder selection")
+            print(f"✅ Using default folder: {default_folder}")
+            return default_folder
+        except Exception as e:
+            print(f"❌ Error with folder input: {e}")
+            print(f"✅ Falling back to default folder: {default_folder}")
+            return default_folder
 
     def setup(self) -> None:
         """Setup the downloader with browser and managers."""
+        # Prompt user for download folder
+        self.custom_download_folder = self.prompt_for_download_folder()
+        
+        # Update Config with custom folder if provided
+        if self.custom_download_folder != Config.DOWNLOAD_FOLDER:
+            Config.DOWNLOAD_FOLDER = self.custom_download_folder
+        
         # Ensure download folder exists
         Config.ensure_download_folder_exists()
 
