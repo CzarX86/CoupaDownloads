@@ -1,12 +1,12 @@
 """
 Downloader module for Coupa Downloads automation.
-Handles file operations, attachment downloading, and renaming.
+Handles file operations, attachment downloading, and renaming with enhanced folder hierarchy.
 """
 
 import os
 import re
 import time
-from typing import List, Set, Tuple, Optional
+from typing import List, Set, Tuple, Optional, Dict, Any
 
 from selenium import webdriver
 from selenium.common.exceptions import TimeoutException
@@ -16,6 +16,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 
 from .config import Config
 from .progress_manager import progress_manager
+from .folder_hierarchy import FolderHierarchyManager
 
 
 class FileManager:
@@ -52,100 +53,57 @@ class FileManager:
     def rename_downloaded_files(
         po_number: str, files_to_rename: set, download_folder: str
     ) -> None:
-        """Rename only the newly downloaded files with PO prefix."""
-        try:
-            for filename in files_to_rename:
-                # Clean the filename to remove any existing PO prefix
-                clean_filename = filename
-                if filename.startswith("PO"):
-                    # Remove any existing PO prefix from the filename
-                    # This handles cases where the browser downloads files with PO in the name
-                    parts = filename.split("_", 1)  # Split on first underscore
-                    if len(parts) > 1 and parts[0].startswith("PO"):
-                        clean_filename = parts[1]  # Take everything after the first PO_
-                    else:
-                        clean_filename = filename.replace("PO", "", 1)  # Remove first occurrence of PO
-                
-                # Create proper filename with PO prefix
-                # Extract clean PO number (remove PO prefix if present)
-                clean_po_number = po_number.replace("PO", "") if po_number.startswith("PO") else po_number
-                new_filename = f"PO{clean_po_number}_{clean_filename}"
-                
-                old_path = os.path.join(download_folder, filename)
-                new_path = os.path.join(download_folder, new_filename)
-                
-                try:
-                    # Handle existing files based on configuration
-                    if os.path.exists(new_path):
-                        if Config.OVERWRITE_EXISTING_FILES:
-                            if Config.CREATE_BACKUP_BEFORE_OVERWRITE:
-                                # Create backup of existing file
-                                backup_path = new_path + ".backup"
-                                import shutil
-                                shutil.copy2(new_path, backup_path)
-                                if Config.VERBOSE_OUTPUT:
-                                    print(f"    💾 Created backup: {os.path.basename(backup_path)}")
-                            
-                            if Config.VERBOSE_OUTPUT:
-                                print(f"    🔄 Replacing existing file: {new_filename}")
-                            os.remove(new_path)  # Remove existing file
-                        else:
-                            # Skip existing files
-                            if Config.VERBOSE_OUTPUT:
-                                print(f"    ⏭️ Skipping existing file: {new_filename}")
-                            continue
-                    
-                    os.rename(old_path, new_path)
-                    print(f"    Renamed {filename} -> {new_filename}")
-                except Exception as e:
-                    print(f"    Could not rename {filename}: {e}")
-        except Exception as e:
-            print(f"    Error renaming files: {e}")
+        """Rename downloaded files with PO prefix."""
+        for filename in files_to_rename:
+            if filename.startswith(po_number):
+                continue  # Already has PO prefix
+
+            # Get file extension
+            file_ext = os.path.splitext(filename)[1]
+            file_name_without_ext = os.path.splitext(filename)[0]
+
+            # Create new filename with PO prefix
+            new_filename = f"{po_number}_{file_name_without_ext}{file_ext}"
+
+            # Rename file
+            old_path = os.path.join(download_folder, filename)
+            new_path = os.path.join(download_folder, new_filename)
+
+            try:
+                os.rename(old_path, new_path)
+                print(f"    📝 Renamed: {filename} → {new_filename}")
+            except Exception as e:
+                print(f"    ❌ Failed to rename {filename}: {e}")
 
     @staticmethod
     def cleanup_double_po_prefixes(download_folder: str) -> None:
-        """Clean up existing files with double PO prefixes (e.g., POPO15826591_...)."""
+        """Clean up files that might have double PO prefixes."""
         try:
-            for filename in os.listdir(download_folder):
-                if filename.startswith("POPO"):
-                    # Extract the part after the second PO
-                    # POPO15826591_document.pdf -> PO15826591_document.pdf
-                    clean_filename = filename[2:]  # Remove the first "PO"
-                    old_path = os.path.join(download_folder, filename)
-                    new_path = os.path.join(download_folder, clean_filename)
-                    
-                    try:
-                        os.rename(old_path, new_path)
-                        print(f"    Fixed double PO prefix: {filename} -> {clean_filename}")
-                    except Exception as e:
-                        print(f"    Could not fix {filename}: {e}")
-                elif filename.startswith("PO") and "_" in filename:
-                    # Check for other double PO patterns like PO_PO_ or PO123_PO456_
-                    parts = filename.split("_")
-                    if len(parts) >= 2 and parts[1].startswith("PO"):
-                        # Remove the second PO prefix
-                        clean_filename = f"{parts[0]}_{'_'.join(parts[2:])}"
+            files = os.listdir(download_folder)
+            for filename in files:
+                # Check for double PO prefix (e.g., PO123456_PO123456_file.pdf)
+                if filename.count("PO") >= 2:
+                    # Remove the first PO prefix
+                    parts = filename.split("_", 1)
+                    if len(parts) > 1 and parts[0].startswith("PO"):
+                        new_filename = parts[1]
                         old_path = os.path.join(download_folder, filename)
-                        new_path = os.path.join(download_folder, clean_filename)
+                        new_path = os.path.join(download_folder, new_filename)
                         
                         try:
                             os.rename(old_path, new_path)
-                            print(f"    Fixed PO pattern: {filename} -> {clean_filename}")
+                            print(f"    🔧 Cleaned double prefix: {filename} → {new_filename}")
                         except Exception as e:
-                            print(f"    Could not fix {filename}: {e}")
+                            print(f"    ❌ Failed to clean {filename}: {e}")
         except Exception as e:
-            print(f"    Error cleaning up double PO prefixes: {e}")
+            print(f"    ❌ Error cleaning double prefixes: {e}")
 
     @staticmethod
-    def check_and_fix_unnamed_files(download_folder: str) -> None:
-        """Check for and fix any files that don't have PO prefixes."""
+    def check_for_unnamed_files(download_folder: str) -> None:
+        """Check for files that might not have been properly named."""
         try:
-            unnamed_files = []
-            for filename in os.listdir(download_folder):
-                if (os.path.isfile(os.path.join(download_folder, filename)) and 
-                    not filename.startswith('.') and 
-                    not filename.startswith("PO")):
-                    unnamed_files.append(filename)
+            files = os.listdir(download_folder)
+            unnamed_files = [f for f in files if f.startswith("attachment_") or f.startswith("download")]
             
             if unnamed_files:
                 print(f"    ⚠️ Found {len(unnamed_files)} unnamed files: {unnamed_files}")
@@ -160,6 +118,7 @@ class DownloadManager:
     def __init__(self, driver: webdriver.Edge):
         self.driver = driver
         self.file_manager = FileManager()
+        self.folder_hierarchy = FolderHierarchyManager()
 
     def _wait_for_download_complete(self, directory: str, timeout: int = 30) -> None:
         """Wait for all .crdownload files to disappear."""
@@ -255,13 +214,17 @@ class DownloadManager:
                 print(f"    Failed to download attachment {index + 1}: {str(e)}")
                 print(f"    Aria-label: {aria_label if 'aria_label' in locals() else 'Not available'}")
 
-    def download_attachments_for_po(self, display_po: str, clean_po: str, msg_processing_enabled: bool = False) -> None:
+    def download_attachments_for_po(self, display_po: str, clean_po: str, po_data: Dict[str, Any], 
+                                   hierarchy_cols: List[str], has_hierarchy_data: bool, 
+                                   msg_processing_enabled: bool = False) -> List[str]:
         """Download all attachments for a specific PO and update file status."""
         from selenium.common.exceptions import TimeoutException
         from selenium.webdriver.common.by import By
         from selenium.webdriver.support.ui import WebDriverWait
         from selenium.webdriver.support import expected_conditions as EC
-        from .unified_processor import UnifiedProcessor
+        from .excel_processor import ExcelProcessor
+
+        downloaded_files = []
 
         try:
             # Navigate to PO page
@@ -273,8 +236,10 @@ class DownloadManager:
             # Check if page exists
             if "Page Not Found" in self.driver.title or "404" in self.driver.title:
                 print(f"  ❌ PO #{display_po} not found")
-                UnifiedProcessor.update_po_status(display_po, 'FAILED', error_message='PO page not found', coupa_url=po_url)
-                return
+                # Update PO data with failure status before creating folder
+                po_data['status'] = 'FAILED'
+                ExcelProcessor.update_po_status(display_po, 'FAILED', error_message='PO page not found', coupa_url=po_url)
+                return []
 
             # Wait for page to load
             WebDriverWait(self.driver, Config.PAGE_LOAD_TIMEOUT).until(
@@ -284,10 +249,12 @@ class DownloadManager:
             # Check for login redirect - raise exception for retry mechanism
             if "login" in self.driver.current_url.lower() or "sign_in" in self.driver.current_url.lower():
                 print(f"  🔐 Login required for PO #{display_po}")
-                UnifiedProcessor.update_po_status(display_po, 'FAILED', error_message='Login required', coupa_url=po_url)
+                # Update PO data with failure status before creating folder
+                po_data['status'] = 'FAILED'
+                ExcelProcessor.update_po_status(display_po, 'FAILED', error_message='Login required', coupa_url=po_url)
                 raise Exception("Login required - will retry after login")
 
-                        # Find attachments
+            # Find attachments
             attachments = self._find_attachments()
             attachments_found = len(attachments)
             
@@ -295,10 +262,12 @@ class DownloadManager:
             progress_manager.found_attachments(attachments_found)
             
             if not attachments:
-                UnifiedProcessor.update_po_status(display_po, 'NO_ATTACHMENTS', 
+                # Update PO data with no attachments status before creating folder
+                po_data['status'] = 'NO_ATTACHMENTS'
+                ExcelProcessor.update_po_status(display_po, 'NO_ATTACHMENTS', 
                                                 attachments_found=0, attachments_downloaded=0, coupa_url=po_url)
                 progress_manager.po_completed('NO_ATTACHMENTS')
-                return
+                return []
                 
             # Start download process
             progress_manager.start_download(attachments_found)
@@ -308,19 +277,28 @@ class DownloadManager:
             if Config.VERBOSE_OUTPUT and supplier_name:
                 print(f"   🏢 Supplier: {supplier_name}")
             
-            # Start download process
-            progress_manager.start_download(attachments_found)
+            # Create folder path using hierarchy
+            download_folder = self.folder_hierarchy.create_folder_path(
+                po_data, hierarchy_cols, has_hierarchy_data, supplier_name
+            )
+            
+            # Log folder structure
+            hierarchy_summary = self.folder_hierarchy.get_hierarchy_summary(po_data, hierarchy_cols, has_hierarchy_data)
+            if has_hierarchy_data:
+                print(f"   📁 Using hierarchy: {hierarchy_summary['hierarchy_path']}")
+            else:
+                print(f"   📁 Using fallback: {hierarchy_summary['supplier']}")
             
             # Track downloads before starting
-            initial_count = self._count_existing_files(supplier_name)
+            initial_count = self._count_existing_files_in_folder(download_folder)
             
             # Use temporary directory approach for clean downloads
             if Config.SHOW_DETAILED_PROCESSING:
-                print(f"   📁 Downloading to: {supplier_name}/")
-            self._download_with_proper_names(attachments, display_po, supplier_name, msg_processing_enabled)
+                print(f"   📁 Downloading to: {download_folder}")
+            downloaded_files = self._download_with_proper_names(attachments, display_po, download_folder, msg_processing_enabled)
             
             # Count files after download
-            final_count = self._count_existing_files(supplier_name)
+            final_count = self._count_existing_files_in_folder(download_folder)
             attachments_downloaded = final_count - initial_count
             
             # Report download completion
@@ -334,15 +312,19 @@ class DownloadManager:
             else:
                 status = 'FAILED'
             
+            # Format attachment names for Excel
+            attachment_names = self.folder_hierarchy.format_attachment_names(downloaded_files)
+            
             # Update file with results
-            UnifiedProcessor.update_po_status(
+            ExcelProcessor.update_po_status(
                 display_po, 
                 status, 
                 supplier=supplier_name,
                 attachments_found=attachments_found,
                 attachments_downloaded=attachments_downloaded,
-                download_folder=f"{supplier_name}/",
-                coupa_url=po_url
+                download_folder=download_folder,
+                coupa_url=po_url,
+                attachment_names=attachment_names
             )
             
             # Report PO completion
@@ -350,7 +332,9 @@ class DownloadManager:
 
         except TimeoutException:
             print(f"  Timed out waiting for PO #{display_po} page to load. Skipping.")
-            UnifiedProcessor.update_po_status(display_po, 'FAILED', error_message='Page load timeout', coupa_url=po_url)
+            # Update PO data with failure status before creating folder
+            po_data['status'] = 'FAILED'
+            ExcelProcessor.update_po_status(display_po, 'FAILED', error_message='Page load timeout', coupa_url=po_url)
         except Exception as e:
             # Re-raise login-related exceptions for retry mechanism
             if "login" in str(e).lower() or "authentication" in str(e).lower() or "sign_in" in str(e).lower():
@@ -360,7 +344,235 @@ class DownloadManager:
                     print(f"  Error processing PO #{display_po}: {str(e)}")
                 else:
                     print(f"  ❌ PO #{display_po} failed")
-                UnifiedProcessor.update_po_status(display_po, 'FAILED', error_message=str(e)[:100], coupa_url=po_url)
+                # Update PO data with failure status before creating folder
+                po_data['status'] = 'FAILED'
+                ExcelProcessor.update_po_status(display_po, 'FAILED', error_message=str(e)[:100], coupa_url=po_url)
+
+        return downloaded_files
+
+    def _count_existing_files_in_folder(self, folder_path: str) -> int:
+        """Count existing files in specified folder."""
+        try:
+            if os.path.exists(folder_path):
+                return len([f for f in os.listdir(folder_path) 
+                           if os.path.isfile(os.path.join(folder_path, f))])
+            return 0
+        except Exception:
+            return 0
+
+    def _download_with_proper_names(self, attachments, display_po: str, download_folder: str, 
+                                   msg_processing_enabled: bool = False) -> List[str]:
+        """Download attachments using temporary directory method and return list of downloaded files."""
+        print(f"    📁 Using temporary directory method for {len(attachments)} attachments...")
+        return self._try_temp_directory_method(attachments, display_po, download_folder, msg_processing_enabled)
+
+    def _try_temp_directory_method(self, attachments, display_po: str, download_folder: str, 
+                                  msg_processing_enabled: bool = False) -> List[str]:
+        """Download using temporary directory method and return list of downloaded files."""
+        import tempfile
+        import shutil
+        
+        downloaded_files = []
+        
+        # Create temporary directory for this PO
+        with tempfile.TemporaryDirectory() as temp_dir:
+            print(f"    📁 Using temporary directory: {temp_dir}")
+            
+            # Use CDP to change download directory (works with Edge!)
+            try:
+                self.driver.execute_cdp_cmd('Page.setDownloadBehavior', {
+                    'behavior': 'allow',
+                    'downloadPath': temp_dir
+                })
+                print(f"    ✅ Changed download directory to temp folder")
+            except Exception as e:
+                print(f"    ⚠️ Could not change download directory: {e}")
+                print(f"    🔄 Falling back to file tracking method...")
+                return self._fallback_download_method(attachments, display_po, download_folder)
+            
+            try:
+                # Download each attachment to temp directory
+                for index, attachment in enumerate(attachments):
+                    self._download_attachment_simple(attachment, index, len(attachments))
+
+                # Wait for downloads to complete in temp directory
+                self._wait_for_download_complete(temp_dir, timeout=len(attachments) * 10)
+                
+                # Move files with proper names to final destination
+                downloaded_files = self._move_files_with_proper_names(temp_dir, display_po, download_folder, msg_processing_enabled)
+                
+            finally:
+                # Restore original download directory
+                try:
+                    self.driver.execute_cdp_cmd('Page.setDownloadBehavior', {
+                        'behavior': 'allow',
+                        'downloadPath': Config.DOWNLOAD_FOLDER
+                    })
+                    print(f"    ✅ Restored download directory")
+                except Exception as e:
+                    print(f"    ⚠️ Could not restore download directory: {e}")
+        
+        return downloaded_files
+
+    def _download_attachment_simple(self, attachment, index: int, total_attachments: int) -> None:
+        """Download a single attachment with simplified logic."""
+        try:
+            # Get filename from aria-label
+            aria_label = attachment.get_attribute("aria-label")
+            filename = self.file_manager.extract_filename_from_aria_label(aria_label, index)
+
+            # Skip unsupported file types
+            if not self.file_manager.is_supported_file(filename):
+                progress_manager.attachment_skipped(filename, "unsupported type")
+                return
+
+            # Check if element is clickable
+            if not attachment.is_enabled() or not attachment.is_displayed():
+                progress_manager.attachment_skipped(filename, "not clickable")
+                return
+
+            # Try to get file size if available (this might not be possible with Selenium)
+            file_size = self._get_file_size_from_element(attachment)
+            
+            # Try to click the attachment
+            try:
+                self.driver.execute_script("arguments[0].scrollIntoView();", attachment)
+                time.sleep(0.5)
+                attachment.click()
+                
+                # For now, we'll use a placeholder since we can't easily get real-time download progress
+                # In a real implementation, you'd track the actual downloaded bytes
+                downloaded_bytes = file_size if file_size else 0
+                total_bytes = file_size if file_size else 0
+                
+                progress_manager.attachment_downloaded(filename, downloaded_bytes, total_bytes)
+            except Exception as click_error:
+                if Config.VERBOSE_OUTPUT:
+                    print(f"    Regular click failed, trying JavaScript click: {click_error}")
+                else:
+                    print(f"    Click failed for {filename}, trying JavaScript...")
+                # Fallback to JavaScript click
+                self.driver.execute_script("arguments[0].click();", attachment)
+                progress_manager.attachment_downloaded(filename, 0, 0)
+
+            # Brief pause between downloads
+            time.sleep(1)
+
+        except Exception as e:
+            if Config.VERBOSE_OUTPUT:
+                print(f"    Failed to download attachment {index + 1}: {str(e)}")
+                print(f"    Aria-label: {aria_label if 'aria_label' in locals() else 'Not available'}")
+
+    def _get_file_size_from_element(self, attachment) -> int:
+        """Try to get file size from attachment element (may not be possible)."""
+        try:
+            # This is a placeholder - in practice, file size might not be available
+            # You could try to extract it from aria-label or other attributes
+            aria_label = attachment.get_attribute("aria-label")
+            if aria_label and "KB" in aria_label:
+                # Try to extract size from aria-label like "document.pdf (1.2 MB) file attachment"
+                size_match = re.search(r'\(([\d.]+)\s*(KB|MB|GB)\)', aria_label)
+                if size_match:
+                    size_value = float(size_match.group(1))
+                    unit = size_match.group(2)
+                    if unit == 'KB':
+                        return int(size_value * 1024)
+                    elif unit == 'MB':
+                        return int(size_value * 1024 * 1024)
+                    elif unit == 'GB':
+                        return int(size_value * 1024 * 1024 * 1024)
+        except Exception:
+            pass
+        return 0  # Could not determine file size
+
+    def _move_files_with_proper_names(self, temp_dir: str, display_po: str, download_folder: str, 
+                                     msg_processing_enabled: bool = False) -> List[str]:
+        """Move files from temp directory to final destination with proper PO prefixes."""
+        import shutil
+        
+        downloaded_files = []
+        
+        try:
+            # Get list of files in temp directory
+            temp_files = [f for f in os.listdir(temp_dir) if os.path.isfile(os.path.join(temp_dir, f))]
+            
+            print(f"    📁 Moving {len(temp_files)} files from temp directory...")
+            
+            for filename in temp_files:
+                # Skip temporary files
+                if filename.endswith('.crdownload') or filename.endswith('.tmp'):
+                    continue
+                
+                # Create proper filename with PO prefix
+                file_ext = os.path.splitext(filename)[1]
+                file_name_without_ext = os.path.splitext(filename)[0]
+                
+                # Remove any existing PO prefix to avoid duplication
+                if file_name_without_ext.startswith(display_po + "_"):
+                    clean_name = file_name_without_ext
+                else:
+                    clean_name = f"{display_po}_{file_name_without_ext}"
+                
+                proper_filename = f"{clean_name}{file_ext}"
+                
+                source_path = os.path.join(temp_dir, filename)
+                dest_path = os.path.join(download_folder, proper_filename)
+                
+                # Handle existing files based on configuration
+                if os.path.exists(dest_path) and not Config.OVERWRITE_EXISTING_FILES:
+                    print(f"    ⚠️ File already exists, skipping: {proper_filename}")
+                    continue
+                
+                # Move file to final destination
+                shutil.move(source_path, dest_path)
+                downloaded_files.append(proper_filename)
+                print(f"    ✅ Moved: {filename} → {proper_filename}")
+                
+                # Process MSG files if enabled
+                if msg_processing_enabled and filename.lower().endswith('.msg'):
+                    try:
+                        from .msg_processor import msg_processor
+                        clean_po_number = display_po.replace("PO", "") if display_po.startswith("PO") else display_po
+                        msg_processor.process_msg_file(dest_path, clean_po_number, download_folder)
+                    except Exception as msg_error:
+                        print(f"    ❌ MSG processing failed for {proper_filename}: {msg_error}")
+            
+            # Clean up any issues
+            self.file_manager.cleanup_double_po_prefixes(download_folder)
+            
+        except Exception as e:
+            print(f"    ❌ Error moving files: {e}")
+
+        return downloaded_files
+
+    def _fallback_download_method(self, attachments, display_po: str, download_folder: str) -> List[str]:
+        """Fallback to the old method if CDP doesn't work."""
+        print("    🔄 Using fallback download method...")
+        
+        downloaded_files = []
+        
+        # Track files before download
+        before_files = set(os.listdir(download_folder))
+
+        # Download each attachment
+        for index, attachment in enumerate(attachments):
+            self._download_attachment_simple(attachment, index, len(attachments))
+
+        # Wait for downloads to complete
+        self._wait_for_download_complete(download_folder, timeout=len(attachments) * 10)
+        
+        # Track files after download and rename new ones
+        after_files = set(os.listdir(download_folder))
+        new_files = after_files - before_files
+        
+        if new_files:
+            self.file_manager.rename_downloaded_files(display_po, new_files, download_folder)
+            downloaded_files = [f for f in new_files if not f.startswith("attachment_")]
+        
+        # Clean up any issues
+        self.file_manager.cleanup_double_po_prefixes(download_folder)
+        
+        return downloaded_files
 
     def _extract_supplier_name(self) -> str:
         """Extract supplier name from the PO page using cascading selector approach."""
@@ -443,248 +655,6 @@ class DownloadManager:
             cleaned = "Unknown_Supplier"
             
         return cleaned
-
-    def _create_supplier_folder(self, supplier_name: str) -> str:
-        """Create and return the path to the supplier-specific folder."""
-        supplier_folder = os.path.join(Config.DOWNLOAD_FOLDER, supplier_name)
-        
-        try:
-            if not os.path.exists(supplier_folder):
-                os.makedirs(supplier_folder)
-                print(f"  📁 Created supplier folder: {supplier_name}")
-            else:
-                print(f"  📁 Using existing supplier folder: {supplier_name}")
-            
-            return supplier_folder
-            
-        except Exception as e:
-            print(f"  ⚠️ Could not create supplier folder '{supplier_name}': {e}")
-            print(f"  📁 Using main download folder instead")
-            return Config.DOWNLOAD_FOLDER
-
-    def _download_with_proper_names(self, attachments, display_po: str, supplier_name: str = "Unknown_Supplier", msg_processing_enabled: bool = False) -> None:
-        """Download attachments using only the temporary directory method (most reliable)."""
-        print(f"    📁 Using temporary directory method for {len(attachments)} attachments...")
-        supplier_folder = self._create_supplier_folder(supplier_name)
-        self._try_temp_directory_method(attachments, display_po, supplier_folder, msg_processing_enabled)
-
-    def _try_temp_directory_method(self, attachments, display_po: str, supplier_folder: str, msg_processing_enabled: bool = False) -> None:
-        """Fallback to temporary directory method."""
-        import tempfile
-        import shutil
-        
-        # Create temporary directory for this PO
-        with tempfile.TemporaryDirectory() as temp_dir:
-            print(f"    📁 Using temporary directory: {temp_dir}")
-            
-            # Use CDP to change download directory (works with Edge!)
-            try:
-                self.driver.execute_cdp_cmd('Page.setDownloadBehavior', {
-                    'behavior': 'allow',
-                    'downloadPath': temp_dir
-                })
-                print(f"    ✅ Changed download directory to temp folder")
-            except Exception as e:
-                print(f"    ⚠️ Could not change download directory: {e}")
-                print(f"    🔄 Falling back to file tracking method...")
-                return self._fallback_download_method(attachments, display_po, supplier_folder)
-            
-            try:
-                # Download each attachment to temp directory
-                for index, attachment in enumerate(attachments):
-                    self._download_attachment_simple(attachment, index, len(attachments))
-
-                # Wait for downloads to complete in temp directory
-                self._wait_for_download_complete(temp_dir, timeout=len(attachments) * 10)
-                
-                # Move files with proper names to final destination
-                self._move_files_with_proper_names(temp_dir, display_po, supplier_folder, msg_processing_enabled)
-                
-            finally:
-                # Restore original download directory
-                try:
-                    self.driver.execute_cdp_cmd('Page.setDownloadBehavior', {
-                        'behavior': 'allow',
-                        'downloadPath': Config.DOWNLOAD_FOLDER
-                    })
-                    print(f"    ✅ Restored download directory")
-                except Exception as e:
-                    print(f"    ⚠️ Could not restore download directory: {e}")
-
-    def _download_attachment_simple(self, attachment, index: int, total_attachments: int) -> None:
-        """Download a single attachment with simplified logic."""
-        try:
-            # Get filename from aria-label
-            aria_label = attachment.get_attribute("aria-label")
-            filename = self.file_manager.extract_filename_from_aria_label(aria_label, index)
-
-            # Skip unsupported file types
-            if not self.file_manager.is_supported_file(filename):
-                progress_manager.attachment_skipped(filename, "unsupported type")
-                return
-
-            # Check if element is clickable
-            if not attachment.is_enabled() or not attachment.is_displayed():
-                progress_manager.attachment_skipped(filename, "not clickable")
-                return
-
-            # Try to get file size if available (this might not be possible with Selenium)
-            file_size = self._get_file_size_from_element(attachment)
-            
-            # Try to click the attachment
-            try:
-                self.driver.execute_script("arguments[0].scrollIntoView();", attachment)
-                time.sleep(0.5)
-                attachment.click()
-                
-                # For now, we'll use a placeholder since we can't easily get real-time download progress
-                # In a real implementation, you'd track the actual downloaded bytes
-                downloaded_bytes = file_size if file_size else 0
-                total_bytes = file_size if file_size else 0
-                
-                progress_manager.attachment_downloaded(filename, downloaded_bytes, total_bytes)
-            except Exception as click_error:
-                if Config.VERBOSE_OUTPUT:
-                    print(f"    Regular click failed, trying JavaScript click: {click_error}")
-                else:
-                    print(f"    Regular click failed, trying JavaScript click...")
-                self.driver.execute_script("arguments[0].click();", attachment)
-                
-                # Same placeholder for JavaScript click
-                downloaded_bytes = file_size if file_size else 0
-                total_bytes = file_size if file_size else 0
-                
-                progress_manager.attachment_downloaded(filename, downloaded_bytes, total_bytes)
-
-            time.sleep(1)  # Brief pause between downloads
-
-        except Exception as e:
-            if Config.VERBOSE_OUTPUT:
-                print(f"    ❌ Failed to download attachment {index + 1}: {str(e)}")
-            else:
-                print(f"    ❌ Failed to download attachment {index + 1}")
-                
-    def _get_file_size_from_element(self, attachment_element) -> int:
-        """Try to extract file size from attachment element."""
-        try:
-            # Try different attributes that might contain file size
-            size_attributes = ['data-size', 'data-filesize', 'title', 'aria-label']
-            
-            for attr in size_attributes:
-                value = attachment_element.get_attribute(attr)
-                if value:
-                    # Look for size patterns like "2.5 MB", "1.2KB", etc.
-                    import re
-                    size_match = re.search(r'(\d+(?:\.\d+)?)\s*(KB|MB|GB|B)', value, re.IGNORECASE)
-                    if size_match:
-                        size_value = float(size_match.group(1))
-                        unit = size_match.group(2).upper()
-                        
-                        # Convert to bytes
-                        if unit == 'B':
-                            return int(size_value)
-                        elif unit == 'KB':
-                            return int(size_value * 1024)
-                        elif unit == 'MB':
-                            return int(size_value * 1024 * 1024)
-                        elif unit == 'GB':
-                            return int(size_value * 1024 * 1024 * 1024)
-            
-            return 0  # Could not determine file size
-        except Exception:
-            return 0  # Could not determine file size
-
-    def _move_files_with_proper_names(self, temp_dir: str, display_po: str, supplier_folder: str, msg_processing_enabled: bool = False) -> None:
-        """Move files from temp directory to final destination with proper PO prefixes."""
-        import shutil
-        
-        try:
-            temp_files = [f for f in os.listdir(temp_dir) if os.path.isfile(os.path.join(temp_dir, f))]
-            if not temp_files:
-                print("    ⚠️ No files downloaded to temporary directory")
-                return
-            
-            print(f"    📦 Moving {len(temp_files)} files with proper names...")
-            
-            for filename in temp_files:
-                # Clean the filename to remove any existing PO prefix
-                clean_filename = filename
-                if filename.startswith("PO"):
-                    # Remove any existing PO prefix from the filename
-                    # This handles cases where the browser downloads files with PO in the name
-                    parts = filename.split("_", 1)  # Split on first underscore
-                    if len(parts) > 1 and parts[0].startswith("PO"):
-                        clean_filename = parts[1]  # Take everything after the first PO_
-                    else:
-                        clean_filename = filename.replace("PO", "", 1)  # Remove first occurrence of PO
-                
-                # Create proper filename with PO prefix
-                # Extract clean PO number (remove PO prefix if present)
-                clean_po_number = display_po.replace("PO", "") if display_po.startswith("PO") else display_po
-                proper_filename = f"PO{clean_po_number}_{clean_filename}"
-                
-                source_path = os.path.join(temp_dir, filename)
-                dest_path = os.path.join(supplier_folder, proper_filename)
-                
-                # Handle existing files based on configuration
-                if os.path.exists(dest_path):
-                    if Config.OVERWRITE_EXISTING_FILES:
-                        if Config.CREATE_BACKUP_BEFORE_OVERWRITE:
-                            # Create backup of existing file
-                            backup_path = dest_path + ".backup"
-                            import shutil
-                            shutil.copy2(dest_path, backup_path)
-                            if Config.VERBOSE_OUTPUT:
-                                print(f"    💾 Created backup: {os.path.basename(backup_path)}")
-                        
-                        if Config.VERBOSE_OUTPUT:
-                            print(f"    🔄 Replacing existing file: {proper_filename}")
-                        os.remove(dest_path)  # Remove existing file
-                    else:
-                        # Skip existing files
-                        if Config.VERBOSE_OUTPUT:
-                            print(f"    ⏭️ Skipping existing file: {proper_filename}")
-                        continue
-                
-                # Move file with proper name
-                shutil.move(source_path, dest_path)
-                print(f"    ✅ Saved as: {proper_filename}")
-                
-                # Process MSG files if enabled
-                if msg_processing_enabled and clean_filename.lower().endswith('.msg'):
-                    try:
-                        from .msg_processor import msg_processor
-                        clean_po_number = display_po.replace("PO", "") if display_po.startswith("PO") else display_po
-                        msg_processor.process_msg_file(dest_path, clean_po_number, supplier_folder)
-                    except Exception as msg_error:
-                        print(f"    ❌ MSG processing failed for {proper_filename}: {msg_error}")
-                    
-        except Exception as e:
-            print(f"    ❌ Error moving files: {e}")
-
-    def _fallback_download_method(self, attachments, display_po: str, supplier_folder: str) -> None:
-        """Fallback to the old method if CDP doesn't work."""
-        print("    🔄 Using fallback download method...")
-        
-        # Track files before download
-        before_files = set(os.listdir(supplier_folder))
-
-        # Download each attachment
-        for index, attachment in enumerate(attachments):
-            self._download_attachment_simple(attachment, index, len(attachments))
-
-        # Wait for downloads to complete
-        self._wait_for_download_complete(supplier_folder, timeout=len(attachments) * 10)
-        
-        # Track files after download and rename new ones
-        after_files = set(os.listdir(supplier_folder))
-        new_files = after_files - before_files
-        
-        if new_files:
-            self.file_manager.rename_downloaded_files(display_po, new_files, supplier_folder)
-        
-        # Clean up any issues
-        self.file_manager.cleanup_double_po_prefixes(supplier_folder)
 
     def _count_existing_files(self, supplier_name: str) -> int:
         """Count existing files in supplier folder."""

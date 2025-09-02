@@ -1,6 +1,6 @@
 """
 Excel processor module for Coupa Downloads automation.
-Handles Excel file reading and PO number processing.
+Handles Excel file reading and PO number processing with enhanced hierarchy support.
 """
 
 import os
@@ -8,35 +8,53 @@ import pandas as pd
 from datetime import datetime
 from typing import List, Tuple, Dict, Any, Optional
 from .config import Config
+from .folder_hierarchy import FolderHierarchyManager
 
 
 class ExcelProcessor:
-    """Handles reading PO numbers from Excel and updating progress."""
+    """Handles reading PO numbers from Excel and updating progress with hierarchy support."""
+
+    def __init__(self):
+        self.folder_hierarchy = FolderHierarchyManager()
 
     @staticmethod
     def get_excel_file_path() -> str:
         """Get the full path to the input Excel file."""
         # Navigate from src/core/ to project root, then to data/input/
         current_dir = os.path.dirname(os.path.abspath(__file__))
-        project_root = os.path.dirname(os.path.dirname(os.path.dirname(current_dir)))
-        return os.path.join(project_root, "CoupaDownloads", "data", "input", "input.xlsx")
+        project_root = os.path.dirname(os.path.dirname(current_dir))
+        return os.path.join(project_root, "data", "input", "input.xlsx")
 
-    @staticmethod
-    def read_po_numbers_from_excel(excel_file_path: str) -> List[Dict[str, Any]]:
+    def read_po_numbers_from_excel(self, excel_file_path: str) -> Tuple[List[Dict[str, Any]], List[str], List[str], bool]:
         """
-        Read PO numbers from Excel file and return enhanced data structure.
+        Read PO numbers from Excel file and analyze hierarchy structure.
         
         Returns:
-            List of dictionaries with PO data and status information
+            Tuple of (po_entries, original_columns, hierarchy_columns, has_hierarchy_data)
         """
-        po_entries = []
-        
         try:
-            # Read Excel file using pandas
-            df = pd.read_excel(excel_file_path, engine='openpyxl')
+            # Read Excel file using pandas - specifically target 'PO_Data' sheet
+            df = pd.read_excel(excel_file_path, sheet_name='PO_Data', engine='openpyxl')
             
-            # Fill NaN values with appropriate defaults
-            df = df.fillna({
+            # Safety check: warn about multiple sheets
+            xl_file = pd.ExcelFile(excel_file_path)
+            if len(xl_file.sheet_names) > 1:
+                print(f"⚠️ WARNING: Excel file contains {len(xl_file.sheet_names)} sheets: {xl_file.sheet_names}")
+                print(f"   Only working on 'PO_Data' sheet. Other sheets will NOT be modified.")
+            
+            # Analyze Excel structure for hierarchy
+            original_cols, hierarchy_cols, has_hierarchy_data = self.folder_hierarchy.analyze_excel_structure(df)
+            
+            print(f"📊 Excel structure analysis:")
+            print(f"   Original columns: {original_cols}")
+            print(f"   Hierarchy columns: {hierarchy_cols}")
+            print(f"   Has hierarchy data: {has_hierarchy_data}")
+            
+            # Create a copy for processing to avoid modifying the original DataFrame
+            df_processed = df.copy()
+            
+            # Fill NaN values with appropriate defaults only for processing columns
+            df_processed = df_processed.fillna({
                 'STATUS': 'PENDING',
                 'SUPPLIER': '',
                 'ATTACHMENTS_FOUND': 0,
@@ -44,59 +62,53 @@ class ExcelProcessor:
                 'LAST_PROCESSED': '',
                 'ERROR_MESSAGE': '',
                 'DOWNLOAD_FOLDER': '',
-                'COUPA_URL': ''
+                'COUPA_URL': '',
+                'AttachmentName': ''
             })
             
-            # Check if file has the enhanced format with STATUS column
-            has_enhanced_headers = 'STATUS' in df.columns
+            po_entries = []
             
-            if has_enhanced_headers:
-                # Read enhanced Excel format
-                for _, row in df.iterrows():
-                    po_number = str(row.get('PO_NUMBER', '')).strip()
-                    if not po_number or po_number == 'nan':
-                        continue
-                        
-                    po_entries.append({
-                        'po_number': po_number,
-                        'status': str(row.get('STATUS', 'PENDING')).strip(),
-                        'supplier': str(row.get('SUPPLIER', '')).strip(),
-                        'attachments_found': int(row.get('ATTACHMENTS_FOUND', 0)),
-                        'attachments_downloaded': int(row.get('ATTACHMENTS_DOWNLOADED', 0)),
-                        'last_processed': str(row.get('LAST_PROCESSED', '')).strip(),
-                        'error_message': str(row.get('ERROR_MESSAGE', '')).strip(),
-                        'download_folder': str(row.get('DOWNLOAD_FOLDER', '')).strip(),
-                        'coupa_url': str(row.get('COUPA_URL', '')).strip()
-                    })
-            else:
-                # Read simple Excel format and convert to enhanced
-                # Assume first column contains PO numbers
-                po_column = df.columns[0] if len(df.columns) > 0 else 'PO_NUMBER'
+            # Process each row
+            for _, row in df_processed.iterrows():
+                po_number = str(row.get('PO_NUMBER', '')).strip()
+                if not po_number or po_number == 'nan':
+                    continue
                 
-                for _, row in df.iterrows():
-                    po_number = str(row.get(po_column, '')).strip()
-                    if po_number and po_number != 'nan' and po_number:  # Skip empty rows
-                        po_entries.append({
-                            'po_number': po_number,
-                            'status': 'PENDING',
-                            'supplier': '',
-                            'attachments_found': 0,
-                            'attachments_downloaded': 0,
-                            'last_processed': '',
-                            'error_message': '',
-                            'download_folder': '',
-                            'coupa_url': ''
-                        })
+                # Create PO entry with all available data
+                po_entry = {
+                    'po_number': po_number,
+                    'status': str(row.get('STATUS', 'PENDING')).strip(),
+                    'supplier': str(row.get('SUPPLIER', '')).strip(),
+                    'attachments_found': int(row.get('ATTACHMENTS_FOUND', 0)),
+                    'attachments_downloaded': int(row.get('ATTACHMENTS_DOWNLOADED', 0)),
+                    'last_processed': str(row.get('LAST_PROCESSED', '')).strip(),
+                    'error_message': str(row.get('ERROR_MESSAGE', '')).strip(),
+                    'download_folder': str(row.get('DOWNLOAD_FOLDER', '')).strip(),
+                    'coupa_url': str(row.get('COUPA_URL', '')).strip(),
+                    'attachment_names': str(row.get('AttachmentName', '')).strip()
+                }
+                
+                # Add hierarchy column data if available
+                for col in hierarchy_cols:
+                    if col in row:
+                        po_entry[col] = str(row.get(col, '')).strip()
+                
+                po_entries.append(po_entry)
                             
         except FileNotFoundError:
-            print(f"❌ Excel file not found: {excel_file_path}")
-            return []
+            raise Exception(f"Excel file not found: {excel_file_path}")
         except Exception as e:
-            print(f"❌ Error reading Excel file: {e}")
-            return []
+            raise Exception(f"Error reading Excel file: {e}")
 
         print(f"📊 Read {len(po_entries)} PO entries from Excel")
-        return po_entries
+        
+        # Safety check: warn if no PO numbers found
+        if len(po_entries) == 0:
+            print("⚠️ WARNING: No PO numbers found in Excel file!")
+            print("   Please ensure the PO_NUMBER column contains valid PO numbers.")
+            print("   The application will not process any files without PO numbers.")
+        
+        return po_entries, original_cols, hierarchy_cols, has_hierarchy_data
 
     @staticmethod
     def process_po_numbers(po_entries: List[Dict[str, Any]]) -> List[Tuple[str, str]]:
@@ -122,11 +134,15 @@ class ExcelProcessor:
                 skipped_count += 1
                 continue
             
-            # Clean PO number (remove PO prefix if present)
+            # Clean PO number (remove PO or PM prefix if present)
             display_po = po_number
-            clean_po = po_number.replace("PO", "") if po_number.startswith("PO") else po_number
+            clean_po = po_number
+            if po_number.startswith("PO"):
+                clean_po = po_number.replace("PO", "")
+            elif po_number.startswith("PM"):
+                clean_po = po_number.replace("PM", "")
             
-            # Validate PO number format
+            # Validate PO number format - accept both PO and PM prefixes
             if clean_po.isdigit() and len(clean_po) >= 6:
                 valid_entries.append((display_po, clean_po))
                 print(f"  ✅ {display_po} → Will process")
@@ -134,7 +150,11 @@ class ExcelProcessor:
                 print(f"  ❌ Invalid PO format: {po_number}")
                 # Update status to FAILED
                 # Generate URL even for invalid PO for reference
-                clean_po_attempt = po_number.replace("PO", "") if po_number.startswith("PO") else po_number
+                clean_po_attempt = po_number
+                if po_number.startswith("PO"):
+                    clean_po_attempt = po_number.replace("PO", "")
+                elif po_number.startswith("PM"):
+                    clean_po_attempt = po_number.replace("PM", "")
                 invalid_url = Config.BASE_URL.format(clean_po_attempt)
                 ExcelProcessor.update_po_status(po_number, 'FAILED', error_message='Invalid PO format', coupa_url=invalid_url)
         
@@ -148,7 +168,7 @@ class ExcelProcessor:
     def update_po_status(po_number: str, status: str, supplier: str = '', 
                         attachments_found: int = 0, attachments_downloaded: int = 0,
                         error_message: str = '', download_folder: str = '', 
-                        coupa_url: str = '') -> None:
+                        coupa_url: str = '', attachment_names: str = '') -> None:
         """
         Update the status of a specific PO in the Excel file.
         
@@ -161,34 +181,49 @@ class ExcelProcessor:
             error_message: Error message if applicable
             download_folder: Folder where files were saved
             coupa_url: Full URL to the PO page
+            attachment_names: Formatted attachment names
         """
         excel_file_path = ExcelProcessor.get_excel_file_path()
         
         try:
-            # Read all entries
-            po_entries = ExcelProcessor.read_po_numbers_from_excel(excel_file_path)
+            # Use openpyxl to update specific cells without rewriting the entire file
+            from openpyxl import load_workbook
             
-            # Find and update the specific PO
-            updated = False
-            for entry in po_entries:
-                if entry['po_number'] == po_number:
-                    entry['status'] = status
-                    entry['supplier'] = supplier
-                    entry['attachments_found'] = attachments_found
-                    entry['attachments_downloaded'] = attachments_downloaded
-                    entry['last_processed'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                    entry['error_message'] = error_message
-                    entry['download_folder'] = download_folder
-                    entry['coupa_url'] = coupa_url
-                    updated = True
+            # Load the workbook
+            workbook = load_workbook(excel_file_path)
+            
+            # IMPORTANT: Only work on the 'PO_Data' sheet, never touch backup sheets
+            if 'PO_Data' in workbook.sheetnames:
+                worksheet = workbook['PO_Data']
+            else:
+                print(f"❌ 'PO_Data' sheet not found in Excel file")
+                return
+            
+            # Find the PO number in the first column (PO_NUMBER)
+            po_found = False
+            for row_num in range(2, worksheet.max_row + 1):  # Start from row 2 (skip header)
+                cell_value = worksheet.cell(row=row_num, column=1).value  # PO_NUMBER column
+                if str(cell_value).strip() == str(po_number).strip():
+                    # Update only the specific cells for this PO
+                    worksheet.cell(row=row_num, column=2).value = status  # STATUS column
+                    worksheet.cell(row=row_num, column=3).value = supplier  # SUPPLIER column
+                    worksheet.cell(row=row_num, column=4).value = attachments_found  # ATTACHMENTS_FOUND column
+                    worksheet.cell(row=row_num, column=5).value = attachments_downloaded  # ATTACHMENTS_DOWNLOADED column
+                    worksheet.cell(row=row_num, column=6).value = attachment_names  # AttachmentName column
+                    worksheet.cell(row=row_num, column=7).value = datetime.now().strftime('%Y-%m-%d %H:%M:%S')  # LAST_PROCESSED column
+                    worksheet.cell(row=row_num, column=8).value = error_message  # ERROR_MESSAGE column
+                    worksheet.cell(row=row_num, column=9).value = download_folder  # DOWNLOAD_FOLDER column
+                    worksheet.cell(row=row_num, column=10).value = coupa_url  # COUPA_URL column
+                    po_found = True
                     break
             
-            if not updated:
+            if not po_found:
                 print(f"⚠️ PO {po_number} not found in Excel for status update")
                 return
             
-            # Write back to Excel
-            ExcelProcessor.write_enhanced_excel(excel_file_path, po_entries)
+            # Save the workbook
+            workbook.save(excel_file_path)
+            workbook.close()
             
             # Print status update
             status_emoji = {
@@ -206,30 +241,45 @@ class ExcelProcessor:
             print(f"❌ Error updating PO status: {e}")
 
     @staticmethod
-    def write_enhanced_excel(excel_file_path: str, po_entries: List[Dict[str, Any]]) -> None:
+    def write_enhanced_excel(excel_file_path: str, po_entries: List[Dict[str, Any]], 
+                           original_cols: List[str], hierarchy_cols: List[str]) -> None:
         """
-        Write the enhanced Excel format with all tracking columns.
+        Write the enhanced Excel format with all tracking columns and hierarchy support.
+        WARNING: This method overwrites the entire file. Use update_po_status for safer updates.
         
         Args:
             excel_file_path: Path to Excel file
             po_entries: List of PO entry dictionaries
+            original_cols: List of original column names
+            hierarchy_cols: List of hierarchy column names
         """
         try:
-            # Create DataFrame
-            df = pd.DataFrame([
-                {
-                    'PO_NUMBER': entry['po_number'],
-                    'STATUS': entry['status'],
-                    'SUPPLIER': entry['supplier'],
-                    'ATTACHMENTS_FOUND': entry['attachments_found'],
-                    'ATTACHMENTS_DOWNLOADED': entry['attachments_downloaded'],
-                    'LAST_PROCESSED': entry['last_processed'],
-                    'ERROR_MESSAGE': entry['error_message'],
-                    'DOWNLOAD_FOLDER': entry['download_folder'],
-                    'COUPA_URL': entry['coupa_url']
-                }
-                for entry in po_entries
-            ])
+            # Create DataFrame with all columns
+            df_data = []
+            for entry in po_entries:
+                row_data = {}
+                
+                # Add original columns
+                for col in original_cols:
+                    if col in entry:
+                        row_data[col] = entry[col]
+                    else:
+                        row_data[col] = ''
+                
+                # Add separator column if not present
+                if '<|>' not in row_data:
+                    row_data['<|>'] = ''
+                
+                # Add hierarchy columns
+                for col in hierarchy_cols:
+                    if col in entry:
+                        row_data[col] = entry[col]
+                    else:
+                        row_data[col] = ''
+                
+                df_data.append(row_data)
+            
+            df = pd.DataFrame(df_data)
             
             # Write to Excel with formatting
             with pd.ExcelWriter(excel_file_path, engine='openpyxl') as writer:
@@ -294,7 +344,8 @@ class ExcelProcessor:
         if excel_file_path is None:
             excel_file_path = ExcelProcessor.get_excel_file_path()
             
-        po_entries = ExcelProcessor.read_po_numbers_from_excel(excel_file_path)
+        processor = ExcelProcessor()
+        po_entries, original_cols, hierarchy_cols, has_hierarchy_data = processor.read_po_numbers_from_excel(excel_file_path)
         
         # Count by status
         status_counts = {}
@@ -318,7 +369,9 @@ class ExcelProcessor:
             'total_attachments_downloaded': total_attachments_downloaded,
             'unique_suppliers': len(suppliers),
             'supplier_list': sorted(list(suppliers)),
-            'success_rate': round((status_counts.get('COMPLETED', 0) / len(po_entries)) * 100, 1) if po_entries else 0
+            'success_rate': round((status_counts.get('COMPLETED', 0) / len(po_entries)) * 100, 1) if po_entries else 0,
+            'has_hierarchy_data': has_hierarchy_data,
+            'hierarchy_columns': hierarchy_cols
         }
 
     @staticmethod
@@ -351,6 +404,14 @@ class ExcelProcessor:
                 print(f"  📁 {supplier}")
             if len(report['supplier_list']) > 10:
                 print(f"  ... and {len(report['supplier_list']) - 10} more")
+        
+        # Hierarchy information
+        if report['has_hierarchy_data']:
+            print(f"\n📁 Hierarchy Structure:")
+            print(f"  ✅ Using hierarchy columns: {report['hierarchy_columns']}")
+        else:
+            print(f"\n📁 Folder Structure:")
+            print(f"  🔄 Using fallback structure (Supplier/PO)")
         
         print("="*60)
 
