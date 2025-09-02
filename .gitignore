@@ -83,6 +83,9 @@ edgedriver.log
 .env.local
 .env.production
 
+# Windows Edge User Data (should not be committed)
+%LOCALAPPDATA%/Microsoft/Edge/User Data/
+
 # Coverage reports
 htmlcov/
 .coverage
