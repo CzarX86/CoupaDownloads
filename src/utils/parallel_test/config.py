@@ -14,8 +14,8 @@ class Config:
     BASE_URL = "https://unilever.coupahost.com"
     # Define project root dynamically
     PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    INPUT_DIR = os.path.join(PROJECT_ROOT, "data", "input")
-    DOWNLOAD_FOLDER = os.path.expanduser("~/Downloads/CoupaDownloads")
+    INPUT_DIR = "data/input"
+    DOWNLOAD_FOLDER = os.path.expanduser("~/Downloads/CoupaDownloads/Temp")  # Temporary download folder
 
     # File settings
     ALLOWED_EXTENSIONS: List[str] = [".pdf", ".msg", ".docx", ".xlsx", ".txt", ".jpg", ".png", ".zip", ".rar", ".csv", ".xml"]
@@ -41,7 +41,7 @@ class Config:
     }
 
     # CSS Selectors
-    ATTACHMENT_SELECTOR = "span[aria-label*='file attachment'], span[role='button'][aria-label*='file attachment'], span[title*='.pdf'], span[title*='.docx'], span[title*='.msg']"
+    ATTACHMENT_SELECTOR = "div[class*='commentAttachments'] a[href*='attachment_file'], div[class*='attachment'] a[href*='attachment_file'], div[class*='attachment'] a[href*='download'], div[class*='attachment'] a[href*='attachment'], span[aria-label*='file attachment'], span[role='button'][aria-label*='file attachment'], span[title*='.pdf'], span[title*='.docx'], span[title*='.msg']"
     SUPPLIER_NAME_CSS_SELECTORS = [
         "span[data-supplier-name]",
         "span[class*='supplier-name']",
@@ -56,7 +56,7 @@ class Config:
 
     # Timeouts
     PAGE_LOAD_TIMEOUT = 15
-    ATTACHMENT_WAIT_TIMEOUT = 15
+    ATTACHMENT_WAIT_TIMEOUT = 25  # Increased timeout for first tab (was 15)
     DOWNLOAD_WAIT_TIMEOUT = 30
 
     # Output verbosity controls
@@ -73,6 +73,12 @@ class Config:
     FILTER_MSG_ARTIFACTS = os.environ.get("FILTER_MSG_ARTIFACTS", "true").lower() == "true"
     MSG_ARTIFACT_MIN_SIZE = int(os.environ.get("MSG_ARTIFACT_MIN_SIZE", "1024"))
     MSG_IMAGE_MIN_SIZE = int(os.environ.get("MSG_IMAGE_MIN_SIZE", "5120"))
+
+    # Parallel processing settings
+    MAX_WORKERS = 5  # Number of parallel tabs (increased for better performance)
+    MAX_PARALLEL_TABS = 5  # Maximum number of tabs open simultaneously
+    TAB_TIMEOUT = 30  # Timeout for tab operations
+    TAB_SWITCH_DELAY = 3  # Delay between tab switches (increased for stability)
 
     @classmethod
     def ensure_download_folder_exists(cls) -> None:

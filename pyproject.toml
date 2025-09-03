@@ -25,6 +25,7 @@ faker = ">=18.0.0"
 extract-msg = ">=0.41.0"
 weasyprint = ">=60.0"
 pdfkit = ">=1.0.0"
+webdriver-manager = "^4.0.2"
 
 [tool.poetry.scripts]
 coupa-downloader = "src.main:main"

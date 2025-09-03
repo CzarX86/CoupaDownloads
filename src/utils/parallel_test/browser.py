@@ -14,8 +14,8 @@ from selenium import webdriver
 from selenium.webdriver.edge.options import Options as EdgeOptions
 from selenium.webdriver.edge.service import Service as EdgeService
 
-from .config import Config
-from .driver_manager import DriverManager
+from config import Config
+from driver_manager import DriverManager
 
 
 class BrowserManager:
@@ -121,77 +121,107 @@ class BrowserManager:
     
     def initialize_driver_with_download_dir(self, download_dir: str, headless: bool = False) -> webdriver.Edge:
         """Initialize the WebDriver with a specific download directory."""
-        try:
-            # Get driver path automatically (download if needed)
-            driver_path = self.driver_manager.get_driver_path()
-            
-            # Verify driver works
-            if not self.driver_manager.verify_driver(driver_path):
-                raise RuntimeError("EdgeDriver verification failed")
-            
-            options = self._create_browser_options(headless=headless, custom_download_dir=download_dir)
-            
-            # Configure service with log suppression
-            service = EdgeService(
-                executable_path=driver_path,
-                log_output=subprocess.DEVNULL if not Config.SHOW_SELENIUM_LOGS else None
-            )
-            
-            self.driver = webdriver.Edge(service=service, options=options)
-            print(f"✅ Using Edge WebDriver with download dir '{download_dir}': {driver_path}")
-            return self.driver
-        except Exception as e:
-            if "user data directory is already in use" in str(e):
-                print("⚠️ Profile directory is already in use. Falling back to default browser session.")
-                # Retry without profile options
-                options = self._create_browser_options_without_profile(headless=headless, custom_download_dir=download_dir)
+        max_retries = 3
+        retry_count = 0
+        
+        while retry_count < max_retries:
+            try:
+                # Get driver path automatically (download if needed)
+                driver_path = self.driver_manager.get_driver_path()
+                
+                # Verify driver works
+                if not self.driver_manager.verify_driver(driver_path):
+                    raise RuntimeError("EdgeDriver verification failed")
+                
+                options = self._create_browser_options(headless=headless, custom_download_dir=download_dir)
+                
+                # Configure service with log suppression
                 service = EdgeService(
                     executable_path=driver_path,
                     log_output=subprocess.DEVNULL if not Config.SHOW_SELENIUM_LOGS else None
                 )
+                
                 self.driver = webdriver.Edge(service=service, options=options)
-                print(f"✅ Using Edge WebDriver without profile (download dir '{download_dir}'): {driver_path}")
+                print(f"✅ Using Edge WebDriver with download dir '{download_dir}': {driver_path}")
                 return self.driver
-            else:
-                print(f"Driver initialization failed: {e}")
-                raise
+                
+            except Exception as e:
+                if "user data directory is already in use" in str(e):
+                    retry_count += 1
+                    print(f"⚠️ Profile directory is already in use (attempt {retry_count}/{max_retries})")
+                    
+                    if retry_count < max_retries:
+                        print("   🔄 Attempting to resolve profile conflict...")
+                        
+                        # Try to clean up any existing Edge processes
+                        self.cleanup_browser_processes()
+                        time.sleep(3)  # Wait for processes to close
+                        
+                        print("   🔄 Retrying with profile...")
+                        continue
+                    else:
+                        print("❌ ERROR: Could not resolve profile directory conflict after multiple attempts!")
+                        print("   Please ensure:")
+                        print("   1. All Edge browser windows are closed")
+                        print("   2. No other applications are using the Edge profile")
+                        print("   3. The profile directory is not locked by another process")
+                        print(f"   Profile directory: {Config.EDGE_PROFILE_DIR}")
+                        raise RuntimeError("Profile directory conflict could not be resolved. Please close Edge browser and try again.")
+                else:
+                    print(f"Driver initialization failed: {e}")
+                    raise
 
     def initialize_driver(self, headless: bool = False) -> webdriver.Edge:
         """Initialize the WebDriver with proper error handling. Supports headless mode."""
-        try:
-            # Get driver path automatically (download if needed)
-            driver_path = self.driver_manager.get_driver_path()
-            
-            # Verify driver works
-            if not self.driver_manager.verify_driver(driver_path):
-                raise RuntimeError("EdgeDriver verification failed")
-            
-            options = self._create_browser_options(headless=headless)
-            
-            # Configure service with log suppression
-            service = EdgeService(
-                executable_path=driver_path,
-                log_output=subprocess.DEVNULL if not Config.SHOW_SELENIUM_LOGS else None
-            )
-            
-            self.driver = webdriver.Edge(service=service, options=options)
-            print(f"✅ Using Edge WebDriver: {driver_path}")
-            return self.driver
-        except Exception as e:
-            if "user data directory is already in use" in str(e):
-                print("⚠️ Profile directory is already in use. Falling back to default browser session.")
-                # Retry without profile options
-                options = self._create_browser_options_without_profile(headless=headless)
+        max_retries = 3
+        retry_count = 0
+        
+        while retry_count < max_retries:
+            try:
+                # Get driver path automatically (download if needed)
+                driver_path = self.driver_manager.get_driver_path()
+                
+                # Verify driver works
+                if not self.driver_manager.verify_driver(driver_path):
+                    raise RuntimeError("EdgeDriver verification failed")
+                
+                options = self._create_browser_options(headless=headless)
+                
+                # Configure service with log suppression
                 service = EdgeService(
                     executable_path=driver_path,
                     log_output=subprocess.DEVNULL if not Config.SHOW_SELENIUM_LOGS else None
                 )
+                
                 self.driver = webdriver.Edge(service=service, options=options)
-                print(f"✅ Using Edge WebDriver without profile: {driver_path}")
+                print(f"✅ Using Edge WebDriver: {driver_path}")
                 return self.driver
-            else:
-                print(f"Driver initialization failed: {e}")
-                raise
+                
+            except Exception as e:
+                if "user data directory is already in use" in str(e):
+                    retry_count += 1
+                    print(f"⚠️ Profile directory is already in use (attempt {retry_count}/{max_retries})")
+                    
+                    if retry_count < max_retries:
+                        print("   🔄 Attempting to resolve profile conflict...")
+                        
+                        # Try to clean up any existing Edge processes
+                        self.cleanup_browser_processes()
+                        time.sleep(3)  # Wait for processes to close
+                        
+                        print("   🔄 Retrying with profile...")
+                        continue
+                    else:
+                        print("❌ ERROR: Could not resolve profile directory conflict after multiple attempts!")
+                        print("   Please ensure:")
+                        print("   1. All Edge browser windows are closed")
+                        print("   2. No other applications are using the Edge profile")
+                        print("   3. The profile directory is not locked by another process")
+                        print(f"   Profile directory: {Config.EDGE_PROFILE_DIR}")
+                        raise RuntimeError("Profile directory conflict could not be resolved. Please close Edge browser and try again.")
+                else:
+                    print(f"Driver initialization failed: {e}")
+                    raise
     
     def _create_browser_options_without_profile(self, headless: bool = False, custom_download_dir: Optional[str] = None) -> EdgeOptions:
         """Create browser options without profile selection (fallback method)."""
@@ -262,6 +292,48 @@ class BrowserManager:
             except Exception as e:
                 print(f"   ⚠️ Warning: Could not update download directory: {e}")
 
+    def create_tab_with_download_dir(self, download_dir: str) -> str:
+        """
+        Create a new tab with specific download directory configuration.
+        This is a workaround since Edge doesn't support dynamic download directory changes.
+        """
+        try:
+            # Create the download directory
+            os.makedirs(download_dir, exist_ok=True)
+            
+            # Create a new tab
+            self.driver.execute_script("window.open('');")
+            
+            # Switch to the new tab
+            new_tab_handle = self.driver.window_handles[-1]
+            self.driver.switch_to.window(new_tab_handle)
+            
+            # Set download directory for this tab using JavaScript
+            self.driver.execute_script(f"""
+                // Try to set download directory via localStorage
+                try {{
+                    localStorage.setItem('download.default_directory', '{download_dir}');
+                }} catch(e) {{
+                    console.log('Could not set localStorage:', e);
+                }}
+                
+                // Try to set via Chrome preferences (Edge uses Chrome's preference system)
+                try {{
+                    if (window.chrome && window.chrome.downloads) {{
+                        chrome.downloads.setShelfEnabled(false);
+                    }}
+                }} catch(e) {{
+                    console.log('Could not set Chrome preferences:', e);
+                }}
+            """)
+            
+            print(f"   📁 Created tab with download directory: {download_dir}")
+            return new_tab_handle
+            
+        except Exception as e:
+            print(f"   ⚠️ Error creating tab with download directory: {e}")
+            return None
+
     def cleanup(self) -> None:
         """Clean up browser processes and close driver."""
         self.cleanup_browser_processes()
@@ -300,101 +372,6 @@ class BrowserManager:
         else:
             raise RuntimeError("Failed to create new tab")
     
-    def close_current_tab(self) -> None:
-        """Close the current tab and switch back to the main tab."""
-        if not self.driver:
-            raise RuntimeError("Driver not initialized")
-        
-        try:
-            current_handle = self.driver.current_window_handle
-            all_handles = self.driver.window_handles
-            
-            if len(all_handles) <= 1:
-                print("⚠️ Only one tab remaining, cannot close")
-                return
-            
-            # Close current tab
-            self.driver.close()
-            print(f"🔒 Closed tab: {current_handle}")
-            
-            # Switch to the first remaining tab (should be the main tab)
-            remaining_handles = [h for h in all_handles if h != current_handle]
-            if remaining_handles:
-                self.driver.switch_to.window(remaining_handles[0])
-                print(f"🔄 Switched to main tab: {remaining_handles[0]}")
-            else:
-                print("⚠️ No remaining tabs to switch to")
-                
-        except Exception as e:
-            print(f"⚠️ Error closing tab: {e}")
-            # Try to switch to any available tab
-            try:
-                if self.driver.window_handles:
-                    self.driver.switch_to.window(self.driver.window_handles[0])
-                    print("🔄 Recovered by switching to first available tab")
-            except Exception as recovery_error:
-                print(f"❌ Could not recover from tab error: {recovery_error}")
-    
-    def switch_to_main_tab(self) -> None:
-        """Switch to the main tab (first tab)."""
-        if not self.driver:
-            raise RuntimeError("Driver not initialized")
-        
-        if self.driver.window_handles:
-            main_handle = self.driver.window_handles[0]
-            self.driver.switch_to.window(main_handle)
-            print(f"🔄 Switched to main tab: {main_handle}")
-    
-    def switch_to_tab(self, tab_handle: str) -> None:
-        """Switch to a specific tab by handle."""
-        if not self.driver:
-            raise RuntimeError("Driver not initialized")
-        
-        if tab_handle in self.driver.window_handles:
-            self.driver.switch_to.window(tab_handle)
-            print(f"🔄 Switched to tab: {tab_handle}")
-        else:
-            raise RuntimeError(f"Tab handle {tab_handle} not found")
-    
-    def keep_browser_open(self) -> None:
-        """Keep the browser open instead of closing it."""
-        if self.driver:
-            print("🌐 Keeping browser open for persistent login session")
-            print("💡 You can manually close the browser when done, or run the script again to continue processing")
-            # Don't call cleanup() - let the browser stay open
-        else:
-            print("ℹ️ No browser instance to keep open")
-    
-    def force_cleanup(self) -> None:
-        """Force cleanup and close browser (use when KEEP_BROWSER_OPEN is False)."""
-        self.cleanup()
-    
-    def is_browser_responsive(self) -> bool:
-        """Check if the browser is still responsive."""
-        if not self.driver:
-            return False
-        
-        try:
-            # Try to get the current URL to test responsiveness
-            self.driver.current_url
-            return True
-        except Exception:
-            return False
-    
-    def ensure_browser_responsive(self) -> bool:
-        """Ensure browser is responsive, try to recover if not."""
-        if not self.is_browser_responsive():
-            print("⚠️ Browser not responsive, attempting to recover...")
-            try:
-                # Try to switch to any available window
-                if self.driver and self.driver.window_handles:
-                    self.driver.switch_to.window(self.driver.window_handles[0])
-                    print("✅ Browser recovered")
-                    return True
-                else:
-                    print("❌ No windows available")
-                    return False
-            except Exception as e:
-                print(f"❌ Could not recover browser: {e}")
-                return False
-        return True 
+    def get_download_directory(self) -> str:
+        """Get the current download directory."""
+        return Config.DOWNLOAD_FOLDER

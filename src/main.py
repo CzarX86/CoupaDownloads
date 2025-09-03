@@ -1,249 +1,187 @@
-"""
-Main module for Coupa Downloads automation.
-Orchestrates the entire workflow using modular components with enhanced folder hierarchy.
-"""
-
 import os
-from core.browser import BrowserManager
-from core.config import Config
-from core.excel_processor import ExcelProcessor
-from core.downloader import DownloadManager, LoginManager
-from core.progress_manager import progress_manager
-from core.driver_manager import DriverManager
+import sys
+import random
+import time
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from selenium.common.exceptions import InvalidSessionIdException, NoSuchWindowException
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+
+# Add the project root to Python path
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, project_root)
+
+from src.core.browser import BrowserManager
+from src.core.config import Config
+from src.core.downloader import Downloader
+from src.core.excel_processor import ExcelProcessor
+from src.core.folder_hierarchy import FolderHierarchyManager
 
 
-class CoupaDownloader:
-    """Main orchestrator class following Single Responsibility Principle."""
-
+class MainApp:
     def __init__(self):
-        self.browser_manager = BrowserManager()
-        self.driver = None
-        self.download_manager = None
-        self.login_manager = None
         self.excel_processor = ExcelProcessor()
-        self.custom_download_folder = None
+        self.browser_manager = BrowserManager()
+        self.folder_hierarchy = FolderHierarchyManager()
+        self.driver = None
+        self.lock = threading.Lock()  # Thread safety for browser operations
 
-    def prompt_for_download_folder(self) -> str:
-        """Prompt user for download folder with fallback to default."""
-        import os
+    def initialize_browser_once(self):
+        """Initialize browser once and keep it open for all POs."""
+        if not self.driver:
+            print("🚀 Initializing browser for parallel processing...")
+            self.browser_manager.initialize_driver()
+            self.driver = self.browser_manager.driver
+            print("✅ Browser initialized successfully")
+
+    def process_single_po(self, po_data, hierarchy_cols, has_hierarchy_data, index, total):
+        """Process a single PO using a new tab in the existing browser."""
+        display_po = po_data['po_number']
+        po_number = po_data['po_number']
         
-        # Get current default download folder
-        default_folder = Config.DOWNLOAD_FOLDER
-        
-        print(f"📁 Current download folder: {default_folder}")
-        print("💡 Press Enter to use the default folder, or enter a custom path:")
+        print(f"📋 Processing PO {index+1}/{total}: {display_po}")
         
         try:
-            user_input = input("📂 Download folder path: ").strip()
+            # Create hierarchical folder structure
+            folder_path = self.folder_hierarchy.create_folder_path(
+                po_data, hierarchy_cols, has_hierarchy_data
+            )
+            print(f"   📁 Folder: {folder_path}")
             
-            if not user_input:
-                # User pressed Enter, use default
-                print(f"✅ Using default folder: {default_folder}")
-                return default_folder
-            
-            # User provided a custom path
-            custom_path = os.path.expanduser(user_input)  # Handle ~ for home directory
-            
-            # Validate the path
-            if os.path.exists(custom_path):
-                if os.path.isdir(custom_path):
-                    print(f"✅ Using custom folder: {custom_path}")
-                    return custom_path
-                else:
-                    print(f"❌ Path exists but is not a directory: {custom_path}")
-                    print(f"✅ Falling back to default folder: {default_folder}")
-                    return default_folder
-            else:
-                # Path doesn't exist, ask if user wants to create it
-                print(f"❌ Path doesn't exist: {custom_path}")
-                create_choice = input("Create this directory? (y/N): ").strip().lower()
+            # Create new tab for this PO
+            with self.lock:
+                # Open new tab
+                self.driver.execute_script("window.open('');")
+                # Switch to the new tab
+                self.driver.switch_to.window(self.driver.window_handles[-1])
                 
-                if create_choice in ['y', 'yes']:
-                    try:
-                        os.makedirs(custom_path, exist_ok=True)
-                        print(f"✅ Created and using custom folder: {custom_path}")
-                        return custom_path
-                    except Exception as e:
-                        print(f"❌ Failed to create directory: {e}")
-                        print(f"✅ Falling back to default folder: {default_folder}")
-                        return default_folder
-                else:
-                    print(f"✅ Using default folder: {default_folder}")
-                    return default_folder
-                    
-        except KeyboardInterrupt:
-            print("\n⏹️ User cancelled folder selection")
-            print(f"✅ Using default folder: {default_folder}")
-            return default_folder
-        except Exception as e:
-            print(f"❌ Error with folder input: {e}")
-            print(f"✅ Falling back to default folder: {default_folder}")
-            return default_folder
-
-    def setup(self) -> None:
-        """Setup the downloader with browser and managers."""
-        # Prompt user for download folder
-        self.custom_download_folder = self.prompt_for_download_folder()
-        
-        # Update Config with custom folder if provided
-        if self.custom_download_folder != Config.DOWNLOAD_FOLDER:
-            Config.DOWNLOAD_FOLDER = self.custom_download_folder
-        
-        # Ensure download folder exists
-        Config.ensure_download_folder_exists()
-
-        # Debug: Print driver detection info
-        print("🔍 Debug: Driver detection info")
-        driver_manager = DriverManager()
-        print(f"  Drivers directory: {driver_manager.drivers_dir}")
-        print(f"  Platform: {driver_manager.platform}")
-        
-        edge_version = driver_manager.get_edge_version()
-        print(f"  Edge version: {edge_version}")
-        
-        candidates = driver_manager._scan_local_drivers()
-        print(f"  Driver candidates: {candidates}")
-        
-        compatible = driver_manager._find_compatible_local_driver()
-        print(f"  Compatible driver: {compatible}")
-
-        # Start browser
-        self.driver = self.browser_manager.start(headless=Config.HEADLESS)
-
-        # Initialize managers
-        self.download_manager = DownloadManager(self.driver)
-        self.login_manager = LoginManager(self.driver)
-
-    def process_po_numbers(self) -> list:
-        """Process PO numbers from Excel file with hierarchy support."""
-        excel_file_path = self.excel_processor.get_excel_file_path()
-        
-        # Check if Excel file exists
-        if not os.path.exists(excel_file_path):
-            raise FileNotFoundError(f"Excel file not found: {excel_file_path}")
-        
-        try:
-            # Read Excel file with hierarchy analysis
-            po_entries, original_cols, hierarchy_cols, has_hierarchy_data = self.excel_processor.read_po_numbers_from_excel(excel_file_path)
+                # Update download directory for this tab
+                self.driver.execute_script(f"""
+                    window.localStorage.setItem('download.default_directory', '{folder_path}');
+                """)
+                
+                # Create downloader for this tab
+                downloader = Downloader(self.driver, self.browser_manager)
             
-            # Process and validate PO numbers
-            valid_entries = self.excel_processor.process_po_numbers(po_entries)
+            # Process the PO
+            success, message = downloader.download_attachments_for_po(po_number)
             
-            # Store hierarchy information for later use
-            self.hierarchy_cols = hierarchy_cols
-            self.has_hierarchy_data = has_hierarchy_data
-            self.po_entries = po_entries  # Store full PO data for hierarchy creation
-
-            # Limit number of POs processed if configured
-            if Config.PROCESS_MAX_POS is not None:
-                valid_entries = valid_entries[:Config.PROCESS_MAX_POS]
-                print(f"⚡ Limiting to top {Config.PROCESS_MAX_POS} POs for this run.")
-
-            if not valid_entries:
-                print("❌ No valid PO numbers provided.")
-                return []
-
-            print(f"📋 Processing {len(valid_entries)} PO(s)...")
-            if Config.VERBOSE_OUTPUT:
-                print(f"   PO list: {[entry[0] for entry in valid_entries]}")
-            return valid_entries
+            # Update status
+            self.excel_processor.update_po_status(
+                display_po, 
+                "Success" if success else "Error", 
+                error_message=message,
+                download_folder=folder_path
+            )
+            
+            # Close this tab and return to main tab
+            with self.lock:
+                self.driver.close()
+                self.driver.switch_to.window(self.driver.window_handles[0])
+            
+            print(f"   ✅ {display_po}: {message}")
+            return True
             
         except Exception as e:
-            print(f"❌ Error processing Excel file: {e}")
-            raise
-
-    def handle_login_first(self) -> bool:
-        """Handle login before processing POs."""
-        try:
-            print("🔐 Checking login status...")
-            if self.login_manager.is_logged_in():
-                print("✅ Already logged in")
-                return True
-            else:
-                print("🔐 Login required")
-                return self.login_manager.handle_login()
-        except Exception as e:
-            print(f"❌ Login error: {e}")
+            print(f"   ❌ Error processing {display_po}: {e}")
+            self.excel_processor.update_po_status(display_po, "Error", error_message=str(e))
+            
+            # Try to close tab and return to main tab
+            try:
+                with self.lock:
+                    if len(self.driver.window_handles) > 1:
+                        self.driver.close()
+                        self.driver.switch_to.window(self.driver.window_handles[0])
+            except:
+                pass
+                
             return False
 
     def run(self) -> None:
-        """Main execution method with enhanced folder hierarchy."""
+        """
+        Main execution loop for processing POs with parallel tabs.
+        """
+        os.makedirs(Config.INPUT_DIR, exist_ok=True)
+        os.makedirs(Config.DOWNLOAD_FOLDER, exist_ok=True)
+
         try:
-            # Setup
-            self.setup()
-            
-            # Get PO numbers to process
-            valid_entries = self.process_po_numbers()
-            
-            if not valid_entries:
-                print("❌ No valid PO numbers found to process")
-                return
-            
-            # Handle login if needed
-            if not self.handle_login_first():
-                print("❌ Login failed, cannot proceed")
-                return
-            
-            # Process each PO
-            for display_po, clean_po in valid_entries:
-                # Find the full PO data for hierarchy
-                po_data = self._find_po_data_by_number(display_po)
-                
-                if not po_data:
-                    print(f"⚠️ Could not find PO data for {display_po}, skipping")
-                    continue
-                
-                try:
-                    # Download attachments with hierarchy support
-                    downloaded_files = self.download_manager.download_attachments_for_po(
-                        display_po, clean_po, po_data, self.hierarchy_cols, self.has_hierarchy_data
-                    )
-                    
-                    # Log download results
-                    if downloaded_files:
-                        print(f"  📎 Downloaded {len(downloaded_files)} files for {display_po}")
-                    else:
-                        print(f"  📭 No files downloaded for {display_po}")
-                        
-                except Exception as e:
-                    if "login" in str(e).lower():
-                        print("🔐 Login required - attempting login...")
-                        if self.login_manager.handle_login():
-                            # Retry the download
-                            downloaded_files = self.download_manager.download_attachments_for_po(
-                                display_po, clean_po, po_data, self.hierarchy_cols, self.has_hierarchy_data
-                            )
-                        else:
-                            print("❌ Login retry failed")
-                    else:
-                        print(f"❌ Error processing {display_po}: {e}")
-            
-            # Print summary
-            self.excel_processor.print_summary_report()
-            
-        except KeyboardInterrupt:
-            print("\n⏹️ Process interrupted by user")
+            excel_path = self.excel_processor.get_excel_file_path()
+            po_entries, original_cols, hierarchy_cols, has_hierarchy_data = self.excel_processor.read_po_numbers_from_excel(excel_path)
+            valid_entries = self.excel_processor.process_po_numbers(po_entries)
         except Exception as e:
-            print(f"❌ Unexpected error: {e}")
-            import traceback
-            traceback.print_exc()
-        finally:
-            if self.driver and Config.CLOSE_BROWSER_AFTER_EXECUTION:
-                self.driver.quit()
+            print(f"❌ Failed to read or process Excel file: {e}")
+            return
 
-    def _find_po_data_by_number(self, po_number: str) -> dict:
-        """Find PO data by PO number from the stored entries."""
-        for entry in self.po_entries:
-            if entry['po_number'] == po_number:
-                return entry
-        return None
+        if not valid_entries:
+            print("No valid PO entries found to process.")
+            return
 
+        print(f"Found {len(valid_entries)} POs to process.")
 
-def main():
-    """Main entry point."""
-    downloader = CoupaDownloader()
-    downloader.run()
+        if Config.RANDOM_SAMPLE_POS and Config.RANDOM_SAMPLE_POS > 0:
+            k = min(Config.RANDOM_SAMPLE_POS, len(valid_entries))
+            print(f"Sampling {k} random POs for processing...")
+            valid_entries = random.sample(valid_entries, k)
+
+        # Initialize browser once
+        self.initialize_browser_once()
+        
+        # Convert to list of PO data
+        po_data_list = []
+        for display_po, po_number in valid_entries:
+            for entry in po_entries:
+                if entry['po_number'] == display_po:
+                    po_data_list.append(entry)
+                    break
+
+        print(f"🚀 Starting parallel processing with {len(po_data_list)} POs...")
+        print("📊 Using browser tabs for parallel downloads")
+        
+        # Process POs with parallel tabs
+        max_workers = min(5, len(po_data_list))  # Max 5 concurrent tabs
+        successful = 0
+        failed = 0
+        
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # Submit all tasks
+            future_to_po = {
+                executor.submit(self.process_single_po, po_data, hierarchy_cols, has_hierarchy_data, i, len(po_data_list)): po_data
+                for i, po_data in enumerate(po_data_list)
+            }
+            
+            # Process completed tasks
+            for future in as_completed(future_to_po):
+                po_data = future_to_po[future]
+                try:
+                    result = future.result()
+                    if result:
+                        successful += 1
+                    else:
+                        failed += 1
+                except Exception as e:
+                    print(f"❌ Exception in {po_data['po_number']}: {e}")
+                    failed += 1
+
+        print("-" * 60)
+        print(f"🎉 Processing complete!")
+        print(f"✅ Successful: {successful}")
+        print(f"❌ Failed: {failed}")
+        print(f"📊 Total: {successful + failed}")
+
+    def close(self):
+        """Close the browser properly."""
+        if self.driver:
+            print("🔄 Closing browser...")
+            self.browser_manager.cleanup()
+            self.driver = None
+            print("✅ Browser closed successfully")
 
 
 if __name__ == "__main__":
-    main()
+    app = MainApp()
+    try:
+        app.run()
+    finally:
+        app.close()
