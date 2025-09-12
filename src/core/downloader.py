@@ -99,7 +99,7 @@ class Downloader:
             # 2) Fallback por extensão no href
             ext_css = [
                 "a[href$='.pdf']", "a[href$='.docx']", "a[href$='.xlsx']",
-                "a[href$='.msg']", "a[href$='.zip']", "a[href$='.jpg']", "a[href$='.png']",
+                "a[href$='.msg']", "a[href$='.eml']", "a[href$='.zip']", "a[href$='.jpg']", "a[href$='.png']",
             ]
             for sel in direct_css + ext_css:
                 try:
@@ -111,7 +111,7 @@ class Downloader:
             xpath_expr = (
                 "//a[contains(@href,'attachment') or contains(@href,'download') or "
                 "contains(@href,'.pdf') or contains(@href,'.docx') or contains(@href,'.xlsx') or "
-                "contains(@href,'.msg') or contains(@href,'.zip') or contains(@href,'.jpg') or contains(@href,'.png')]"
+                "contains(@href,'.msg') or contains(@href,'.eml') or contains(@href,'.zip') or contains(@href,'.jpg') or contains(@href,'.png')]"
             )
             try:
                 candidates.extend(self.driver.find_elements(By.XPATH, xpath_expr))

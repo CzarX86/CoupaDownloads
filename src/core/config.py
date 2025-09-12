@@ -18,7 +18,7 @@ class Config:
     DOWNLOAD_FOLDER = os.path.expanduser("~/Downloads/CoupaDownloads")
 
     # File settings
-    ALLOWED_EXTENSIONS: List[str] = [".pdf", ".msg", ".docx", ".xlsx", ".txt", ".jpg", ".png", ".zip", ".rar", ".csv", ".xml"]
+    ALLOWED_EXTENSIONS: List[str] = [".pdf", ".msg", ".eml", ".docx", ".xlsx", ".txt", ".jpg", ".png", ".zip", ".rar", ".csv", ".xml"]
 
     # Environment variables with defaults
     PAGE_DELAY = float(os.environ.get("PAGE_DELAY", "0"))
@@ -41,7 +41,7 @@ class Config:
     }
 
     # CSS Selectors
-    ATTACHMENT_SELECTOR = "span[aria-label*='file attachment'], span[role='button'][aria-label*='file attachment'], span[title*='.pdf'], span[title*='.docx'], span[title*='.msg']"
+    ATTACHMENT_SELECTOR = "span[aria-label*='file attachment'], span[role='button'][aria-label*='file attachment'], span[title*='.pdf'], span[title*='.docx'], span[title*='.msg'], span[title*='.eml']"
     SUPPLIER_NAME_CSS_SELECTORS = [
         "span[data-supplier-name]",
         "span[class*='supplier-name']",
