@@ -27,58 +27,114 @@ class Downloader:
         attachment: WebElement,
     ) -> Optional[str]:
         """
-        Extracts a filename from a Selenium WebElement using multiple strategies.
-        This version is corrected to handle more edge cases.
+        Extract a filename using prioritized attributes and sanitize result.
+        Order: download -> title -> aria-label -> visible text -> href basename.
         """
-        # Strategy 1: Check text content for a filename with a valid extension
-        text_content = attachment.text.strip()
-        if text_content and any(
-            ext in text_content.lower() for ext in Config.ALLOWED_EXTENSIONS
-        ):
-            return text_content
+        def to_anchor(el: WebElement) -> WebElement:
+            try:
+                return el.find_element(By.XPATH, './ancestor-or-self::a[1]')
+            except Exception:
+                return el
 
-        # Strategy 2: Check 'aria-label' for descriptive text
-        aria_label = attachment.get_attribute("aria-label")
-        if aria_label and "file attachment" in aria_label:
-            filename = aria_label.split("file attachment")[0].strip()
-            if filename:  # Ensure it's not empty
-                return filename
+        def sanitize(name: str) -> str:
+            import re
+            cleaned = re.sub(r'[<>:"/\\|?*\s]+', '_', name).strip('_').rstrip('._')
+            return cleaned[:150]
 
-        # Strategy 3: Check 'title' attribute
-        title = attachment.get_attribute("title")
-        if title:
-            # Check if title itself could be a filename
-            if any(ext in title.lower() for ext in Config.ALLOWED_EXTENSIONS):
-                return title
+        el = to_anchor(attachment)
+        allowed = tuple(ext.lower() for ext in Config.ALLOWED_EXTENSIONS)
 
-        # Strategy 4: Check 'href' for a downloadable link
-        href = attachment.get_attribute("href")
-        if href and href.strip() not in ("#", ""):
-            # Check if the href contains something that looks like a file
-            basename = os.path.basename(href)
-            if "." in basename:  # A simple check for an extension
-                return basename
+        # 1) download/title/aria-label attributes
+        for source in ('download', 'title', 'aria-label'):
+            try:
+                val = (el.get_attribute(source) or '').strip()
+            except Exception:
+                val = ''
+            if val and any(val.lower().endswith(allowed_ext) for allowed_ext in allowed):
+                return sanitize(val)
 
+        # 2) visible text
+        try:
+            txt = (el.text or '').strip()
+        except Exception:
+            txt = ''
+        if txt and any(txt.lower().endswith(allowed_ext) for allowed_ext in allowed):
+            return sanitize(txt)
+
+        # 3) href basename
+        try:
+            href = (el.get_attribute('href') or '').strip()
+        except Exception:
+            href = ''
+        if href and href not in ('#', ''):
+            base = os.path.basename(href)
+            if any(base.lower().endswith(allowed_ext) for allowed_ext in allowed):
+                return sanitize(base)
         return None
 
     def _find_attachments(self) -> List[WebElement]:
         """
-        Waits for and finds all attachment elements on the page using a robust
-        WebDriverWait as proven effective in tests.
+        Find attachment candidates combining the existing base selector with
+        additional robust fallbacks; deduplicate by href/id.
         """
+        candidates: List[WebElement] = []
+        # 0) Original base selector with wait
         try:
             WebDriverWait(self.driver, Config.ATTACHMENT_WAIT_TIMEOUT).until(
-                EC.presence_of_element_located(
-                    (By.CSS_SELECTOR, Config.ATTACHMENT_SELECTOR)
-                )
+                EC.presence_of_element_located((By.CSS_SELECTOR, Config.ATTACHMENT_SELECTOR))
             )
-            attachments = self.driver.find_elements(
-                By.CSS_SELECTOR, Config.ATTACHMENT_SELECTOR
+            candidates.extend(
+                self.driver.find_elements(By.CSS_SELECTOR, Config.ATTACHMENT_SELECTOR)
             )
-            print(f"   ─ Found {len(attachments)} potential attachment(s).")
-            return attachments
         except TimeoutException:
-            print("   ⚠ Timed out waiting for attachments to appear.")
+            print("   ⚠ Timed out on base selector. Trying extended selectors…")
+
+        try:
+            # 1) Âncoras diretas (padrões comuns Coupa)
+            direct_css = [
+                "a[href*='attachment_file']",
+                "a[href*='attachment']",
+                "a[href*='download']",
+            ]
+            # 2) Fallback por extensão no href
+            ext_css = [
+                "a[href$='.pdf']", "a[href$='.docx']", "a[href$='.xlsx']",
+                "a[href$='.msg']", "a[href$='.zip']", "a[href$='.jpg']", "a[href$='.png']",
+            ]
+            for sel in direct_css + ext_css:
+                try:
+                    candidates.extend(self.driver.find_elements(By.CSS_SELECTOR, sel))
+                except Exception:
+                    pass
+
+            # 3) XPath de reforço
+            xpath_expr = (
+                "//a[contains(@href,'attachment') or contains(@href,'download') or "
+                "contains(@href,'.pdf') or contains(@href,'.docx') or contains(@href,'.xlsx') or "
+                "contains(@href,'.msg') or contains(@href,'.zip') or contains(@href,'.jpg') or contains(@href,'.png')]"
+            )
+            try:
+                candidates.extend(self.driver.find_elements(By.XPATH, xpath_expr))
+            except Exception:
+                pass
+
+            # Deduplicar por href + id
+            seen = set()
+            unique: List[WebElement] = []
+            for el in candidates:
+                try:
+                    href = (el.get_attribute('href') or '').strip()
+                except Exception:
+                    href = ''
+                key = (href, getattr(el, 'id', id(el)))
+                if key in seen:
+                    continue
+                seen.add(key)
+                unique.append(el)
+            print(f"   ─ Found {len(unique)} potential attachment candidate(s).")
+            return unique
+        except Exception as e:
+            print(f"   ⚠ Attachment discovery fallback failed: {e}")
             return []
 
     def _download_attachment(self, attachment: WebElement, filename: str) -> bool:

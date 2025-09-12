@@ -235,8 +235,8 @@ def _interactive_setup() -> None:
     os.environ['PROC_WORKERS'] = str(procs_int)
     os.environ.setdefault('PROC_WORKERS_CAP', '3')
 
-    # 4) Headless mode
-    headless = _prompt_bool("Run browser in headless mode?", default=False)
+    # 4) Headless mode (default: Yes)
+    headless = _prompt_bool("Run browser in headless mode?", default=True)
     os.environ['HEADLESS'] = 'true' if headless else 'false'
 
     # 5) Driver selection
@@ -392,14 +392,14 @@ class MainApp:
                 # Wait for downloads to complete before finalizing folder name
                 self._wait_for_downloads_complete(folder_path)
 
-                # Rename folder to include status suffix after completion
-                final_status = "Success" if success else "Error"
-                final_folder = self._rename_folder_with_status(folder_path, final_status)
+                # Derive unified status and rename folder with standardized suffix
+                status_code = _derive_status_label(success, message)
+                final_folder = _rename_folder_with_status(folder_path, status_code)
 
                 # Update status with the final folder path
                 self.excel_processor.update_po_status(
-                    display_po, 
-                    final_status, 
+                    display_po,
+                    status_code,
                     error_message=message,
                     download_folder=final_folder
                 )
@@ -409,7 +409,8 @@ class MainApp:
             
         except Exception as e:
             print(f"   ❌ Error processing {display_po}: {e}")
-            self.excel_processor.update_po_status(display_po, "Error", error_message=str(e))
+            # Use unified FAILED status on exceptions in sequential mode
+            self.excel_processor.update_po_status(display_po, "FAILED", error_message=str(e))
             
             # Clean up browser state: close any extra tabs and return to main tab
             try:
