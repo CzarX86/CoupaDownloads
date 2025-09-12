@@ -126,7 +126,17 @@ class DownloadControlManager:
         if not tab_downloads:
             return True  # No downloads means tab is complete
         
-        return all(record.status in ["COMPLETED", "ERROR"] for record in tab_downloads)
+        # Check if all downloads are in final states
+        completed_downloads = sum(1 for record in tab_downloads if record.status in ["COMPLETED", "ERROR"])
+        total_downloads = len(tab_downloads)
+        
+        if completed_downloads == total_downloads:
+            print(f"   📊 Tab {tab_id}: {completed_downloads}/{total_downloads} downloads completed")
+            return True
+        else:
+            downloading_downloads = sum(1 for record in tab_downloads if record.status == "DOWNLOADING")
+            print(f"   📊 Tab {tab_id}: {completed_downloads}/{total_downloads} completed, {downloading_downloads} downloading")
+            return False
     
     def is_po_complete(self, po_number: str) -> bool:
         """Check if all downloads for a PO are completed."""
@@ -140,7 +150,7 @@ class DownloadControlManager:
         """Get all downloads for a specific PO."""
         return [record for record in self.downloads.values() if record.po_number == po_number]
     
-    def move_completed_po_files(self, po_number: str, excel_processor=None) -> bool:
+    def move_completed_po_files(self, po_number: str, excel_processor=None, base_download_dir=None) -> bool:
         """Move all completed files for a PO to their final hierarchical folders."""
         po_downloads = self.get_po_downloads(po_number)
 
@@ -170,12 +180,15 @@ class DownloadControlManager:
                 if po_data and has_hierarchy_data:
                     # Create hierarchical folder path with final status
                     from folder_hierarchy import FolderHierarchyManager
-                    folder_manager = FolderHierarchyManager()
+                    folder_manager = FolderHierarchyManager(base_download_dir)
                     hierarchical_folder = folder_manager.create_folder_path(po_data, hierarchy_cols, True, final_status)
                     print(f"   📁 Using hierarchical folder: {hierarchical_folder}")
                 else:
                     # Fallback to simple folder with final status
-                    hierarchical_folder = f"/Users/juliocezar/Downloads/CoupaDownloads/{po_number}_{final_status}"
+                    if base_download_dir:
+                        hierarchical_folder = os.path.join(base_download_dir, "CoupaDownloads", f"{po_number}_{final_status}")
+                    else:
+                        hierarchical_folder = f"/Users/juliocezar/Downloads/CoupaDownloads/{po_number}_{final_status}"
                     print(f"   📁 Using fallback folder: {hierarchical_folder}")
                     
             except Exception as e:
@@ -183,7 +196,10 @@ class DownloadControlManager:
                 hierarchical_folder = f"/Users/juliocezar/Downloads/CoupaDownloads/{po_number}"
         else:
             # No Excel processor, use simple folder
-            hierarchical_folder = f"/Users/juliocezar/Downloads/CoupaDownloads/{po_number}"
+            if base_download_dir:
+                hierarchical_folder = os.path.join(base_download_dir, "CoupaDownloads", po_number)
+            else:
+                hierarchical_folder = f"/Users/juliocezar/Downloads/CoupaDownloads/{po_number}"
 
         print(f"   📦 Moving files for PO {po_number} to final folders...")
 
@@ -212,7 +228,10 @@ class DownloadControlManager:
                     new_filename = f"{po_number}_{actual_filename}"
                     
                     # Look for the file in the temporary download folder
-                    temp_file_path = os.path.join(Config.DOWNLOAD_FOLDER, actual_filename)
+                    if base_download_dir:
+                        temp_file_path = os.path.join(base_download_dir, "CoupaDownloads", "Temp", actual_filename)
+                    else:
+                        temp_file_path = os.path.join(Config.DOWNLOAD_FOLDER, actual_filename)
                     
                     if os.path.exists(temp_file_path):
                         final_file_path = os.path.join(final_folder, new_filename)
@@ -238,8 +257,13 @@ class DownloadControlManager:
                     else:
                         print(f"      ⚠️ File not found in temp folder: {temp_file_path}")
                         # List files in temp folder for debugging
-                        if os.path.exists(Config.DOWNLOAD_FOLDER):
-                            files_in_temp = os.listdir(Config.DOWNLOAD_FOLDER)
+                        if base_download_dir:
+                            temp_folder = os.path.join(base_download_dir, "CoupaDownloads", "Temp")
+                        else:
+                            temp_folder = Config.DOWNLOAD_FOLDER
+                        
+                        if os.path.exists(temp_folder):
+                            files_in_temp = os.listdir(temp_folder)
                             print(f"         📁 Files in temp folder: {files_in_temp[:5]}...")
                         
             except Exception as e:

@@ -150,8 +150,13 @@ class FolderHierarchyManager:
         return folder_path
     
     def _should_add_status_suffix(self, status: str) -> bool:
-        """Determine if status suffix should be added to PO folder name."""
-        # Don't add suffix for these statuses
+        """Determine if status suffix should be added to PO folder name.
+
+        Controlled by Config.ADD_STATUS_SUFFIX (default False). When enabled,
+        appends suffix only for non-final states different from PENDING/COMPLETED.
+        """
+        if not Config.ADD_STATUS_SUFFIX:
+            return False
         no_suffix_statuses = ['PENDING', 'COMPLETED']
         return status not in no_suffix_statuses
     

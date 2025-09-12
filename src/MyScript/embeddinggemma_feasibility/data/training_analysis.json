@@ -1,0 +1,681 @@
+{
+  "field_patterns": {
+    "pwo_number": [
+      "PWO[#\\s]*(\\d+)",
+      "(\\d{6,})"
+    ],
+    "platform_technology": [],
+    "high_level_scope": [
+      "(UNILEVER\\ TERADATA\\ AM.*?)",
+      "(Cornerstone\\ Learning.*?)",
+      "(Renewal\\ of\\ Veeva\\ Qua.*?)",
+      "(\\ Subscription\\ to\\ Cou.*?)",
+      "(Pega\\ License\\ for\\ 202.*?)",
+      "(Subscription\\ for\\ Col.*?)",
+      "(MDM\\ Cloud\\ Edition\\ \\-P.*?)",
+      "(Support\\ services\\ for.*?)",
+      "(\\ ADOBE\\ COMMERCE:\\ CLO.*?)",
+      "(Blackine\\ Saas\\ Subscr.*?)"
+    ],
+    "contract_name": [
+      "(Software\\ License.*?)",
+      "(Software\\ License\\ Rev.*?)",
+      "(Google\\ workspace\\ Oct.*?)",
+      "(Jira\\ License\\ Mar\\ 25\\ .*?)",
+      "(Subscription\\ for\\ Col.*?)",
+      "(\\ ADOBE\\ COMMERCE:\\ CLO.*?)",
+      "(Vault\\ QualityOne\\ ELA.*?)",
+      "(Solution\\ and\\ Enterpr.*?)",
+      "(Pega\\ License\\ for\\ 202.*?)",
+      "(Managed\\ Services\\ for.*?)"
+    ],
+    "contract_type": [
+      "(SOW)",
+      "(Other)",
+      "(Contract)",
+      "(Invoice)",
+      "(Not\\ found)",
+      "(No\\ Sow\\ Attached)",
+      "(Demand\\ Detail)",
+      "(CR)",
+      "(Quotation)",
+      "(Order\\ Form)",
+      "(CTC)",
+      "(Ammendement)",
+      "(PWO)",
+      "(Schedule)",
+      "(Quote)"
+    ],
+    "contract_start_date": [],
+    "contract_end_date": [],
+    "managed_by": [
+      "(SAM)",
+      "(SL)"
+    ],
+    "sow_value_eur": [],
+    "sow_currency": [
+      "(Euro)",
+      "(TRY)",
+      "(IDR)",
+      "(EUR)",
+      "(AUD)",
+      "(INR)",
+      "(Eur)",
+      "(VND)",
+      "(USD)",
+      "(GBP)"
+    ],
+    "sow_value_lc": [],
+    "fx": [],
+    "type_of_contract_l1": [],
+    "type_of_contract_l2": [],
+    "user_based_license": [],
+    "contractual_commercial_model": []
+  },
+  "value_distributions": {
+    "pwo_number": {
+      "unique_count": 116,
+      "most_common": {
+        "Not found": 24,
+        "CW67101": 6,
+        "4948686": 4,
+        "unable to read the contract as it is not in English": 3,
+        "Q-152456": 3
+      },
+      "avg_length": 10.817073170731707,
+      "sample_values": [
+        "Demand Number: 10000",
+        "10122011JF01",
+        "4948686",
+        "QUO-002307",
+        "16171",
+        "Schedule #01 - CLS AI+SIT ",
+        "2024-12-01 00:00:00",
+        "ID0039692",
+        "Uni-SOW-1",
+        "DR3345713"
+      ]
+    },
+    "platform_technology": {
+      "unique_count": 129,
+      "most_common": {
+        "DDT": 11,
+        "Cybersecurity": 10,
+        "SAP": 8,
+        "Oracle": 7,
+        "Factory Cyber Security Programme": 5
+      },
+      "avg_length": 12.779220779220779,
+      "sample_values": [
+        "Workday",
+        "Quality One ELA",
+        " PEGA application",
+        "Cloud Services",
+        "Blackline",
+        "Google workspace",
+        "Jira",
+        "Adobe",
+        "MDM Cloud ",
+        "Coupa"
+      ]
+    },
+    "high_level_scope": {
+      "unique_count": 176,
+      "most_common": {
+        "License renewal": 7,
+        "Software License": 7,
+        "SaaS Service Renewal": 6,
+        "OT Cyber Security Trusted Advisory": 4,
+        "SaaS Service": 4
+      },
+      "avg_length": 56.582608695652176,
+      "sample_values": [
+        "Support services for workday",
+        "Renewal of Veeva Quality",
+        "Pega License for 2025",
+        "Subscription for Collections Cloud \u2013 Demand No. 398",
+        "Blackine Saas Subscription Fees",
+        " ADOBE COMMERCE: CLOUD BUNDLE",
+        "MDM Cloud Edition -Premium Success Subscription",
+        " Subscription to Coupa",
+        "UNILEVER TERADATA AM Managed Service contract renewal : 4TH JUNE 2024 \u2013 31ST AUG 2025",
+        "Cornerstone Learning - Year 2"
+      ]
+    },
+    "contract_name": {
+      "unique_count": 221,
+      "most_common": {
+        "Quotation": 5,
+        "OT Cyber Security Trusted Advisory": 3,
+        "MaxAttention Increase Notification Letter - 2024": 3,
+        "Data Operations Services": 3,
+        "UAL ADMS and SAP Support -1 June 2011 \u2013 31 May 2015": 2
+      },
+      "avg_length": 38.476,
+      "sample_values": [
+        "Managed Services for Workday and other HR applications",
+        "Software License Review",
+        "Software License",
+        "Vault QualityOne ELA",
+        "Pega License for 2025",
+        "Subscription for Collections Cloud \u2013 Demand No. 398",
+        "Solution and Enterprise pack",
+        "Google workspace Oct'2022 to Oct'2026",
+        "Jira License Mar 25 - Mar 26",
+        " ADOBE COMMERCE: CLOUD BUNDLE"
+      ]
+    },
+    "contract_type": {
+      "unique_count": 15,
+      "most_common": {
+        "SOW": 140,
+        "Order Form": 60,
+        "Quote": 16,
+        "CR": 7,
+        "Other": 7
+      },
+      "avg_length": 5.220408163265306,
+      "sample_values": [
+        "SOW",
+        "SOW",
+        "Quote",
+        "Order Form",
+        "Demand Detail",
+        "Order Form",
+        "Quote",
+        "Quote",
+        "SOW",
+        "Quote"
+      ]
+    },
+    "contract_start_date": {
+      "unique_count": 112,
+      "most_common": {
+        "2025-01-01 00:00:00": 46,
+        "2025-07-01 00:00:00": 13,
+        "2025-04-01 00:00:00": 13,
+        "2024-01-01 00:00:00": 5,
+        "2024-10-01 00:00:00": 5
+      },
+      "avg_length": 18.91869918699187,
+      "sample_values": [
+        "2023-11-01 00:00:00",
+        "2023-12-31 00:00:00",
+        "2025-01-07 00:00:00",
+        "2025-03-01 00:00:00",
+        "2025-01-01 00:00:00",
+        "2024-12-31 00:00:00",
+        "2022-10-01 00:00:00",
+        "2025-03-01 00:00:00",
+        "2024-03-01 00:00:00",
+        "2022-01-01 00:00:00"
+      ]
+    },
+    "contract_end_date": {
+      "unique_count": 93,
+      "most_common": {
+        "2025-12-31 00:00:00": 64,
+        "2025-03-31 00:00:00": 13,
+        "2025-06-30 00:00:00": 13,
+        "2025-09-30 00:00:00": 13,
+        "2026-12-31 00:00:00": 8
+      },
+      "avg_length": 18.91869918699187,
+      "sample_values": [
+        "2026-12-31 00:00:00",
+        "2026-12-31 00:00:00",
+        "2025-12-31 00:00:00",
+        "2026-02-28 00:00:00",
+        "2025-12-31 00:00:00",
+        "2025-12-31 00:00:00",
+        "2026-10-01 00:00:00",
+        "2026-03-01 00:00:00",
+        "2027-02-28 00:00:00",
+        "2025-01-01 00:00:00"
+      ]
+    },
+    "managed_by": {
+      "unique_count": 2,
+      "most_common": {
+        "SL": 244,
+        "SAM": 2
+      },
+      "avg_length": 2.008130081300813,
+      "sample_values": [
+        "SL",
+        "SL",
+        "SL",
+        "SL",
+        "SL",
+        "SL",
+        "SL",
+        "SL",
+        "SL",
+        "SL"
+      ]
+    },
+    "sow_value_eur": {
+      "unique_count": 182,
+      "most_common": {
+        "2807654.302741359": 3,
+        "359355.66000000003": 3,
+        "321811.68057210965": 2,
+        "1565407.0": 2,
+        "809818.2359952325": 2
+      },
+      "avg_length": 14.049261083743842,
+      "sample_values": [
+        "3960775.720390051",
+        "21505101.215733018",
+        "3532282.669845054",
+        "1464736.4999999998",
+        "3048316.0",
+        "2204117.486187845",
+        "3497700.0",
+        "7834642.908224077",
+        "2938904.23572744",
+        "6379404.788213627"
+      ]
+    },
+    "sow_currency": {
+      "unique_count": 10,
+      "most_common": {
+        "GBP": 89,
+        "EUR": 65,
+        "USD": 46,
+        "INR": 16,
+        "Euro": 9
+      },
+      "avg_length": 3.0384615384615383,
+      "sample_values": [
+        "INR",
+        "GBP",
+        "GBP",
+        "USD",
+        "EUR",
+        "USD",
+        "EUR",
+        "GBP",
+        "USD",
+        "USD"
+      ]
+    },
+    "sow_value_lc": {
+      "unique_count": 202,
+      "most_common": {
+        "359355.66000000003": 3,
+        "2355621.96": 3,
+        "1056165.0": 3,
+        "3649403.91": 3,
+        "224835362.0": 2
+      },
+      "avg_length": 8.931623931623932,
+      "sample_values": [
+        "361500000.0",
+        "18042779.92",
+        "2963585.16",
+        "1350000.0",
+        "3048316.0",
+        "2393671.59",
+        "3497700.0",
+        "6573265.4",
+        "3191650.0",
+        "6928033.6"
+      ]
+    },
+    "fx": {
+      "unique_count": 6,
+      "most_common": {
+        "0.839": 89,
+        "1.0": 75,
+        "1.086": 46,
+        "91.27": 16,
+        "36.67058": 4
+      },
+      "avg_length": 4.422413793103448,
+      "sample_values": [
+        "91.27",
+        "0.839",
+        "0.839",
+        "1.086",
+        "1.0",
+        "1.086",
+        "1.0",
+        "0.839",
+        "1.086",
+        "1.086"
+      ]
+    },
+    "type_of_contract_l1": {
+      "unique_count": 4,
+      "most_common": {
+        "IT Services": 164,
+        "IT Software": 95,
+        "IT Hardware": 1,
+        "Not found": 1
+      },
+      "avg_length": 10.992337164750959,
+      "sample_values": [
+        "IT Services",
+        "IT Software",
+        "IT Software",
+        "IT Software",
+        "IT Software",
+        "IT Services",
+        "IT Software",
+        "IT Services",
+        "IT Services",
+        "IT Software"
+      ]
+    },
+    "type_of_contract_l2": {
+      "unique_count": 24,
+      "most_common": {
+        "AM services": 49,
+        "AD services": 45,
+        "SaaS/Subscription": 43,
+        "Licenses": 33,
+        "PMO/Project Management/Staff Aug.": 28
+      },
+      "avg_length": 15.811764705882354,
+      "sample_values": [
+        "AM services",
+        "Licenses",
+        "Licenses",
+        "Licenses",
+        "Licenses",
+        "Cloud Hosting services",
+        "SaaS/Subscription",
+        "Cloud Hosting services",
+        "SaaS/Subscription",
+        "SaaS/Subscription"
+      ]
+    },
+    "user_based_license": {
+      "unique_count": 5,
+      "most_common": {
+        "No": 125,
+        "Yes": 43,
+        "yes": 5,
+        "Yes(4500 active User)": 1,
+        "Not found": 1
+      },
+      "avg_length": 2.422857142857143,
+      "sample_values": [
+        "No",
+        "Yes",
+        "Yes",
+        "Yes",
+        "Yes",
+        "Yes(4500 active User)",
+        "No",
+        "No",
+        "No",
+        "No"
+      ]
+    },
+    "contractual_commercial_model": {
+      "unique_count": 6,
+      "most_common": {
+        "Fixed": 151,
+        "T&M": 46,
+        "Others": 37,
+        "Managed Services": 3,
+        "No": 2
+      },
+      "avg_length": 4.9,
+      "sample_values": [
+        "Fixed",
+        "Fixed",
+        "Fixed",
+        "Others",
+        "Fixed",
+        "Fixed",
+        "Others",
+        "Fixed",
+        "Fixed",
+        "Fixed"
+      ]
+    }
+  },
+  "improved_patterns": {
+    "pwo_number": [
+      "PWO[#\\s]*(\\d+)",
+      "(\\d{6,})",
+      "Demand Number:\\s*(\\d+)"
+    ],
+    "contract_type": [
+      "(SOW)",
+      "(CR)",
+      "(Subs Order form)",
+      "(Quote)",
+      "(Statement of Work)"
+    ],
+    "managed_by": [
+      "(SL)",
+      "(VMO)",
+      "(SAM)",
+      "(Business)"
+    ],
+    "sow_currency": [
+      "(EUR)",
+      "(USD)",
+      "(GBP)",
+      "(INR)",
+      "(BRL)"
+    ],
+    "contract_name": [
+      "(?:Contract|Agreement|SOW|Statement of Work)[\\s\\w]*?[:]\\s*([^\\n\\r]+)",
+      "(?:Title|Name)[\\s\\w]*?[:]\\s*([^\\n\\r]+)",
+      "([A-Z][^.]*?(?:Contract|Agreement|SOW|Services|License))"
+    ],
+    "platform_technology": [
+      "(?:Platform|Technology)[\\s\\w]*?[:]\\s*([^\\n\\r]+)",
+      "(Workday|SAP|Oracle|Microsoft|IBM|AWS|Azure|Google)",
+      "([A-Z][^.]*?(?:Platform|Technology|Services|Software))"
+    ]
+  },
+  "training_prompts": [
+    {
+      "contract_name": "Managed Services for Workday and other HR applications",
+      "contract_type": "SOW",
+      "pwo_number": "Demand Number: 10000",
+      "platform_technology": "Workday",
+      "managed_by": "SL",
+      "sow_currency": "INR",
+      "sow_value_eur": "3960775.720390051",
+      "contract_start_date": "2023-11-01 00:00:00",
+      "contract_end_date": "2026-12-31 00:00:00"
+    },
+    {
+      "contract_name": "Software License Review",
+      "contract_type": "SOW",
+      "pwo_number": "10122011JF01",
+      "managed_by": "SL",
+      "sow_currency": "GBP",
+      "sow_value_eur": "21505101.215733018",
+      "contract_start_date": "2023-12-31 00:00:00",
+      "contract_end_date": "2026-12-31 00:00:00"
+    },
+    {
+      "contract_name": "Software License",
+      "contract_type": "Quote",
+      "pwo_number": "4948686",
+      "managed_by": "SL",
+      "sow_currency": "GBP",
+      "sow_value_eur": "3532282.669845054",
+      "contract_start_date": "2025-01-07 00:00:00",
+      "contract_end_date": "2025-12-31 00:00:00"
+    },
+    {
+      "contract_name": "Vault QualityOne ELA",
+      "contract_type": "Order Form",
+      "pwo_number": "QUO-002307",
+      "platform_technology": "Quality One ELA",
+      "managed_by": "SL",
+      "sow_currency": "USD",
+      "sow_value_eur": "1464736.4999999998",
+      "contract_start_date": "2025-03-01 00:00:00",
+      "contract_end_date": "2026-02-28 00:00:00"
+    },
+    {
+      "contract_name": "Pega License for 2025",
+      "contract_type": "Demand Detail",
+      "pwo_number": "16171",
+      "platform_technology": " PEGA application",
+      "managed_by": "SL",
+      "sow_currency": "EUR",
+      "sow_value_eur": "3048316.0"
+    },
+    {
+      "contract_name": "Subscription for Collections Cloud \u2013 Demand No. 398",
+      "contract_type": "Order Form",
+      "pwo_number": "Schedule #01 - CLS AI+SIT ",
+      "platform_technology": "Cloud Services",
+      "managed_by": "SL",
+      "sow_currency": "USD",
+      "sow_value_eur": "2204117.486187845",
+      "contract_start_date": "2025-01-01 00:00:00",
+      "contract_end_date": "2025-12-31 00:00:00"
+    },
+    {
+      "contract_name": "Solution and Enterprise pack",
+      "contract_type": "Quote",
+      "pwo_number": "2024-12-01 00:00:00",
+      "platform_technology": "Blackline",
+      "managed_by": "SL",
+      "sow_currency": "EUR",
+      "sow_value_eur": "3497700.0",
+      "contract_start_date": "2024-12-31 00:00:00",
+      "contract_end_date": "2025-12-31 00:00:00"
+    },
+    {
+      "contract_name": "Google workspace Oct'2022 to Oct'2026",
+      "contract_type": "Quote",
+      "pwo_number": "ID0039692",
+      "platform_technology": "Google workspace",
+      "managed_by": "SL",
+      "sow_currency": "GBP",
+      "sow_value_eur": "7834642.908224077",
+      "contract_start_date": "2022-10-01 00:00:00",
+      "contract_end_date": "2026-10-01 00:00:00"
+    },
+    {
+      "contract_name": "Jira License Mar 25 - Mar 26",
+      "contract_type": "SOW",
+      "pwo_number": "Uni-SOW-1",
+      "platform_technology": "Jira",
+      "managed_by": "SL",
+      "sow_currency": "USD",
+      "sow_value_eur": "2938904.23572744",
+      "contract_start_date": "2025-03-01 00:00:00",
+      "contract_end_date": "2026-03-01 00:00:00"
+    },
+    {
+      "contract_name": " ADOBE COMMERCE: CLOUD BUNDLE",
+      "contract_type": "Quote",
+      "pwo_number": "DR3345713",
+      "platform_technology": "Adobe",
+      "managed_by": "SL",
+      "sow_currency": "USD",
+      "sow_value_eur": "6379404.788213627",
+      "contract_start_date": "2024-03-01 00:00:00",
+      "contract_end_date": "2027-02-28 00:00:00"
+    },
+    {
+      "contract_name": "Hosted Services (SaaS)",
+      "contract_type": "Order Form",
+      "pwo_number": "OF-UnileverGlobal-10122024-R1",
+      "sow_currency": "USD",
+      "sow_value_eur": "5927255.985267035",
+      "contract_start_date": "2022-01-01 00:00:00",
+      "contract_end_date": "2025-01-01 00:00:00"
+    },
+    {
+      "contract_name": "Product Factory Oct 24 - Sept 25 ",
+      "managed_by": "SL",
+      "sow_currency": "EUR",
+      "sow_value_eur": "1565407.0",
+      "contract_start_date": "2024-10-01 00:00:00",
+      "contract_end_date": "2025-10-10 00:00:00"
+    },
+    {
+      "contract_name": "Informatica License April 2024- March 2026",
+      "contract_type": "Quote",
+      "pwo_number": "Q-195830",
+      "platform_technology": "MDM Cloud ",
+      "managed_by": "SL",
+      "sow_currency": "EUR",
+      "sow_value_eur": "1542700.01",
+      "contract_start_date": "2024-03-30 00:00:00",
+      "contract_end_date": "2026-03-29 00:00:00"
+    },
+    {
+      "contract_name": "Coupa Core P2O License 2025",
+      "contract_type": "Order Form",
+      "pwo_number": "88619",
+      "platform_technology": "Coupa",
+      "managed_by": "SL",
+      "sow_currency": "EUR",
+      "sow_value_eur": "4890000.0",
+      "contract_start_date": "2022-12-30 00:00:00",
+      "contract_end_date": "2025-12-29 00:00:00"
+    },
+    {
+      "contract_name": "UNILEVER TERADATA AM Managed Service contract renewal",
+      "contract_type": "Quote",
+      "platform_technology": "Teradata",
+      "managed_by": "SL",
+      "sow_currency": "GBP",
+      "sow_value_eur": "2563262.216924911",
+      "contract_start_date": "2024-06-04 00:00:00",
+      "contract_end_date": "2025-08-31 00:00:00"
+    },
+    {
+      "contract_name": "Cornerstone Learning -Software",
+      "contract_type": "Quote",
+      "pwo_number": "Q-00143905",
+      "platform_technology": "Cornerstone Learning",
+      "managed_by": "SL",
+      "sow_currency": "EUR",
+      "sow_value_eur": "1296016.67",
+      "contract_start_date": "2023-09-01 00:00:00",
+      "contract_end_date": "2026-08-31 00:00:00"
+    },
+    {
+      "contract_name": "Talent Acquisition SaaS Services",
+      "contract_type": "SOW",
+      "pwo_number": "CON-0230582",
+      "platform_technology": "Talent Acquisition SaaS platform",
+      "sow_currency": "EUR",
+      "sow_value_eur": "3952760.0",
+      "contract_start_date": "2024-06-30 00:00:00",
+      "contract_end_date": "2027-12-31 00:00:00"
+    },
+    {
+      "contract_name": " DnA Data BDL Operations",
+      "contract_type": "SOW",
+      "pwo_number": "SOW5678",
+      "platform_technology": "BDL",
+      "managed_by": "SL",
+      "sow_currency": "GBP",
+      "sow_value_eur": "1824025.029797378",
+      "contract_start_date": "2025-04-01 00:00:00",
+      "contract_end_date": "2025-12-31 00:00:00"
+    },
+    {
+      "contract_name": "Omerta_Cyber_ResourceAug_1oct24- 30sept25_BAU_TechOps_Projects- 14723",
+      "platform_technology": "Resource Augmentation",
+      "managed_by": "SL",
+      "sow_currency": "GBP",
+      "sow_value_eur": "1163723.3420738976",
+      "contract_start_date": "2024-10-01 00:00:00",
+      "contract_end_date": "2025-09-30 00:00:00"
+    }
+  ],
+  "statistics": {
+    "total_records": 275,
+    "fields_analyzed": 16,
+    "training_examples": 19
+  }
+}

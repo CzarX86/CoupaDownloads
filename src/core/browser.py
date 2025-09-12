@@ -4,6 +4,7 @@ Handles WebDriver setup, cleanup, and process management.
 """
 
 import os
+import multiprocessing as mp
 import signal
 import subprocess
 import sys
@@ -28,8 +29,14 @@ class BrowserManager:
     
     def _setup_signal_handlers(self) -> None:
         """Setup signal handlers for graceful shutdown."""
-        signal.signal(signal.SIGINT, self._signal_handler)
-        signal.signal(signal.SIGTERM, self._signal_handler)
+        # Only install handlers in the main process to avoid noisy duplicates
+        try:
+            if mp.current_process().name == "MainProcess":
+                signal.signal(signal.SIGINT, self._signal_handler)
+                signal.signal(signal.SIGTERM, self._signal_handler)
+        except Exception:
+            # Best-effort only
+            pass
     
     def _signal_handler(self, signum: int, frame) -> None:
         """Handle interrupt signals for graceful shutdown."""
@@ -81,12 +88,12 @@ class BrowserManager:
         options = EdgeOptions()
         
         # Set profile options FIRST (like in working test)
-        if Config.EDGE_PROFILE_DIR:
+        if Config.USE_PROFILE and Config.EDGE_PROFILE_DIR:
             options.add_argument(f"--user-data-dir={Config.EDGE_PROFILE_DIR}")
             options.add_argument(f"--profile-directory={Config.EDGE_PROFILE_NAME}")
         
-        # Ensure browser remains open after script ends (for session persistency)
-        options.add_experimental_option("detach", True)
+        # Do NOT detach: ensure WebDriver controls lifecycle to avoid orphaned processes
+        options.add_experimental_option("detach", False)
         
         # Other options after profile setup
         # options.add_argument("--disable-extensions")  # Commented out to allow profile extensions
@@ -122,6 +129,9 @@ class BrowserManager:
     def initialize_driver_with_download_dir(self, download_dir: str, headless: bool = False) -> webdriver.Edge:
         """Initialize the WebDriver with a specific download directory."""
         try:
+            # Optionally kill existing processes (avoids profile locks)
+            if Config.CLOSE_EDGE_PROCESSES:
+                self.check_and_kill_existing_edge_processes()
             # Get driver path automatically (download if needed)
             driver_path = self.driver_manager.get_driver_path()
             
@@ -159,6 +169,9 @@ class BrowserManager:
     def initialize_driver(self, headless: bool = False) -> webdriver.Edge:
         """Initialize the WebDriver with proper error handling. Supports headless mode."""
         try:
+            # Honor global Config.HEADLESS when no explicit flag provided
+            if not headless and Config.HEADLESS:
+                headless = True
             # Get driver path automatically (download if needed)
             driver_path = self.driver_manager.get_driver_path()
             
@@ -174,6 +187,7 @@ class BrowserManager:
                 log_output=subprocess.DEVNULL if not Config.SHOW_SELENIUM_LOGS else None
             )
             
+            print("[browser] Launching Edge WebDriver...", flush=True)
             self.driver = webdriver.Edge(service=service, options=options)
             print(f"✅ Using Edge WebDriver: {driver_path}")
             return self.driver
@@ -186,6 +200,7 @@ class BrowserManager:
                     executable_path=driver_path,
                     log_output=subprocess.DEVNULL if not Config.SHOW_SELENIUM_LOGS else None
                 )
+                print("[browser] Launching Edge WebDriver (no profile)...", flush=True)
                 self.driver = webdriver.Edge(service=service, options=options)
                 print(f"✅ Using Edge WebDriver without profile: {driver_path}")
                 return self.driver
@@ -197,8 +212,8 @@ class BrowserManager:
         """Create browser options without profile selection (fallback method)."""
         options = EdgeOptions()
         
-        # Ensure browser remains open after script ends (for session persistency)
-        options.add_experimental_option("detach", True)
+        # Do NOT detach in fallback either
+        options.add_experimental_option("detach", False)
         
         # Other options
         # options.add_argument("--disable-extensions")  # Commented out to allow profile extensions
@@ -246,19 +261,28 @@ class BrowserManager:
         """
         if self.driver:
             try:
-                # Update browser preferences
-                self.driver.execute_script(f"""
-                    window.localStorage.setItem('download.default_directory', '{new_download_dir}');
-                """)
-                
-                # Also try to update Chrome preferences (Edge uses Chrome's preference system)
-                self.driver.execute_script(f"""
-                    if (window.chrome && window.chrome.webstore) {{
-                        chrome.downloads.setShelfEnabled(false);
-                    }}
-                """)
-                
-                print(f"   📁 Updated download directory to: {new_download_dir}")
+                # Ensure directory exists
+                os.makedirs(new_download_dir, exist_ok=True)
+
+                # Preferred: Chromium DevTools Protocol - works on Edge (Chromium)
+                try:
+                    self.driver.execute_cdp_cmd(
+                        "Page.setDownloadBehavior",
+                        {"behavior": "allow", "downloadPath": new_download_dir}
+                    )
+                    print(f"   📁 Updated download directory via DevTools to: {new_download_dir}")
+                    return
+                except Exception as cdp_err:
+                    print(f"   ⚠️ DevTools download path update failed: {cdp_err}. Falling back.")
+
+                # Fallback: localStorage (not reliable for changing download path dynamically)
+                try:
+                    self.driver.execute_script(
+                        f"window.localStorage.setItem('download.default_directory', '{new_download_dir}');"
+                    )
+                except Exception:
+                    pass
+                print(f"   📁 Updated download directory (best-effort) to: {new_download_dir}")
             except Exception as e:
                 print(f"   ⚠️ Warning: Could not update download directory: {e}")
 

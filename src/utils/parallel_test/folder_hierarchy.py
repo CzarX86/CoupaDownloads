@@ -6,9 +6,12 @@ from config import Config
 class FolderHierarchyManager:
     """Simplified folder hierarchy manager for parallel testing."""
     
-    def __init__(self):
+    def __init__(self, base_download_dir=None):
         # Use the main CoupaDownloads folder, not the temp folder
-        self.base_folder = os.path.expanduser("~/Downloads/CoupaDownloads")
+        if base_download_dir:
+            self.base_folder = os.path.join(base_download_dir, "CoupaDownloads")
+        else:
+            self.base_folder = os.path.expanduser("~/Downloads/CoupaDownloads")
     
     def create_folder_path(self, po_data: Dict, hierarchy_cols: List[str], has_hierarchy_data: bool, final_status: str = None) -> str:
         """Create hierarchical folder path for a PO with optional dynamic status."""

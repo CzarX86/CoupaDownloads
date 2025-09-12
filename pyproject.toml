@@ -26,11 +26,29 @@ extract-msg = ">=0.41.0"
 weasyprint = ">=60.0"
 pdfkit = ">=1.0.0"
 webdriver-manager = "^4.0.2"
+rich = "^14.1.0"
+# Novas bibliotecas para melhorar performance e robustez
+playwright = "^1.40.0"
+tenacity = "^8.2.0"
+structlog = "^23.0.0"
+polars = "^0.20.0"
+httpx = "^0.25.0"
+aiofiles = "^23.0.0"
+pydantic = "^2.5.0"
+beautifulsoup4 = "^4.12.0"
+lxml = "^4.9.0"
+pydantic-settings = "^2.10.1"
+xlsx2csv = "^0.8.4"
+customtkinter = "^5.2.2"
 
 [tool.poetry.scripts]
 coupa-downloader = "src.main:main"
 
 
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.4.2"
+pytest-asyncio = "^1.1.0"
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]

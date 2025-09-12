@@ -1,9 +1,11 @@
 import os
 import sys
 import random
+import re
 import time
 import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import multiprocessing as mp
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from selenium.common.exceptions import InvalidSessionIdException, NoSuchWindowException
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
@@ -20,6 +22,267 @@ from src.core.excel_processor import ExcelProcessor
 from src.core.folder_hierarchy import FolderHierarchyManager
 
 
+# ---------- Helpers for process workers ----------
+def _has_active_downloads(folder_path: str) -> bool:
+    try:
+        names = os.listdir(folder_path)
+    except Exception:
+        return False
+    return any(name.endswith(('.crdownload', '.tmp', '.partial')) for name in names)
+
+
+def _wait_for_downloads_complete(folder_path: str, timeout: int = 180, poll: float = 0.5) -> None:
+    start = time.time()
+    quiet_required = 1.5
+    quiet_start = None
+    while time.time() - start < timeout:
+        if not _has_active_downloads(folder_path):
+            if quiet_start is None:
+                quiet_start = time.time()
+            elif time.time() - quiet_start >= quiet_required:
+                return
+        else:
+            quiet_start = None
+        time.sleep(poll)
+
+
+def _parse_counts_from_message(message: str) -> tuple[int | None, int | None]:
+    """Extract (downloaded, total) from messages like 'Initiated download for X/Y attachments.'"""
+    if not message:
+        return None, None
+    m = re.search(r"(\d+)\s*/\s*(\d+)", message)
+    if not m:
+        return None, None
+    try:
+        return int(m.group(1)), int(m.group(2))
+    except Exception:
+        return None, None
+
+
+def _derive_status_label(success: bool, message: str) -> str:
+    msg = (message or '').lower()
+    dl, total = _parse_counts_from_message(message or '')
+    if success:
+        if total == 0 or 'no attachments' in msg:
+            return 'NO_ATTACHMENTS'
+        if dl is not None and total is not None and dl < total:
+            return 'PARTIAL'
+        return 'COMPLETED'
+    return 'FAILED'
+
+
+def _suffix_for_status(status_code: str) -> str:
+    if status_code == 'COMPLETED':
+        return '_COMPLETED'
+    if status_code == 'FAILED':
+        return '_FAILED'
+    if status_code == 'NO_ATTACHMENTS':
+        return '_NO_ATTACHMENTS'
+    if status_code == 'PARTIAL':
+        return '_PARTIAL'
+    return f'_{status_code}'
+
+
+def _rename_folder_with_status(folder_path: str, status_code: str) -> str:
+    try:
+        base_dir = os.path.dirname(folder_path)
+        base_name = os.path.basename(folder_path)
+        target = f"{base_name}{_suffix_for_status(status_code)}"
+        new_path = os.path.join(base_dir, target)
+        if folder_path == new_path:
+            return folder_path
+        if os.path.exists(new_path):
+            i = 2
+            while True:
+                candidate = os.path.join(base_dir, f"{target}-{i}")
+                if not os.path.exists(candidate):
+                    new_path = candidate
+                    break
+                i += 1
+        os.rename(folder_path, new_path)
+        return new_path
+    except Exception:
+        return folder_path
+
+
+def process_po_worker(args):
+    """Run a single PO in its own process, with its own Edge driver.
+
+    Args tuple: (po_data, hierarchy_cols, has_hierarchy_data)
+    Returns: dict with keys: po_number_display, status_code, message, final_folder
+    """
+    po_data, hierarchy_cols, has_hierarchy_data = args
+    display_po = po_data['po_number']
+    folder_manager = FolderHierarchyManager()
+    browser_manager = BrowserManager()
+    driver = None
+    folder_path = ''
+    try:
+        print(f"[worker] ▶ Starting PO {display_po}", flush=True)
+        # Create folder without suffix
+        folder_path = folder_manager.create_folder_path(po_data, hierarchy_cols, has_hierarchy_data)
+        print(f"[worker] 📁 Folder ready: {folder_path}", flush=True)
+
+        # Start browser for this worker and set download dir
+        print("[worker] 🚀 Initializing WebDriver...", flush=True)
+        # Avoid using a shared profile in workers to prevent profile locks/hangs
+        try:
+            from src.core.config import Config as _Cfg
+            _Cfg.EDGE_PROFILE_DIR = ''
+            _Cfg.EDGE_PROFILE_NAME = ''
+        except Exception:
+            pass
+        browser_manager.initialize_driver()
+        driver = browser_manager.driver
+        print("[worker] ⚙️ WebDriver initialized", flush=True)
+        browser_manager.update_download_directory(folder_path)
+        print("[worker] 📥 Download dir set", flush=True)
+
+        # Download
+        downloader = Downloader(driver, browser_manager)
+        po_number = po_data['po_number']
+        print(f"[worker] 🌐 Starting download for {po_number}", flush=True)
+        success, message = downloader.download_attachments_for_po(po_number)
+        print(f"[worker] ✅ Download routine finished for {po_number}", flush=True)
+
+        # Wait for downloads to finish
+        _wait_for_downloads_complete(folder_path)
+        print("[worker] ⏳ Downloads settled", flush=True)
+
+        status_code = _derive_status_label(success, message)
+        final_folder = _rename_folder_with_status(folder_path, status_code)
+        result = {
+            'po_number_display': display_po,
+            'status_code': status_code,
+            'message': message,
+            'final_folder': final_folder,
+        }
+        print(f"[worker] 🏁 Done {display_po} → {status_code}", flush=True)
+        return result
+    except Exception as e:
+        try:
+            # Attempt rename with FAILED suffix even on exceptions
+            if folder_path:
+                final_folder = _rename_folder_with_status(folder_path, 'FAILED')
+            else:
+                final_folder = ''
+        except Exception:
+            final_folder = folder_path or ''
+        return {
+            'po_number_display': display_po,
+            'status_code': 'FAILED',
+            'message': str(e),
+            'final_folder': final_folder,
+        }
+    finally:
+        try:
+            browser_manager.cleanup()
+        except Exception:
+            pass
+
+
+def _scan_local_drivers() -> list[str]:
+    """Return a list of plausible local driver paths under 'drivers/' directory."""
+    candidates: list[str] = []
+    base = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'drivers')
+    if not os.path.isdir(base):
+        return candidates
+    for root, _dirs, files in os.walk(base):
+        for name in files:
+            if name.lower().startswith('msedgedriver'):
+                candidates.append(os.path.join(root, name))
+    return sorted(candidates)
+
+
+def _prompt_bool(prompt: str, default: bool) -> bool:
+    d = 'Y/n' if default else 'y/N'
+    while True:
+        ans = input(f"{prompt} [{d}]: ").strip().lower()
+        if ans == '' and default is not None:
+            return default
+        if ans in ('y', 'yes'):
+            return True
+        if ans in ('n', 'no'):
+            return False
+        print("Please answer y or n.")
+
+
+def _interactive_setup() -> None:
+    """Interactive wizard to gather runtime configuration from the user."""
+    print("\n=== Interactive Setup ===")
+    print("(Press Enter to accept defaults shown in [brackets])")
+
+    # 1) Input file path
+    from src.core.excel_processor import ExcelProcessor
+    default_input = ExcelProcessor.get_excel_file_path()
+    inp = input(f"Path to input CSV/XLSX [{default_input}]: ").strip() or default_input
+    os.environ['EXCEL_FILE_PATH'] = inp
+
+    # 2) Choose execution model
+    use_pool = _prompt_bool("Use process workers (one WebDriver per process)?", default=False)
+    os.environ['USE_PROCESS_POOL'] = 'true' if use_pool else 'false'
+
+    # 3) Process workers with safe cap (only if using process pool)
+    try:
+        default_workers = 1
+        procs_int = default_workers
+        if use_pool:
+            procs = input(f"Number of process workers (1-3) [{default_workers}]: ").strip()
+            if procs:
+                procs_int = max(1, min(3, int(procs)))
+    except Exception:
+        procs_int = default_workers
+    os.environ['PROC_WORKERS'] = str(procs_int)
+    os.environ.setdefault('PROC_WORKERS_CAP', '3')
+
+    # 4) Headless mode
+    headless = _prompt_bool("Run browser in headless mode?", default=False)
+    os.environ['HEADLESS'] = 'true' if headless else 'false'
+
+    # 5) Driver selection
+    allow_auto = _prompt_bool("Allow auto-download of EdgeDriver if not found?", default=True)
+    os.environ['DRIVER_AUTO_DOWNLOAD'] = 'true' if allow_auto else 'false'
+
+    local = _scan_local_drivers()
+    chosen_path = None
+    if local:
+        print("\nLocal EdgeDriver candidates:")
+        for idx, path in enumerate(local, 1):
+            print(f"  {idx}. {path}")
+        sel = input("Pick a driver by number or press Enter to skip: ").strip()
+        if sel.isdigit():
+            i = int(sel)
+            if 1 <= i <= len(local):
+                chosen_path = local[i-1]
+    if not chosen_path:
+        manual = input("Provide full path to EdgeDriver (or press Enter to skip): ").strip()
+        if manual:
+            chosen_path = manual
+    if chosen_path:
+        os.environ['EDGE_DRIVER_PATH'] = chosen_path
+
+    # 6) Download folder base
+    default_dl = os.path.expanduser(Config.DOWNLOAD_FOLDER)
+    dl = input(f"Base download folder [{default_dl}]: ").strip() or default_dl
+    Config.DOWNLOAD_FOLDER = os.path.expanduser(dl)
+    os.makedirs(Config.DOWNLOAD_FOLDER, exist_ok=True)
+
+    # 7) Edge profile usage
+    use_prof = _prompt_bool("Use Edge profile (cookies/login)?", default=True)
+    os.environ['USE_EDGE_PROFILE'] = 'true' if use_prof else 'false'
+    print("Tip: Leave blank to keep the default shown in brackets.")
+    prof_dir = input(f"Edge profile directory [{Config.EDGE_PROFILE_DIR}]: ").strip()
+    if prof_dir:
+        Config.EDGE_PROFILE_DIR = os.path.expanduser(prof_dir)
+    prof_name = input(f"Edge profile name [{Config.EDGE_PROFILE_NAME}]: ").strip()
+    if prof_name:
+        Config.EDGE_PROFILE_NAME = prof_name
+    # 8) Pre-start cleanup (kill running Edge processes)
+    kill_procs = _prompt_bool("Close any running Edge processes before starting?", default=True)
+    os.environ['CLOSE_EDGE_PROCESSES'] = 'true' if kill_procs else 'false'
+    print("=== End of setup ===\n")
+
+
 class MainApp:
     def __init__(self):
         self.excel_processor = ExcelProcessor()
@@ -27,6 +290,57 @@ class MainApp:
         self.folder_hierarchy = FolderHierarchyManager()
         self.driver = None
         self.lock = threading.Lock()  # Thread safety for browser operations
+
+    def _has_active_downloads(self, folder_path: str) -> bool:
+        try:
+            names = os.listdir(folder_path)
+        except Exception:
+            return False
+        suffixes = ('.crdownload', '.tmp', '.partial')
+        return any(name.endswith(suffixes) for name in names)
+
+    def _wait_for_downloads_complete(self, folder_path: str, timeout: int = 120, poll: float = 0.5) -> None:
+        """Wait until there are no active download temp files in the folder."""
+        start = time.time()
+        # Require a short quiet period with no temp files
+        quiet_required = 1.5
+        quiet_start = None
+        while time.time() - start < timeout:
+            if not self._has_active_downloads(folder_path):
+                if quiet_start is None:
+                    quiet_start = time.time()
+                elif time.time() - quiet_start >= quiet_required:
+                    return
+            else:
+                quiet_start = None
+            time.sleep(poll)
+        # Timed out; proceed anyway
+        return
+
+    def _rename_folder_with_status(self, folder_path: str, status: str) -> str:
+        """Rename the PO folder to include the status suffix. Returns final path."""
+        try:
+            base_dir = os.path.dirname(folder_path)
+            base_name = os.path.basename(folder_path)
+            target = f"{base_name}_{status}"
+            new_path = os.path.join(base_dir, target)
+            if folder_path == new_path:
+                return folder_path
+            # If target exists, append a simple numeric suffix
+            if os.path.exists(new_path):
+                i = 2
+                while True:
+                    candidate = os.path.join(base_dir, f"{target}-{i}")
+                    if not os.path.exists(candidate):
+                        new_path = candidate
+                        break
+                    i += 1
+            os.rename(folder_path, new_path)
+            print(f"   🏷️ Renamed folder to: {new_path}")
+            return new_path
+        except Exception as e:
+            print(f"   ⚠️ Could not rename folder: {e}")
+            return folder_path
 
     def initialize_browser_once(self):
         """Initialize browser once and keep it open for all POs."""
@@ -37,7 +351,7 @@ class MainApp:
             print("✅ Browser initialized successfully")
 
     def process_single_po(self, po_data, hierarchy_cols, has_hierarchy_data, index, total):
-        """Process a single PO using a new tab in the existing browser."""
+        """Process a single PO using the existing browser window (no extra tabs)."""
         display_po = po_data['po_number']
         po_number = po_data['po_number']
         
@@ -50,36 +364,45 @@ class MainApp:
             )
             print(f"   📁 Folder: {folder_path}")
             
-            # Create new tab for this PO
+            # Process entirely under lock to avoid Selenium races (single window)
             with self.lock:
-                # Open new tab
-                self.driver.execute_script("window.open('');")
-                # Switch to the new tab
-                self.driver.switch_to.window(self.driver.window_handles[-1])
-                
-                # Update download directory for this tab
-                self.driver.execute_script(f"""
-                    window.localStorage.setItem('download.default_directory', '{folder_path}');
-                """)
-                
-                # Create downloader for this tab
+                # Ensure driver exists and is responsive
+                if not self.browser_manager.is_browser_responsive():
+                    print("   ⚠️ Browser not responsive. Reinitializing driver...")
+                    self.browser_manager.cleanup()
+                    self.browser_manager.initialize_driver()
+                    self.driver = self.browser_manager.driver
+
+                # Ensure downloads for this PO go to the right folder
+                self.browser_manager.update_download_directory(folder_path)
+
+                # Create downloader and attempt processing
                 downloader = Downloader(self.driver, self.browser_manager)
-            
-            # Process the PO
-            success, message = downloader.download_attachments_for_po(po_number)
-            
-            # Update status
-            self.excel_processor.update_po_status(
-                display_po, 
-                "Success" if success else "Error", 
-                error_message=message,
-                download_folder=folder_path
-            )
-            
-            # Close this tab and return to main tab
-            with self.lock:
-                self.driver.close()
-                self.driver.switch_to.window(self.driver.window_handles[0])
+                try:
+                    success, message = downloader.download_attachments_for_po(po_number)
+                except (InvalidSessionIdException, NoSuchWindowException) as e:
+                    # Session/tab was lost. Try to recover once.
+                    print(f"   ⚠️ Session issue detected ({type(e).__name__}). Recovering driver and retrying once...")
+                    self.browser_manager.cleanup()
+                    self.browser_manager.initialize_driver()
+                    self.driver = self.browser_manager.driver
+                    downloader = Downloader(self.driver, self.browser_manager)
+                    success, message = downloader.download_attachments_for_po(po_number)
+
+                # Wait for downloads to complete before finalizing folder name
+                self._wait_for_downloads_complete(folder_path)
+
+                # Rename folder to include status suffix after completion
+                final_status = "Success" if success else "Error"
+                final_folder = self._rename_folder_with_status(folder_path, final_status)
+
+                # Update status with the final folder path
+                self.excel_processor.update_po_status(
+                    display_po, 
+                    final_status, 
+                    error_message=message,
+                    download_folder=final_folder
+                )
             
             print(f"   ✅ {display_po}: {message}")
             return True
@@ -88,14 +411,34 @@ class MainApp:
             print(f"   ❌ Error processing {display_po}: {e}")
             self.excel_processor.update_po_status(display_po, "Error", error_message=str(e))
             
-            # Try to close tab and return to main tab
+            # Clean up browser state: close any extra tabs and return to main tab
             try:
                 with self.lock:
-                    if len(self.driver.window_handles) > 1:
-                        self.driver.close()
-                        self.driver.switch_to.window(self.driver.window_handles[0])
-            except:
-                pass
+                    # Skip cleanup if driver doesn't exist
+                    if self.driver is None:
+                        print("   ⚠️ Driver is None - skipping cleanup")
+                        return False
+                    
+                    # Attempt to close extra tabs if they exist
+                    try:
+                        if len(self.driver.window_handles) > 1:
+                            self.driver.close()
+                            self.driver.switch_to.window(self.driver.window_handles[0])
+                    except (NoSuchWindowException, InvalidSessionIdException) as e:
+                        print(f"   ⚠️ Tab cleanup error: {str(e)}")
+            except Exception as unexpected_error:
+                print(f"   ⚠️ Unexpected cleanup error: {str(unexpected_error)}")
+            
+            # Always attempt browser recovery after errors
+            try:
+                with self.lock:
+                    if self.driver is None or not self.browser_manager.is_browser_responsive():
+                        print("   ⚠️ Attempting browser recovery")
+                        self.browser_manager.cleanup()
+                        self.browser_manager.initialize_driver()
+                        self.driver = self.browser_manager.driver
+            except Exception as recovery_error:
+                print(f"   🔴 Browser recovery failed: {str(recovery_error)}")
                 
             return False
 
@@ -103,15 +446,22 @@ class MainApp:
         """
         Main execution loop for processing POs with parallel tabs.
         """
+        # Interactive wizard for runtime config
+        _interactive_setup()
+
         os.makedirs(Config.INPUT_DIR, exist_ok=True)
         os.makedirs(Config.DOWNLOAD_FOLDER, exist_ok=True)
 
         try:
             excel_path = self.excel_processor.get_excel_file_path()
+            # Inform which input file will be processed (CSV or Excel)
+            _, ext = os.path.splitext(excel_path.lower())
+            file_kind = "CSV" if ext == ".csv" else "Excel"
+            print(f"📄 Processing input file: {excel_path} ({file_kind})")
             po_entries, original_cols, hierarchy_cols, has_hierarchy_data = self.excel_processor.read_po_numbers_from_excel(excel_path)
             valid_entries = self.excel_processor.process_po_numbers(po_entries)
         except Exception as e:
-            print(f"❌ Failed to read or process Excel file: {e}")
+            print(f"❌ Failed to read or process input file: {e}")
             return
 
         if not valid_entries:
@@ -125,9 +475,6 @@ class MainApp:
             print(f"Sampling {k} random POs for processing...")
             valid_entries = random.sample(valid_entries, k)
 
-        # Initialize browser once
-        self.initialize_browser_once()
-        
         # Convert to list of PO data
         po_data_list = []
         for display_po, po_number in valid_entries:
@@ -137,37 +484,62 @@ class MainApp:
                     break
 
         print(f"🚀 Starting parallel processing with {len(po_data_list)} POs...")
-        print("📊 Using browser tabs for parallel downloads")
-        
-        # Process POs with parallel tabs
-        max_workers = min(5, len(po_data_list))  # Max 5 concurrent tabs
+        use_process_pool = os.environ.get('USE_PROCESS_POOL', 'false').lower() == 'true'
+
         successful = 0
         failed = 0
-        
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            # Submit all tasks
-            future_to_po = {
-                executor.submit(self.process_single_po, po_data, hierarchy_cols, has_hierarchy_data, i, len(po_data_list)): po_data
-                for i, po_data in enumerate(po_data_list)
-            }
-            
-            # Process completed tasks
-            for future in as_completed(future_to_po):
-                po_data = future_to_po[future]
-                try:
+
+        if use_process_pool:
+            # Real parallelism: one Edge driver per process
+            # Limit concurrency to reduce Edge rate-limits and memory pressure
+            default_workers = min(2, len(po_data_list))
+            env_procs = int(os.environ.get("PROC_WORKERS", str(default_workers)))
+            hard_cap = int(os.environ.get("PROC_WORKERS_CAP", "3"))
+            proc_workers = max(1, min(env_procs, hard_cap, len(po_data_list)))
+            print(f"📊 Using {proc_workers} process worker(s), one WebDriver per process")
+
+            # Submit process tasks and update Excel serially in parent
+            with ProcessPoolExecutor(max_workers=proc_workers, mp_context=mp.get_context("spawn")) as executor:
+                futures = [
+                    executor.submit(process_po_worker, (po_data, hierarchy_cols, has_hierarchy_data))
+                    for po_data in po_data_list
+                ]
+                for future in as_completed(futures):
                     result = future.result()
-                    if result:
-                        successful += 1
-                    else:
+                    display_po = result['po_number_display']
+                    status_code = result['status_code']
+                    message = result['message']
+                    final_folder = result['final_folder']
+
+                    # Update Excel in parent (avoids CSV write contention)
+                    self.excel_processor.update_po_status(
+                        display_po,
+                        status_code,
+                        error_message=message,
+                        download_folder=final_folder,
+                    )
+                    print("-" * 60)
+                    print(f"   ✅ {display_po}: {message}")
+                    if status_code == 'FAILED':
                         failed += 1
-                except Exception as e:
-                    print(f"❌ Exception in {po_data['po_number']}: {e}")
+                    else:
+                        successful += 1
+        else:
+            # Legacy in-process mode (single WebDriver, sequential)
+            print("📊 Using in-process mode (single WebDriver, sequential)")
+            self.initialize_browser_once()
+            for i, po_data in enumerate(po_data_list):
+                ok = self.process_single_po(po_data, hierarchy_cols, has_hierarchy_data, i, len(po_data_list))
+                if ok:
+                    successful += 1
+                else:
                     failed += 1
 
         print("-" * 60)
         print(f"🎉 Processing complete!")
         print(f"✅ Successful: {successful}")
         print(f"❌ Failed: {failed}")
+    
         print(f"📊 Total: {successful + failed}")
 
     def close(self):

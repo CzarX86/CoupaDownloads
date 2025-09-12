@@ -1,0 +1,1125 @@
+{
+  "PWO_NUMBER": [
+    [
+      {
+        "TEXT": {
+          "REGEX": "PWO[#\\s]*(\\d+)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(\\d{6,})"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "Demand Number:\\s*(\\d+)"
+        }
+      }
+    ]
+  ],
+  "CONTRACT_TYPE": [
+    [
+      {
+        "TEXT": {
+          "REGEX": "(SOW)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(Quote)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(Order\\ Form)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(Demand\\ Detail)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(Schedule)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(CR)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(Other)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(Quotation)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(Ammendement)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(No\\ Sow\\ Attached)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(CTC)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(PWO)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(Invoice)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(Not\\ found)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(Contract)"
+        }
+      }
+    ]
+  ],
+  "MANAGED_BY": [
+    [
+      {
+        "TEXT": {
+          "REGEX": "(SL)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(SAM)"
+        }
+      }
+    ]
+  ],
+  "CURRENCY": [
+    [
+      {
+        "TEXT": {
+          "REGEX": "(INR)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(GBP)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(USD)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(EUR)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(Euro)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(Eur)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(TRY)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(AUD)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(IDR)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(VND)"
+        }
+      }
+    ]
+  ],
+  "PLATFORM": [
+    [
+      {
+        "TEXT": {
+          "REGEX": "(Workday)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(Quality\\ One\\ ELA)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(\\ PEGA\\ application)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(Cloud\\ Services)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(Blackline)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(Google\\ workspace)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(Jira)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(Adobe)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(MDM\\ Cloud\\ )"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(Coupa)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(Teradata)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(Cornerstone\\ Learning)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(Talent\\ Acquisition\\ SaaS\\ platform)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(BDL)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(Resource\\ Augmentation)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(LXP\\ Software)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(Profissional\\ Services\\ /\\ Consultancy)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(Workday\\ ATS,\\ Workday\\ HCM)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(QlikTech)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(Leveredge\\ \\(\\ DMS\\-\\ Online\\))"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(iFinance)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(Workday\\ Plateform)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(Xnapp)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(Cyber)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(Leveredge\\ \\(\\ IQ\\))"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(Smartclose\\ Platform)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(Tanium\\ Cloud\\ platform)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(Leveredge\\ Online\\ \\(\\ Azure\\ Infra\\ Support\\)\\ )"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(Leveredge\\ Online)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(Core\\ Chassis)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(Leveredge)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(SAP\\ Cloud\\ Services)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(Salesforce\\ Platform)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(NetSuite\\ Platform)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(Oracle)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(Fourkites)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(GRAC)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(TPRM\\ OperatingModel)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(TPRM)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(UDT)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(Aera)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(ITSM,\\ CSM,\\ WSP)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(SPM,\\ IRM,\\ HRSD)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(Blueprism)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(Hyper\\ Automation\\ Platform)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(JIRA)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(Anaplan)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(Build\\ App\\ Licenses)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(Digital\\ Factory\\ Applications\\ \\(\\ DFOS,\\ MDCS,\\ SPC,\\ NGTW,MCOF\\))"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(Prisma\\ Plateform)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(PC\\ \\&\\ HC)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(Information\\ Management\\ System)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(Innoflex\\ System)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(Vectra\\ Detect)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(VMDR\\ Bunddle)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(Factory\\ Cyber\\ Security\\ Programme)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(AI\\ Development)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(Cloud\\ Service)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(SAP)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(ALNG\\ SA)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(Viva)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(Copilot)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(Microsoft\\ EA)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(Leveredge\\ PPM)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(DDT)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(Frontier)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(Data\\ Lake)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(RTVA)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(Apptio\\ )"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(High\\ Radius)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(PowerExchange)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(Pega)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(SAP\\ Concur)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(Hyperion)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(Expense\\ Audit\\ \\-\\ Enterprise\\ Edition\\ )"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(R\\&D)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(Helix\\ platforms)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(VRI\\ Platform\\ )"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(Cybersecurity)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(SAP\\ S/4HANA)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(D\\&A)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(DMS\\ \\&\\ SFA)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(Leveredge\\ \\(\\ SDSICM\\))"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(Core\\ Chasis)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(SAP\\ GTS)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(Sapphire\\ Fusion)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(TOSCA)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(ThoughtSpot)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(Digital\\ \\&\\ AI)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(Governance\\ model)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(SureCloud\\ Core)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(Wavestone)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(ServiceNow)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(Vantage\\ Production)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(Hyper\\-Automation\\ Platform\\ )"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(SpheraCloud)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(Dynamic\\ 365)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(Azure\\ Platform)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(H2Ok\u2019s\\ core\\ platform\\ \\-Azure\\ Platform)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(Microsoft\\ Dynamics\\ 365\\ Finance\\ and\\ operations)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(Grocery\\ Genius\\ platform)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(Informatica)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(Kalido)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(IMS\\ application)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(CDIO\\ )"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(Meta\\ Learning\\ and\\ Pishing)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(DVOC\\ Services)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(TPM)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(CD)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(Power\\ BI)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(BDL\\ \\&\\ PDS)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(Cost\\ to\\ Serve\\ \\-\\ RTVA)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(NRM)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(CD\\ Applications)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(PDS)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(Data\\ Operations\\ Services)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(Solution\\ Factory)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(UDL)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(Cloud\\ Server)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(UAL\\ ADMS\\ and\\ SAP\\ Support)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(Kinaxis)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(Cyber\\ Foundation)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(MDL)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(Customer\\ Development)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(Not\\ found)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(Ecommerce\\ Plateform)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(Cyber\\ 360\\ Insight)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(HiredScore)"
+        }
+      }
+    ],
+    [
+      {
+        "TEXT": {
+          "REGEX": "(Vantage\u00a0Production)"
+        }
+      }
+    ]
+  ]
+}

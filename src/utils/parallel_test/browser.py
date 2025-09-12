@@ -308,16 +308,18 @@ class BrowserManager:
             new_tab_handle = self.driver.window_handles[-1]
             self.driver.switch_to.window(new_tab_handle)
             
-            # Set download directory for this tab using JavaScript
+            # IMPORTANT: Set download directory for this tab using JavaScript
+            # This is the key fix - we need to set the download directory for the current tab
             self.driver.execute_script(f"""
-                // Try to set download directory via localStorage
+                // Set download directory via localStorage
                 try {{
                     localStorage.setItem('download.default_directory', '{download_dir}');
+                    console.log('Set download directory via localStorage:', '{download_dir}');
                 }} catch(e) {{
                     console.log('Could not set localStorage:', e);
                 }}
                 
-                // Try to set via Chrome preferences (Edge uses Chrome's preference system)
+                // Also try to set via Chrome preferences (Edge uses Chrome's preference system)
                 try {{
                     if (window.chrome && window.chrome.downloads) {{
                         chrome.downloads.setShelfEnabled(false);
@@ -325,7 +327,22 @@ class BrowserManager:
                 }} catch(e) {{
                     console.log('Could not set Chrome preferences:', e);
                 }}
+                
+                // Additional method: try to set via browser preferences
+                try {{
+                    if (window.chrome && window.chrome.runtime) {{
+                        chrome.runtime.sendMessage({{
+                            action: 'setDownloadDirectory',
+                            directory: '{download_dir}'
+                        }});
+                    }}
+                }} catch(e) {{
+                    console.log('Could not set via runtime:', e);
+                }}
             """)
+            
+            # Wait a moment for the settings to take effect
+            time.sleep(1)
             
             print(f"   📁 Created tab with download directory: {download_dir}")
             return new_tab_handle

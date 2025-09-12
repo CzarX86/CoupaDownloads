@@ -54,6 +54,16 @@ class DriverManager:
         1. Looks for a compatible local driver.
         2. If not found, downloads a compatible driver from the web.
         """
+        # 0. Respect explicit env override first
+        env_path = os.environ.get("EDGE_DRIVER_PATH")
+        if env_path:
+            env_path = os.path.expanduser(env_path)
+            if os.path.exists(env_path) and self.verify_driver(env_path):
+                print(f"✅ Using driver from EDGE_DRIVER_PATH: {env_path}")
+                return env_path
+            else:
+                print("⚠️ EDGE_DRIVER_PATH provided but invalid; ignoring.")
+
         # 1. Try to find a suitable local driver first
         print("🔎 Searching for a compatible local EdgeDriver...")
         local_driver_path = self._find_compatible_local_driver()
@@ -62,6 +72,11 @@ class DriverManager:
             return local_driver_path
 
         # 2. If no local driver, fall back to web download
+        if os.environ.get("DRIVER_AUTO_DOWNLOAD", "true").lower() != "true":
+            raise RuntimeError(
+                "No compatible local EdgeDriver found and DRIVER_AUTO_DOWNLOAD is disabled. "
+                "Please provision a compatible driver and set EDGE_DRIVER_PATH or place it under 'drivers/'."
+            )
         print("ℹ️ No compatible local driver found. Starting automatic download...")
         
         edge_version = self.get_edge_version()

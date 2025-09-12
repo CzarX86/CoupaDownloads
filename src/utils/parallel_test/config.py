@@ -13,8 +13,8 @@ class Config:
     # Base URLs and paths
     BASE_URL = "https://unilever.coupahost.com"
     # Define project root dynamically
-    PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    INPUT_DIR = "data/input"
+    PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+    INPUT_DIR = os.path.join(PROJECT_ROOT, "data", "input")
     DOWNLOAD_FOLDER = os.path.expanduser("~/Downloads/CoupaDownloads/Temp")  # Temporary download folder
 
     # File settings
@@ -29,8 +29,8 @@ class Config:
     HEADLESS = os.environ.get("HEADLESS", "false").lower() == "true"
     KEEP_BROWSER_OPEN = False
     CLOSE_BROWSER_AFTER_EXECUTION = True
-    PROCESS_MAX_POS = int(os.environ.get("PROCESS_MAX_POS", "0")) or None
-    RANDOM_SAMPLE_POS = int(os.environ.get("RANDOM_SAMPLE_POS", "0")) or None
+    PROCESS_MAX_POS = int(os.environ.get("PROCESS_MAX_POS", "3")) or None
+    RANDOM_SAMPLE_POS = int(os.environ.get("RANDOM_SAMPLE_POS", "3")) or None
 
     # Browser settings
     BROWSER_OPTIONS = {

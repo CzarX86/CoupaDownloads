@@ -1,0 +1,23 @@
+{
+  "labels": [
+    "O",
+    "B-PWO_NUMBER",
+    "I-PWO_NUMBER",
+    "B-CONTRACT_TYPE",
+    "I-CONTRACT_TYPE",
+    "B-MANAGED_BY",
+    "I-MANAGED_BY",
+    "B-CURRENCY",
+    "I-CURRENCY",
+    "B-PLATFORM",
+    "I-PLATFORM",
+    "B-CONTRACT_VALUE",
+    "I-CONTRACT_VALUE",
+    "B-CONTRACT_NAME",
+    "I-CONTRACT_NAME",
+    "B-COMMERCIAL_MODEL",
+    "I-COMMERCIAL_MODEL"
+  ],
+  "model_name": "dbmdz/bert-large-cased-finetuned-conll03-english",
+  "patterns_count": 165
+}

@@ -3,6 +3,7 @@ import sys
 import random
 import time
 import threading
+import pandas as pd
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, List, Optional
 
@@ -64,8 +65,37 @@ class TabManager:
             self.download_status[po_number] = True
             print(f"   📥 Download started for {po_number}")
     
+    def wait_for_downloads_completion(self, po_number: str, timeout: int = 60):
+        """Wait for all downloads for a specific PO to complete."""
+        if po_number not in self.active_tabs:
+            print(f"   ⚠️ No active tab found for {po_number}")
+            return False
+        
+        tab_handle = self.active_tabs[po_number]
+        start_time = time.time()
+        
+        while time.time() - start_time < timeout:
+            # Check if all downloads for this tab are complete
+            if self.download_control.is_tab_complete(tab_handle):
+                elapsed = int(time.time() - start_time)
+                print(f"   ✅ All downloads completed for {po_number} (took {elapsed}s)")
+                return True
+            
+            # Check for ongoing downloads
+            tab_downloads = self.download_control.get_tab_downloads(tab_handle)
+            downloading_count = sum(1 for record in tab_downloads if record.status == "DOWNLOADING")
+            
+            if downloading_count > 0:
+                elapsed = int(time.time() - start_time)
+                print(f"   ⏳ {downloading_count} download(s) in progress for {po_number} ({elapsed}s)...")
+            
+            time.sleep(2)
+        
+        print(f"   ⚠️ Timeout waiting for downloads to complete for {po_number} ({timeout}s)")
+        return False
+    
     def close_tab_for_po(self, po_number: str, wait_for_download: bool = False):
-        """Close tab for a specific PO."""
+        """Close tab for a specific PO with enhanced error handling."""
         with self.lock:
             if po_number not in self.active_tabs:
                 print(f"   ⚠️ No active tab found for {po_number}")
@@ -74,30 +104,72 @@ class TabManager:
             tab_handle = self.active_tabs[po_number]
             
             # Update tab state to CLOSED in CSV control
-            self.download_control.update_tab_state(tab_handle, "CLOSED")
+            try:
+                self.download_control.update_tab_state(tab_handle, "CLOSED")
+            except Exception as e:
+                print(f"   ⚠️ Warning: Could not update CSV tab state: {e}")
             
             # If this is the last PO and we need to wait for download
             if wait_for_download:
                 print(f"   ⏳ Waiting for download to complete for {po_number}...")
                 time.sleep(5)  # Wait for download to finish
             
-            # Switch to the tab and close it
+            # Enhanced tab closing with multiple strategies
             try:
-                self.driver.switch_to.window(tab_handle)
-                self.driver.close()
+                # Strategy 1: Check if tab still exists
+                if tab_handle not in self.driver.window_handles:
+                    print(f"   ℹ️ Tab {tab_handle} already closed for {po_number}")
+                    # Remove from tracking even if tab was already closed
+                    if po_number in self.active_tabs:
+                        del self.active_tabs[po_number]
+                    if po_number in self.download_status:
+                        del self.download_status[po_number]
+                    return
                 
-                # Switch back to main tab
-                if self.driver.window_handles:
-                    self.driver.switch_to.window(self.driver.window_handles[0])
+                # Strategy 2: Try to switch to tab and close it
+                try:
+                    self.driver.switch_to.window(tab_handle)
+                    self.driver.close()
+                    print(f"   🔒 Tab closed for {po_number}")
+                    
+                except Exception as switch_error:
+                    print(f"   ⚠️ Could not switch to tab {tab_handle}: {switch_error}")
+                    
+                    # Strategy 3: Try to close tab by executing JavaScript
+                    try:
+                        self.driver.execute_script(f"window.open('', '{tab_handle}').close();")
+                        print(f"   🔒 Tab closed via JavaScript for {po_number}")
+                    except Exception as js_error:
+                        print(f"   ⚠️ JavaScript close failed: {js_error}")
+                        
+                        # Strategy 4: Force close by removing from window handles tracking
+                        print(f"   ⚠️ Tab {po_number} may be in inconsistent state")
+                
+                # Switch back to main tab if available
+                try:
+                    if self.driver.window_handles:
+                        self.driver.switch_to.window(self.driver.window_handles[0])
+                    else:
+                        print(f"   ⚠️ No windows available after closing tab")
+                except Exception as switch_back_error:
+                    print(f"   ⚠️ Could not switch back to main tab: {switch_back_error}")
                 
                 # Remove from tracking
-                del self.active_tabs[po_number]
-                del self.download_status[po_number]
-                
-                print(f"   🔒 Tab closed for {po_number}")
+                if po_number in self.active_tabs:
+                    del self.active_tabs[po_number]
+                if po_number in self.download_status:
+                    del self.download_status[po_number]
                 
             except Exception as e:
-                print(f"   ⚠️ Error closing tab for {po_number}: {e}")
+                print(f"   ❌ Error closing tab for {po_number}: {e}")
+                # Still try to remove from tracking even if close failed
+                try:
+                    if po_number in self.active_tabs:
+                        del self.active_tabs[po_number]
+                    if po_number in self.download_status:
+                        del self.download_status[po_number]
+                except:
+                    pass
     
     def get_active_tab_count(self) -> int:
         """Get the number of active tabs."""
@@ -131,60 +203,153 @@ class MainApp:
             print("✅ Browser initialized successfully")
 
     def process_single_po(self, po_data, hierarchy_cols, has_hierarchy_data, index, total):
-        """Process a single PO using a new tab in the existing browser."""
+        """Process a single PO using a new tab in the existing browser with enhanced error handling."""
         display_po = po_data['po_number']
         po_number = po_data['po_number']
         
         print(f"📋 Processing PO {index+1}/{total}: {display_po}")
         
-        try:
-            # Create hierarchical folder structure (only for display, actual folder created later with status)
-            folder_path = self.folder_hierarchy.create_folder_path(
-                po_data, hierarchy_cols, has_hierarchy_data
-            )
-            print(f"   📁 Folder: {folder_path}")
-            
-            # Create new tab for this PO (use temp folder for downloads)
-            tab_handle = self.tab_manager.create_tab_for_po(po_number)
-            
-            # Create downloader for this tab
-            downloader = Downloader(self.driver, self.browser_manager, self.download_control)
-            
-            # Process the PO with real tab ID and hierarchical folder
-            success, message = downloader.download_attachments_for_po(po_number, tab_handle, folder_path)
-            
-            # Mark download as started
-            self.tab_manager.mark_download_started(po_number)
-            
-            # Update status
-            self.excel_processor.update_po_status(
-                display_po, 
-                "Success" if success else "Error", 
-                error_message=message,
-                download_folder=folder_path
-            )
-            
-            # Determine if we should wait for download completion
-            is_last_po = (index + 1) == total
-            wait_for_download = is_last_po
-            
-            # Close this tab
-            self.tab_manager.close_tab_for_po(po_number, wait_for_download=wait_for_download)
-            
-            print(f"   ✅ {display_po}: {message}")
-            return True
-            
-        except Exception as e:
-            print(f"   ❌ Error processing {display_po}: {e}")
-            self.excel_processor.update_po_status(display_po, "Error", error_message=str(e))
-            
-            # Try to close tab
+        # Enhanced error tracking
+        max_retries = 2
+        retry_count = 0
+        
+        while retry_count <= max_retries:
             try:
-                self.tab_manager.close_tab_for_po(po_number)
-            except:
-                pass
+                # Create hierarchical folder structure (only for display, actual folder created later with status)
+                folder_path = self.folder_hierarchy.create_folder_path(
+                    po_data, hierarchy_cols, has_hierarchy_data
+                )
+                print(f"   📁 Folder: {folder_path}")
                 
-            return False
+                # Enhanced tab creation with retry logic
+                tab_handle = None
+                for tab_attempt in range(3):  # Try up to 3 times to create tab
+                    try:
+                        tab_handle = self.tab_manager.create_tab_for_po(po_number)
+                        if tab_handle:
+                            break
+                        else:
+                            print(f"   ⚠️ Tab creation attempt {tab_attempt + 1} failed, retrying...")
+                            time.sleep(1)
+                    except Exception as e:
+                        print(f"   ⚠️ Tab creation error (attempt {tab_attempt + 1}): {e}")
+                        if tab_attempt < 2:
+                            time.sleep(2)
+                        else:
+                            raise e
+                
+                if not tab_handle:
+                    raise Exception("Failed to create tab after multiple attempts")
+                
+                # Create downloader for this tab
+                downloader = Downloader(self.driver, self.browser_manager, self.download_control)
+                
+                # Enhanced PO processing with better error handling
+                success, message = downloader.download_attachments_for_po(po_number, tab_handle, folder_path)
+                
+                # Mark download as started
+                self.tab_manager.mark_download_started(po_number)
+                
+                # Get additional information for Excel update
+                supplier = po_data.get('supplier', '')
+                attachments_found = po_data.get('attachments_found', 0)
+                attachments_downloaded = po_data.get('attachments_downloaded', 0)
+                coupa_url = f"{Config.BASE_URL}/order_headers/{po_number}"
+                attachment_names = po_data.get('attachment_names', '')
+                
+                # Enhanced Excel update with retry logic
+                excel_updated = False
+                for excel_attempt in range(3):  # Try up to 3 times to update Excel
+                    try:
+                        self.excel_processor.update_po_status(
+                            display_po, 
+                            "Success" if success else "Error", 
+                            supplier=supplier,
+                            attachments_found=attachments_found,
+                            attachments_downloaded=attachments_downloaded,
+                            error_message=message,
+                            download_folder=folder_path,
+                            coupa_url=coupa_url,
+                            attachment_names=attachment_names
+                        )
+                        excel_updated = True
+                        break
+                    except Exception as e:
+                        print(f"   ⚠️ Excel update error (attempt {excel_attempt + 1}): {e}")
+                        if excel_attempt < 2:
+                            time.sleep(2)
+                        else:
+                            print(f"   ❌ Failed to update Excel after multiple attempts")
+                
+                # Wait for downloads to complete before closing tab
+                print(f"   ⏳ Waiting for downloads to complete for {po_number}...")
+                self.tab_manager.wait_for_downloads_completion(po_number, timeout=60)
+                
+                # Enhanced tab closing with better error handling
+                try:
+                    self.tab_manager.close_tab_for_po(po_number, wait_for_download=True)
+                except Exception as e:
+                    print(f"   ⚠️ Warning: Error closing tab for {po_number}: {e}")
+                
+                print(f"   ✅ {display_po}: {message}")
+                return True
+                
+            except Exception as e:
+                retry_count += 1
+                error_msg = str(e)
+                
+                # Enhanced error categorization
+                if "no such window" in error_msg.lower():
+                    error_category = "WINDOW_CLOSED"
+                elif "no such element" in error_msg.lower():
+                    error_category = "ELEMENT_NOT_FOUND"
+                elif "timeout" in error_msg.lower():
+                    error_category = "TIMEOUT"
+                elif "network" in error_msg.lower() or "connection" in error_msg.lower():
+                    error_category = "NETWORK_ERROR"
+                else:
+                    error_category = "UNKNOWN_ERROR"
+                
+                print(f"   ❌ Error processing {display_po} (attempt {retry_count}/{max_retries + 1}): {error_msg}")
+                print(f"   📊 Error category: {error_category}")
+                
+                # Try to close tab on error
+                try:
+                    self.tab_manager.close_tab_for_po(po_number)
+                except:
+                    pass
+                
+                # If this is the last retry, update Excel with error and return False
+                if retry_count > max_retries:
+                    try:
+                        self.excel_processor.update_po_status(
+                            display_po, 
+                            "Error", 
+                            error_message=f"{error_category}: {error_msg}",
+                            coupa_url=f"{Config.BASE_URL}/order_headers/{po_number}"
+                        )
+                    except:
+                        print(f"   ❌ Failed to update Excel with error status")
+                    
+                    return False
+                else:
+                    # Wait before retry with exponential backoff
+                    wait_time = 2 ** retry_count
+                    print(f"   ⏳ Waiting {wait_time}s before retry...")
+                    time.sleep(wait_time)
+                    
+                    # Try to recover by creating a new tab
+                    try:
+                        # Clean up any existing tab for this PO
+                        self.tab_manager.close_tab_for_po(po_number)
+                        time.sleep(1)
+                    except:
+                        pass
+                    
+                    print(f"   🔄 Retrying {display_po}...")
+                    continue
+        
+        return False
 
     def run(self) -> None:
         """Main execution loop for processing POs."""
@@ -199,8 +364,8 @@ class MainApp:
                 print("❌ No POs found in Excel file")
                 return
             
-            # Filter POs to process
-            pending_pos = [po for po in po_entries if po.get('status', 'Pending') == 'Pending']
+            # Filter POs to process - include POs with 'Pending' status or nan/empty status
+            pending_pos = [po for po in po_entries if po.get('status', 'Pending') == 'Pending' or pd.isna(po.get('status')) or po.get('status') == '']
             
             if not pending_pos:
                 print("✅ All POs already processed")

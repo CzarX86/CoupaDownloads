@@ -1,0 +1,11 @@
+{
+  "excel_path": "src/MyScript/data/input.xlsx",
+  "csv_path": "src/MyScript/download_inventory.csv",
+  "download_dir": "~/Downloads/CoupaDownloads",
+  "num_windows": 2,
+  "max_tabs_per_window": 3,
+  "max_workers": 4,
+  "batch_size": 5,
+  "headless": false,
+  "profile_mode": "minimal"
+}

@@ -19,7 +19,7 @@ class DriverManager:
         
     def _get_project_root(self) -> str:
         """Get the project root directory."""
-        return os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        return os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
     
     def _get_platform(self) -> str:
         """Get the current platform identifier."""
@@ -39,11 +39,11 @@ class DriverManager:
         """
         Get the path to the EdgeDriver.
         """
-        # Look for local driver
+        # Look for local driver using absolute path
         if self.platform == "win64":
-            driver_path = "drivers/msedgedriver.exe"
+            driver_path = os.path.join(self.drivers_dir, "msedgedriver.exe")
         else:
-            driver_path = "drivers/msedgedriver"
+            driver_path = os.path.join(self.drivers_dir, "msedgedriver")
         
         if os.path.exists(driver_path):
             print(f"✅ Using local driver: {driver_path}")

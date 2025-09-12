@@ -170,3 +170,11 @@ flowchart TD
 4. **Folder Organization**: Hierarchical or fallback folder structures
 5. **Download Strategies**: Multiple click strategies for reliability
 6. **Status Management**: Real-time Excel updates and reporting
+
+
+
+
+
+
+
+

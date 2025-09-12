@@ -74,6 +74,13 @@ class Config:
     MSG_ARTIFACT_MIN_SIZE = int(os.environ.get("MSG_ARTIFACT_MIN_SIZE", "1024"))
     MSG_IMAGE_MIN_SIZE = int(os.environ.get("MSG_IMAGE_MIN_SIZE", "5120"))
 
+    # Folder naming controls
+    ADD_STATUS_SUFFIX = os.environ.get("ADD_STATUS_SUFFIX", "false").lower() == "true"
+
+    # Profile usage and startup behavior
+    USE_PROFILE = os.environ.get("USE_EDGE_PROFILE", "true").lower() == "true"
+    CLOSE_EDGE_PROCESSES = os.environ.get("CLOSE_EDGE_PROCESSES", "true").lower() == "true"
+
     @classmethod
     def ensure_download_folder_exists(cls) -> None:
         if not os.path.exists(cls.DOWNLOAD_FOLDER):
