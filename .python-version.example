@@ -1,0 +1,4 @@
+# Example python version file for the project
+# Copy this to .python-version if you want local tooling (pyenv/asdf) to pick it up
+# Do NOT commit your personal .python-version; keep it local per-developer.
+3.12.11
