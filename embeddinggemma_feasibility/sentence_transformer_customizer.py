@@ -101,9 +101,36 @@ class ContractSentenceTransformerCustomizer:
             self.logger.error(f"❌ Erro ao criar embeddings: {e}")
             return False
     
-    def create_training_data(self):
-        """Criar dados de treinamento para fine-tuning."""
+    def create_training_data(self, pairs_jsonl: str | None = None):
+        """Criar dados de treinamento para fine-tuning.
+
+        Se `pairs_jsonl` for informado, carrega pares pré-gerados (JSONL com
+        chaves text1, text2, label). Caso contrário, deriva pares dos
+        embeddings criados a partir do CSV carregado.
+        """
         training_examples = []
+        # Caminho alternativo: carregar pares prontos
+        if pairs_jsonl:
+            try:
+                from sentence_transformers import InputExample
+                import json
+                with open(pairs_jsonl, 'r', encoding='utf-8') as f:
+                    for line in f:
+                        try:
+                            obj = json.loads(line)
+                        except Exception:
+                            continue
+                        t1 = str(obj.get('text1', '')).strip()
+                        t2 = str(obj.get('text2', '')).strip()
+                        if not t1 or not t2:
+                            continue
+                        label = float(obj.get('label', 0.0))
+                        training_examples.append(InputExample(texts=[t1, t2], label=label))
+                self.logger.info(f"✅ {len(training_examples)} exemplos carregados de pares_jsonl")
+                return training_examples
+            except Exception as e:
+                self.logger.error(f"❌ Erro ao carregar pairs_jsonl: {e}")
+                # Cai para o modo derivado se falhar
         
         # Criar pares positivos (termos similares)
         for category, data in self.contract_embeddings.items():
@@ -333,4 +360,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

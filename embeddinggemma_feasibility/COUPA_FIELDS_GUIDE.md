@@ -33,9 +33,18 @@ Este módulo extrai os 22 campos específicos solicitados dos PDFs e gera um arq
 
 ### 🚀 Quick Start
 
+Opção A — Executar pelo menu interativo (recomendado):
+
+```bash
+poetry run python -m embeddinggemma_feasibility.interactive_cli
+# Escolha: "Executar Extrator Avançado"
+```
+
+Opção B — Executar o script do extrator avançado diretamente:
+
 ```bash
 cd src/MyScript/embeddinggemma_feasibility
-python extract_coupa_fields.py
+python extract_advanced_coupa_fields.py
 ```
 
 ### 📊 Arquivo CSV Gerado
@@ -224,11 +233,11 @@ O sistema gera um relatório Markdown com:
 ### 🔄 Integração com MyScript
 
 ```python
-# Exemplo de integração
-from coupa_field_extractor import CoupaPDFFieldExtractor
+# Exemplo de integração com o extrator avançado
+from advanced_coupa_field_extractor import AdvancedCoupaPDFFieldExtractor
 
-def process_coupa_contracts():
-    extractor = CoupaPDFFieldExtractor()
+def process_coupa_contracts(pdf_dir: str):
+    extractor = AdvancedCoupaPDFFieldExtractor(pdf_dir)
     extractions = extractor.process_all_pdfs()
 
     # Salvar CSV
@@ -245,8 +254,8 @@ def process_coupa_contracts():
 
 ### 📝 Próximos Passos
 
-1. **Adicione PDFs** na pasta `src/data/P2`
-2. **Execute**: `python extract_coupa_fields.py`
+1. **Adicione PDFs** na pasta `src/data/P2` (ou a sua pasta de documentos)
+2. **Execute**: `python extract_advanced_coupa_fields.py` (ou via menu interativo)
 3. **Analise o CSV** gerado
 4. **Revise o relatório** para entender a qualidade da extração
 5. **Ajuste padrões** se necessário para melhorar precisão

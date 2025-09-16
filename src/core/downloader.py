@@ -22,6 +22,40 @@ class Downloader:
         self.driver = driver
         self.browser_manager = browser_manager
 
+    def _extract_supplier_name(self) -> Optional[str]:
+        """Best-effort supplier name extraction using configured selectors.
+
+        Tries multiple CSS selectors, then XPATH as fallback. Returns cleaned text
+        or None if not found.
+        """
+        try:
+            # Try CSS selectors first
+            for sel in getattr(Config, 'SUPPLIER_NAME_CSS_SELECTORS', []) or []:
+                try:
+                    els = self.driver.find_elements(By.CSS_SELECTOR, sel)
+                except Exception:
+                    els = []
+                for el in els:
+                    try:
+                        txt = (el.text or '').strip()
+                    except Exception:
+                        txt = ''
+                    if txt:
+                        return txt
+            # Fallback to XPATH
+            xpath = getattr(Config, 'SUPPLIER_NAME_XPATH', '')
+            if xpath:
+                try:
+                    el = self.driver.find_element(By.XPATH, xpath)
+                    txt = (el.text or '').strip()
+                    if txt:
+                        return txt
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        return None
+
     def _extract_filename_from_element(
         self,
         attachment: WebElement,
@@ -217,10 +251,10 @@ class Downloader:
             print(f"      ❌ Failed to click on attachment '{filename}'. Reason: {e}")
             return False
 
-    def download_attachments_for_po(self, po_number: str) -> Tuple[bool, str]:
+    def download_attachments_for_po(self, po_number: str) -> dict:
         """
         Main workflow to find and download all attachments for a specific PO.
-        Returns a tuple of (success_status, message).
+        Returns a dict with success, message, supplier_name, counts, url, and names.
         """
         # Remove "PO" prefix if present to get the correct order number
         order_number = po_number.replace("PO", "") if po_number.startswith("PO") else po_number
@@ -233,17 +267,35 @@ class Downloader:
         if "Oops! We couldn't find what you wanted" in self.driver.page_source:
             msg = "PO not found or page error detected."
             print(f"   ❌ {msg}")
-            return False, msg
+            return {
+                'success': False,
+                'message': msg,
+                'supplier_name': '',
+                'attachments_found': 0,
+                'attachments_downloaded': 0,
+                'coupa_url': url,
+                'attachment_names': [],
+            }
 
         attachments = self._find_attachments()
+        supplier = self._extract_supplier_name()
         if not attachments:
             msg = "No attachments found."
             print(f"   ✅ {msg}")
-            return True, msg
+            return {
+                'success': True,
+                'message': msg,
+                'supplier_name': supplier or '',
+                'attachments_found': 0,
+                'attachments_downloaded': 0,
+                'coupa_url': url,
+                'attachment_names': [],
+            }
 
         total_attachments = len(attachments)
         print(f"   Processing {total_attachments} attachments...")
         downloaded_count = 0
+        names_list: List[str] = []
 
         for i, attachment in enumerate(attachments):
             filename = self._extract_filename_from_element(attachment)
@@ -252,6 +304,7 @@ class Downloader:
                     f"      ⚠ Could not determine filename for attachment {i+1}, skipping."
                 )
                 continue
+            names_list.append(filename)
 
             # The browser will handle duplicate downloads automatically
             # (e.g., file.pdf, file (1).pdf). The old complex logic is removed.
@@ -264,8 +317,24 @@ class Downloader:
                 "attachments."
             )
             print(f"   ✅ {msg}")
-            return True, msg
+            return {
+                'success': True,
+                'message': msg,
+                'supplier_name': supplier or '',
+                'attachments_found': total_attachments,
+                'attachments_downloaded': downloaded_count,
+                'coupa_url': url,
+                'attachment_names': names_list,
+            }
         else:
             msg = f"Failed to download any of the {total_attachments} attachments."
             print(f"   ❌ {msg}")
-            return False, msg
+            return {
+                'success': False,
+                'message': msg,
+                'supplier_name': supplier or '',
+                'attachments_found': total_attachments,
+                'attachments_downloaded': 0,
+                'coupa_url': url,
+                'attachment_names': names_list,
+            }

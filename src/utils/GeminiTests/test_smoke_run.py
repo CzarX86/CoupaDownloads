@@ -7,7 +7,7 @@ from unittest.mock import patch, MagicMock
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..'))
 sys.path.insert(0, project_root)
 
-from src.main import MainApp
+from src.Core_main import MainApp
 
 
 @patch('src.main.ExcelProcessor')

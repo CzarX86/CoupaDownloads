@@ -14,6 +14,9 @@ class EmbeddingGemmaConfig:
     
     # Model Configuration
     model_name: str = "google/embeddinggemma-300m"
+    # Preferred embed model for semantic search/RAG; if set, overrides defaults
+    embed_model: str = "all-MiniLM-L6-v2"
+    embed_model_custom_path: Optional[str] = None
     model_cache_dir: str = "data/model_cache"
     max_sequence_length: int = 512
     batch_size: int = 32
@@ -32,6 +35,11 @@ class EmbeddingGemmaConfig:
     max_workers: int = 4
     chunk_size: int = 1000
     timeout_seconds: int = 300
+
+    # Advanced extractor toggles
+    use_reranker: bool = True
+    enable_filename_clues: bool = True
+    aggregate_by_po: bool = True
     
     # Output Settings
     output_dir: str = "reports"
@@ -49,7 +57,26 @@ class EmbeddingGemmaConfig:
         self.model_cache_dir = str(base_dir / self.model_cache_dir)
         self.cache_dir = str(base_dir / self.cache_dir)
         self.output_dir = str(base_dir / self.output_dir)
-        
+
+        # Optional: detect a custom model path from env or models/current symlink
+        try:
+            if not self.embed_model_custom_path:
+                env_path = os.environ.get("EMBED_MODEL_CUSTOM_PATH")
+                if env_path and Path(env_path).exists():
+                    self.embed_model_custom_path = env_path
+                else:
+                    current_link = base_dir / "models" / "current"
+                    if current_link.exists():
+                        try:
+                            resolved = current_link.resolve()
+                            if resolved.exists():
+                                self.embed_model_custom_path = str(resolved)
+                        except Exception:
+                            pass
+        except Exception:
+            # Non-fatal; continue with defaults
+            pass
+
         # Create directories
         self._create_directories()
     
@@ -161,4 +188,3 @@ if __name__ == "__main__":
     print(f"Sample Documents: {assessment.sample_documents_count}")
     print(f"Test Batch Sizes: {assessment.test_batch_sizes}")
     print(f"Performance Test Duration: {assessment.performance_test_duration}s")
-

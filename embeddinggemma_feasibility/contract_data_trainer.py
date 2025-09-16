@@ -193,8 +193,17 @@ class ContractDataTrainer:
         
         return training_prompts
     
-    def save_training_data(self, output_file: str):
-        """Salvar dados de treinamento."""
+    def save_training_data(self, output_file: str, df: pd.DataFrame | None = None):
+        """Salvar dados de treinamento.
+
+        Se `df` for informado, usa-o diretamente (permite integração com ingestão
+        sem reler do CSV). Caso contrário, utiliza `self.df`.
+        """
+        if df is not None:
+            self.df = df
+        if self.df is None:
+            raise ValueError("Nenhum dataframe carregado para salvar dados de treinamento.")
+
         training_data = {
             'field_patterns': self.field_patterns,
             'value_distributions': self.value_distributions,
@@ -206,10 +215,10 @@ class ContractDataTrainer:
                 'training_examples': len(self.create_training_prompts())
             }
         }
-        
+
         with open(output_file, 'w') as f:
             json.dump(training_data, f, indent=2, default=str)
-        
+
         self.logger.info(f"💾 Dados de treinamento salvos: {output_file}")
         return training_data
 
@@ -245,4 +254,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

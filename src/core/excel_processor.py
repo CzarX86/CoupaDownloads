@@ -295,6 +295,16 @@ class ExcelProcessor:
                 df.loc[mask, 'DOWNLOAD_FOLDER'] = download_folder
                 df.loc[mask, 'COUPA_URL'] = coupa_url
 
+                # Ensure a stable, human-friendly column order matching Excel layout
+                desired_order = [
+                    'PO_NUMBER', 'STATUS', 'SUPPLIER', 'ATTACHMENTS_FOUND',
+                    'ATTACHMENTS_DOWNLOADED', 'AttachmentName', 'LAST_PROCESSED',
+                    'ERROR_MESSAGE', 'DOWNLOAD_FOLDER', 'COUPA_URL'
+                ]
+                existing = [c for c in desired_order if c in df.columns]
+                remaining = [c for c in df.columns if c not in desired_order]
+                df = df[existing + remaining]
+
                 # Write back with stable settings for Excel compatibility
                 df.to_csv(
                     excel_file_path,

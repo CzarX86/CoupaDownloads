@@ -74,7 +74,7 @@ except ImportError:
     NLP_LIBRARIES['ollama'] = False
 
 # Configuration
-from config import get_config
+from .config import get_config
 
 
 @dataclass
@@ -127,10 +127,12 @@ class PDFDocument:
 class AdvancedCoupaPDFFieldExtractor:
     """Extrator avançado para campos do Coupa usando múltiplas bibliotecas NLP."""
     
-    def __init__(self, pdf_directory: str = "/Users/juliocezar/Dev/work/CoupaDownloads/src/data/P2"):
+    def __init__(self, pdf_directory: str = "/Users/juliocezar/Dev/work/CoupaDownloads/src/data/P2", *, use_rag: bool = False, use_validations: bool = False):
         self.config = get_config()
         self.pdf_directory = Path(pdf_directory)
         self.logger = self._setup_logger()
+        self.use_rag = use_rag
+        self.use_validations = use_validations
         
         # Inicializar bibliotecas NLP disponíveis
         self.nlp_models = {}
@@ -203,19 +205,18 @@ class AdvancedCoupaPDFFieldExtractor:
         # Sentence Transformers para embeddings
         if NLP_LIBRARIES.get('sentence_transformers'):
             try:
-                # Tentar EmbeddingGemma primeiro, depois fallback
+                # Prefer custom path or configured model, then fall back
+                model_name = self.config.embed_model_custom_path or getattr(self.config, 'embed_model', None) or "all-MiniLM-L6-v2"
                 try:
                     self.nlp_models['sentence_transformer'] = SentenceTransformer(
-                        "google/embeddinggemma-300m",
+                        model_name,
                         cache_folder=self.config.model_cache_dir
                     )
-                    self.logger.info("✅ EmbeddingGemma carregado")
+                    self.logger.info(f"✅ SentenceTransformer carregado: {model_name}")
                 except Exception:
-                    # Fallback para modelo mais comum
-                    self.nlp_models['sentence_transformer'] = SentenceTransformer(
-                        "all-MiniLM-L6-v2"
-                    )
-                    self.logger.info("✅ SentenceTransformer fallback carregado")
+                    # Fallback to MiniLM if custom/configured fails
+                    self.nlp_models['sentence_transformer'] = SentenceTransformer("all-MiniLM-L6-v2")
+                    self.logger.info("✅ SentenceTransformer fallback carregado: all-MiniLM-L6-v2")
                 self.available_libraries.append('sentence_transformers')
             except Exception as e:
                 self.logger.error(f"❌ Erro ao carregar SentenceTransformer: {e}")
@@ -279,6 +280,53 @@ class AdvancedCoupaPDFFieldExtractor:
         
         self.logger.info(f"📄 Encontrados {len(pdf_files)} arquivos PDF")
         return pdf_files
+
+    def find_supported_files(self) -> List[Path]:
+        """Encontrar todos os arquivos suportados (PDF/DOCX/TXT/HTML/MSG/EML/IMG)."""
+        patterns = [
+            "*.pdf", "*.docx", "*.txt", "*.md", "*.markdown", "*.html", "*.htm",
+            "*.msg", "*.eml", "*.png", "*.jpg", "*.jpeg", "*.tif", "*.tiff"
+        ]
+        files: List[Path] = []
+        if not self.pdf_directory.exists():
+            self.logger.warning(f"⚠️ Diretório não encontrado: {self.pdf_directory}")
+            return files
+        for pat in patterns:
+            for f in self.pdf_directory.rglob(pat):
+                if f.is_file():
+                    files.append(f)
+        self.logger.info(f"📄 Encontrados {len(files)} arquivos suportados")
+        return files
+
+    def _document_from_text(self, path: Path, text: str) -> PDFDocument:
+        try:
+            size = path.stat().st_size
+        except Exception:
+            size = 0
+        return PDFDocument(
+            file_path=str(path),
+            filename=path.name,
+            file_size=size,
+            page_count=0,
+            text_content=(text or "").strip(),
+            extracted_metadata={},
+            processing_time=0.0
+        )
+
+    def extract_text_from_any(self, path: Path) -> PDFDocument:
+        """Extrair texto de qualquer arquivo suportado usando content_loader (ou PDF)."""
+        if path.suffix.lower() == ".pdf":
+            return self.extract_text_from_pdf(path)
+        try:
+            from .content_loader import load_text_from_path
+            loaded = load_text_from_path(str(path))
+            doc = self._document_from_text(path, loaded.get("text", ""))
+            md = loaded.get("metadata", {}) or {}
+            doc.extracted_metadata = md
+            return doc
+        except Exception as e:
+            self.logger.warning(f"⚠️ Falha ao extrair texto de {path.name}: {e}")
+            return self._document_from_text(path, "")
     
     def extract_text_from_pdf(self, pdf_path: Path) -> PDFDocument:
         """Extrair texto de um arquivo PDF."""
@@ -797,9 +845,31 @@ class AdvancedCoupaPDFFieldExtractor:
             )
     
     def extract_coupa_fields(self, document: PDFDocument) -> CoupaFieldExtraction:
-        """Extrair campos específicos do Coupa usando múltiplas técnicas NLP."""
+        """Extrair campos específicos do Coupa usando múltiplas técnicas NLP.
+
+        Quando `use_rag` está ativo, reduz o contexto aplicando uma recuperação
+        de trechos candidatos (RAG) antes das técnicas NLP, para maior precisão.
+        """
         try:
             text = document.text_content
+            # Opcional: RAG assistido para reduzir contexto antes das técnicas NLP
+            if self.use_rag and text:
+                try:
+                    from .rag_assisted_extraction import retrieve_candidates_for_fields
+                    cands_map = retrieve_candidates_for_fields(text, self.target_fields, top_k=3)
+                    unique_snippets: list[str] = []
+                    seen: set[str] = set()
+                    for lst in cands_map.values():
+                        for sn in lst:
+                            s = (sn or "").strip()
+                            if s and s not in seen:
+                                seen.add(s)
+                                unique_snippets.append(s)
+                    if unique_snippets:
+                        text = "\n\n".join(unique_snippets)
+                        self.logger.info("🔎 RAG assistido: contexto reduzido para extração")
+                except Exception as e:
+                    self.logger.warning(f"⚠️ RAG assistido indisponível: {e}")
             if not text:
                 return CoupaFieldExtraction(
                     source_file=document.filename,
@@ -847,6 +917,13 @@ class AdvancedCoupaPDFFieldExtractor:
                 if field_name in all_extractions:
                     setattr(extraction, field_name, all_extractions[field_name])
             
+            # Validações opcionais e normalização
+            if self.use_validations:
+                try:
+                    self._apply_validations(extraction)
+                except Exception as e:
+                    self.logger.warning(f"⚠️ Validações extras falharam: {e}")
+
             # Calcular confiança baseada no número de campos encontrados
             fields_found = sum(1 for field_name in self.target_fields 
                              if getattr(extraction, field_name, "").strip())
@@ -864,46 +941,115 @@ class AdvancedCoupaPDFFieldExtractor:
             )
     
     def process_all_pdfs(self) -> List[CoupaFieldExtraction]:
-        """Processar todos os PDFs na pasta P2."""
+        """Processar todos os documentos suportados no diretório base."""
         start_time = time.time()
         
         self.logger.info("🚀 Iniciando extração avançada de campos do Coupa")
         self.logger.info(f"📚 Usando bibliotecas: {', '.join(self.available_libraries)}")
         
-        # Encontrar arquivos PDF
-        pdf_files = self.find_pdf_files()
+        # Encontrar arquivos suportados
+        files = self.find_supported_files()
         
-        if not pdf_files:
+        if not files:
             self.logger.warning("⚠️ Nenhum arquivo PDF encontrado")
             return []
         
         extractions = []
         
-        # Processar cada PDF
-        for i, pdf_file in enumerate(pdf_files):
-            self.logger.info(f"📄 Processando {i+1}/{len(pdf_files)}: {pdf_file.name}")
+        # Processar cada arquivo
+        for i, file_path in enumerate(files):
+            self.logger.info(f"📄 Processando {i+1}/{len(files)}: {file_path.name}")
             
             try:
                 # Extrair texto
-                document = self.extract_text_from_pdf(pdf_file)
+                document = self.extract_text_from_any(file_path)
                 
                 if document.error_message:
-                    self.logger.error(f"❌ Erro ao extrair texto de {pdf_file.name}: {document.error_message}")
+                    self.logger.error(f"❌ Erro ao extrair texto de {file_path.name}: {document.error_message}")
                     continue
                 
                 # Extrair campos usando NLP avançado
                 extraction = self.extract_coupa_fields(document)
                 extractions.append(extraction)
                 
-                self.logger.info(f"✅ Processado: {pdf_file.name} (confiança: {extraction.extraction_confidence:.2f})")
+                self.logger.info(f"✅ Processado: {file_path.name} (confiança: {extraction.extraction_confidence:.2f})")
                 
             except Exception as e:
-                self.logger.error(f"❌ Erro ao processar {pdf_file.name}: {e}")
+                self.logger.error(f"❌ Erro ao processar {file_path.name}: {e}")
         
         total_time = time.time() - start_time
         self.logger.info(f"✅ Processamento concluído: {len(extractions)} documentos em {total_time:.2f}s")
         
+        # Agregar por PO se habilitado
+        try:
+            if getattr(self.config, 'aggregate_by_po', False):
+                from .po_aggregator import aggregate_extractions_by_po
+                extractions = aggregate_extractions_by_po(
+                    extractions, use_filename_clues=getattr(self.config, 'enable_filename_clues', True)
+                )
+        except Exception as e:
+            self.logger.warning(f"⚠️ Agregação por PO falhou: {e}")
+        
         return extractions
+
+    # -------------------- Validations (optional) --------------------
+    def _apply_validations(self, extraction: 'CoupaFieldExtraction') -> None:
+        """Apply lightweight validations/normalizations where possible.
+
+        Uses optional libs if available; falls back gracefully.
+        """
+        # Dates normalization
+        for key in ("contract_start_date", "contract_end_date"):
+            val = getattr(extraction, key, "")
+            norm = self._validate_date(val)
+            if norm is not None:
+                setattr(extraction, key, norm)
+
+        # Amounts coherence (best-effort)
+        eur = getattr(extraction, "sow_value_eur", "")
+        lc = getattr(extraction, "sow_value_lc", "")
+        fx = getattr(extraction, "fx", "")
+        _ = self._validate_amounts(eur, lc, fx)  # currently informational/log-only
+
+    def _validate_date(self, v: str) -> str | None:
+        v = (v or "").strip()
+        if not v:
+            return None
+        try:
+            import dateparser  # type: ignore
+        except Exception:
+            return None
+        try:
+            dt = dateparser.parse(v, languages=["en", "pt"])  # best-effort
+            if dt:
+                return dt.strftime("%Y-%m-%d")
+        except Exception:
+            return None
+        return None
+
+    def _validate_amounts(self, eur: str, lc: str, fx: str) -> bool:
+        import re
+        def to_num(s: str) -> float | None:
+            s = (s or "").strip()
+            if not s:
+                return None
+            s = s.replace("€", "").replace("$", "").replace(",", "").replace(" ", "")
+            m = re.search(r"-?\d+(?:\.\d+)?", s)
+            try:
+                return float(m.group(0)) if m else None
+            except Exception:
+                return None
+        eur_v = to_num(eur)
+        lc_v = to_num(lc)
+        fx_v = to_num(fx)
+        if eur_v is not None and fx_v is not None and lc_v is not None:
+            # Within 5% tolerance
+            expected_lc = eur_v * fx_v
+            ok = abs(expected_lc - lc_v) <= 0.05 * max(1.0, expected_lc)
+            if not ok:
+                self.logger.debug(f"Amounts coherence check failed: EUR*FX={expected_lc:.2f} vs LC={lc_v:.2f}")
+            return ok
+        return True
     
     def save_to_csv(self, extractions: List[CoupaFieldExtraction], output_file: str = None) -> str:
         """Salvar extrações em arquivo CSV."""
@@ -944,9 +1090,9 @@ class AdvancedCoupaPDFFieldExtractor:
             "NLP Libraries Used"
         ]
         
-        # Escrever CSV
-        with open(output_path, 'w', newline='', encoding='utf-8') as csvfile:
-            writer = csv.writer(csvfile)
+        # Escrever CSV (SOP: UTF-8 BOM, \n, QUOTE_MINIMAL)
+        with open(output_path, 'w', newline='\n', encoding='utf-8-sig') as csvfile:
+            writer = csv.writer(csvfile, quoting=csv.QUOTE_MINIMAL, lineterminator='\n')
             writer.writerow(headers)
             
             for extraction in extractions:

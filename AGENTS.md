@@ -1,38 +1,68 @@
-# Repository Guidelines
+# Agent Guide (Codex) — Plan → Implement Workflow
 
-## Project Structure & Module Organization
-- Source: `src/` (core logic in `src/core/`, utilities in `src/utils/`, entrypoint `src/main.py`).
-- Data: `data/input/` (CSV), outputs to `~/Downloads/CoupaDownloads` by default (see `Config`).
-- Drivers: `drivers/` for pre-bundled EdgeDrivers (Windows release).
-- Tests: root-level `test_*.py` and additional tests in `src/utils/GeminiTests/`.
+This repository uses a lightweight, review‑first workflow for all non‑trivial changes. As the agent, always propose a Plan PR first, wait for approval, and only then implement the change exactly as approved.
 
-## Build, Test, and Development Commands
-- Create env (Poetry): `poetry install`
-- Run app:
-  - Poetry: `poetry run coupa-downloader` or `poetry run python -m src.main`
-  - Windows venv: `venv\\Scripts\\activate && python src\\main.py`
-- Run tests (fast): `poetry run pytest -q`
-- Run tests (parallel + coverage): `poetry run pytest -n auto --cov=src --cov-report=term-missing`
+## Scope and Principles
+- This guide applies to the entire repository.
+- The agent MUST:
+  - Propose a plan in `PR_PLANS/NN-<slug>.md` (no code changes in this step).
+  - Await human approval. Only implement after explicit approval.
+  - Keep implementation strictly within the approved scope.
+- Do not change global defaults, runtime behavior, or architecture without an approved plan.
+- Follow PEP 8 and existing project conventions (types, names, import order, side effects only in entrypoints).
+- Prefer additive, minimal, and reviewable diffs. Avoid drive‑by refactors.
 
-## Coding Style & Naming Conventions
-- Python 3.12+, follow PEP 8 with 4-space indents.
-- Types: prefer type hints (as in `Config`) and clear return types.
-- Names: modules/functions `snake_case`, classes `PascalCase`, constants `UPPER_SNAKE_CASE`.
-- Imports: standard library, third-party, local (grouped, blank lines between).
-- Side effects only in entrypoints (e.g., `src/main.py`). Keep modules import-safe.
+## PR Conventions
+- Plan files: `PR_PLANS/NN-<slug>.md`
+  - Contents: Objective, Scope, Affected files, Pseudodiff, Acceptance criteria, Manual tests, Suggested commit message and branch.
+  - Number `NN` is incremental (01, 02, 03…) and reflects implementation order.
+- Branch naming:
+  - Plan: `plan/NN-<slug>`
+  - Implementation: `feat/NN-<slug>`, `fix/NN-<slug>`, `chore/NN-<slug>`, or `docs/NN-<slug>`
+- Commit messages:
+  - Plan: `docs(pr-plan): PR NN — <title>`
+  - Implementation: `<type>(scope): PR NN — <title>` (e.g., `feat(downloader): PR 08 — attachment discovery`)
 
-## Testing Guidelines
-- Framework: `pytest` with `pytest-xdist`, `pytest-cov` available.
-- Location/naming: files `test_*.py`, tests `test_*` functions/classes.
-- Coverage: no hard threshold, but add tests for new code paths and bug fixes.
-- Examples: `poetry run pytest test_simple_download.py -q` or node selection `::test_name`.
+## Standard Operating Procedure (SOP)
+1) Plan
+   - Create `PR_PLANS/NN-<slug>.md` with all sections filled.
+   - Do NOT modify code in this step.
+2) Implement (after approval)
+   - Implement only what the plan states. If scope changes are needed, submit a new plan.
+   - Keep the PR small, focused, and testable.
+   - After implementation move PR file into "Implemented" folder.
 
-## Commit & Pull Request Guidelines
-- Commits: imperative mood, concise subject; optional emoji prefix is used in history (e.g., "🔧 Fix driver path").
-- PRs: include summary, rationale, linked issues, test plan/outputs, and screenshots/log snippets if relevant.
-- Keep changes focused; update docs when behavior/config changes (README, RELEASE_NOTES, this file).
+## Technical Rules for the Agent
+### Language Policy (UI vs. Source)
+- UI must be English: all user‑visible text in CLI/GUI (prompts, help, logs/messages, errors) is written and presented in English.
+- Source may be pt‑BR: code, inline comments, and internal docs/comments may be written in Portuguese (pt‑BR).
+- Debug logs: if printed by default, keep in English. Portuguese‑only debug notes are fine when suppressed by default.
+- Do not alter runtime defaults or behavior; only reword UI strings as needed.
 
-## Security & Configuration Tips
-- Configuration via `src/core/config.py` and env vars (e.g., `EDGE_PROFILE_DIR`, `HEADLESS`, `RANDOM_SAMPLE_POS`).
-- Avoid committing secrets or OS-specific absolute paths.
-- Respect default output dir `~/Downloads/CoupaDownloads`; don’t write outside project/data without clear config.
+- Testing and runtime
+  - Prefer fast checks; avoid launching heavy processes unless requested.
+  - Respect environment variables and defaults; do not mutate user environment in code.
+- Security
+  - Do not commit secrets or OS‑specific absolute paths.
+  - Do not download external binaries without an approved plan (e.g., driver updates).
+- CSV/Excel IO
+  - Preserve delimiter (auto‑detect), write as UTF‑8 BOM (`utf-8-sig`), `lineterminator="\n"`, `csv.QUOTE_MINIMAL`.
+  - Keep hierarchy and column integrity.
+- Concurrency / Browser
+  - Be explicit in plans about process/thread model changes.
+  - Avoid changing browser/profile defaults unless planned and approved.
+
+## Required Checklist in Every Plan
+- [ ] Objective and Scope are clear and limited.
+- [ ] Affected files listed.
+- [ ] Pseudodiff (small, readable, representative of the approach).
+- [ ] Acceptance criteria and minimal manual tests.
+- [ ] Suggested commit message and branch name.
+
+## GitHub Labels (optional)
+- Plan PRs: `plan`, add `plan-approved` on approval.
+- Implementation PRs: `impl`, add `impl-approved` on approval.
+
+## Notes
+- If a plan depends on another, reference its number (e.g., “after PR 03”).
+- For multi‑step refactors, prefer multiple small PRs over a single large PR.

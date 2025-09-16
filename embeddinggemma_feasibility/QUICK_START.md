@@ -69,13 +69,13 @@ python extract_pdf_info.py
 
 This will extract information from PDFs in the P2 folder using EmbeddingGemma.
 
-#### Option 6: Coupa Specific Fields Extraction
+#### Option 6: Coupa Specific Fields Extraction (Advanced)
 
 ```bash
-python extract_coupa_fields.py
+python extract_advanced_coupa_fields.py
 ```
 
-This will extract the 22 specific Coupa fields from PDFs and generate a CSV file.
+This uses the advanced extractor to extract the 22 specific Coupa fields from PDFs and generate a CSV file.
 
 #### Option 7: Advanced NLP Fields Extraction
 

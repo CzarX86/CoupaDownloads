@@ -142,7 +142,9 @@ def process_po_worker(args):
         downloader = Downloader(driver, browser_manager)
         po_number = po_data['po_number']
         print(f"[worker] 🌐 Starting download for {po_number}", flush=True)
-        success, message = downloader.download_attachments_for_po(po_number)
+        result = downloader.download_attachments_for_po(po_number)
+        success = result.get('success', False)
+        message = result.get('message', '')
         print(f"[worker] ✅ Download routine finished for {po_number}", flush=True)
 
         # Wait for downloads to finish
@@ -156,6 +158,11 @@ def process_po_worker(args):
             'status_code': status_code,
             'message': message,
             'final_folder': final_folder,
+            'supplier_name': result.get('supplier_name', ''),
+            'attachments_found': result.get('attachments_found', 0),
+            'attachments_downloaded': result.get('attachments_downloaded', 0),
+            'coupa_url': result.get('coupa_url', ''),
+            'attachment_names': result.get('attachment_names', []),
         }
         print(f"[worker] 🏁 Done {display_po} → {status_code}", flush=True)
         return result
@@ -239,27 +246,28 @@ def _interactive_setup() -> None:
     headless = _prompt_bool("Run browser in headless mode?", default=True)
     os.environ['HEADLESS'] = 'true' if headless else 'false'
 
-    # 5) Driver selection
-    allow_auto = _prompt_bool("Allow auto-download of EdgeDriver if not found?", default=True)
+    # 5) Driver selection — auto-pick, fallback to download, final guidance
+    # Respect existing env var; default to allowing auto-download
+    allow_auto = os.environ.get('DRIVER_AUTO_DOWNLOAD', 'true').lower() == 'true'
     os.environ['DRIVER_AUTO_DOWNLOAD'] = 'true' if allow_auto else 'false'
 
-    local = _scan_local_drivers()
-    chosen_path = None
-    if local:
-        print("\nLocal EdgeDriver candidates:")
-        for idx, path in enumerate(local, 1):
-            print(f"  {idx}. {path}")
-        sel = input("Pick a driver by number or press Enter to skip: ").strip()
-        if sel.isdigit():
-            i = int(sel)
-            if 1 <= i <= len(local):
-                chosen_path = local[i-1]
-    if not chosen_path:
-        manual = input("Provide full path to EdgeDriver (or press Enter to skip): ").strip()
+    from src.core.driver_manager import DriverManager
+    dm = DriverManager()
+    try:
+        auto_path = dm.get_driver_path()  # auto local match; may download if allowed
+        os.environ['EDGE_DRIVER_PATH'] = auto_path
+        print(f"   ✅ Auto-selected EdgeDriver: {auto_path}")
+    except Exception as e:
+        edge_version = dm.get_edge_version() or "unknown"
+        major = edge_version.split('.')[0] if isinstance(edge_version, str) and '.' in edge_version else "unknown"
+        print("   ❌ Could not auto-select/download EdgeDriver.")
+        print(f"   Installed Edge version: {edge_version} (major {major})")
+        print("   Please download a matching EdgeDriver:")
+        print("   https://developer.microsoft.com/en-us/microsoft-edge/tools/webdriver/")
+        print("   Place it under 'drivers/' or set EDGE_DRIVER_PATH, then rerun.")
+        manual = input("   Provide full path to EdgeDriver (or press Enter to continue without): ").strip()
         if manual:
-            chosen_path = manual
-    if chosen_path:
-        os.environ['EDGE_DRIVER_PATH'] = chosen_path
+            os.environ['EDGE_DRIVER_PATH'] = manual
 
     # 6) Download folder base
     default_dl = os.path.expanduser(Config.DOWNLOAD_FOLDER)
@@ -379,7 +387,9 @@ class MainApp:
                 # Create downloader and attempt processing
                 downloader = Downloader(self.driver, self.browser_manager)
                 try:
-                    success, message = downloader.download_attachments_for_po(po_number)
+                    result = downloader.download_attachments_for_po(po_number)
+                    success = result.get('success', False)
+                    message = result.get('message', '')
                 except (InvalidSessionIdException, NoSuchWindowException) as e:
                     # Session/tab was lost. Try to recover once.
                     print(f"   ⚠️ Session issue detected ({type(e).__name__}). Recovering driver and retrying once...")
@@ -387,7 +397,9 @@ class MainApp:
                     self.browser_manager.initialize_driver()
                     self.driver = self.browser_manager.driver
                     downloader = Downloader(self.driver, self.browser_manager)
-                    success, message = downloader.download_attachments_for_po(po_number)
+                    result = downloader.download_attachments_for_po(po_number)
+                    success = result.get('success', False)
+                    message = result.get('message', '')
 
                 # Wait for downloads to complete before finalizing folder name
                 self._wait_for_downloads_complete(folder_path)
@@ -396,12 +408,20 @@ class MainApp:
                 status_code = _derive_status_label(success, message)
                 final_folder = _rename_folder_with_status(folder_path, status_code)
 
-                # Update status with the final folder path
+                # Update status with the final folder path and enriched fields
+                formatted_names = self.folder_hierarchy.format_attachment_names(
+                    result.get('attachment_names', [])
+                )
                 self.excel_processor.update_po_status(
                     display_po,
                     status_code,
+                    supplier=result.get('supplier_name', ''),
+                    attachments_found=result.get('attachments_found', 0),
+                    attachments_downloaded=result.get('attachments_downloaded', 0),
                     error_message=message,
-                    download_folder=final_folder
+                    download_folder=final_folder,
+                    coupa_url=result.get('coupa_url', ''),
+                    attachment_names=formatted_names,
                 )
             
             print(f"   ✅ {display_po}: {message}")
@@ -513,11 +533,19 @@ class MainApp:
                     final_folder = result['final_folder']
 
                     # Update Excel in parent (avoids CSV write contention)
+                    formatted_names = self.folder_hierarchy.format_attachment_names(
+                        result.get('attachment_names', [])
+                    )
                     self.excel_processor.update_po_status(
                         display_po,
                         status_code,
+                        supplier=result.get('supplier_name', ''),
+                        attachments_found=result.get('attachments_found', 0),
+                        attachments_downloaded=result.get('attachments_downloaded', 0),
                         error_message=message,
                         download_folder=final_folder,
+                        coupa_url=result.get('coupa_url', ''),
+                        attachment_names=formatted_names,
                     )
                     print("-" * 60)
                     print(f"   ✅ {display_po}: {message}")

@@ -31,14 +31,22 @@ PO15327452
 PO15362783
 ```
 
+Supported columns (CSV/Excel) — the app fills these when available:
+- PO_NUMBER, STATUS, SUPPLIER, ATTACHMENTS_FOUND, ATTACHMENTS_DOWNLOADED,
+  AttachmentName, LAST_PROCESSED, ERROR_MESSAGE, DOWNLOAD_FOLDER, COUPA_URL
+
 ### Step 4: Run the Application
 ```cmd
 # Activate virtual environment
 venv\Scripts\activate
 
-# Run the application
-python src\main.py
+# Run the application (module mode)
+python -m src.Core_main
 ```
+
+## 📚 User Guide
+For a complete end-to-end manual (installation, configuration, running, outputs, troubleshooting), see:
+`docs/USER_GUIDE.md`
 
 ## 🔧 What the Setup Does
 
@@ -112,3 +120,29 @@ To update to a new release:
 ---
 
 **Ready to use!** Just run `setup_windows.bat` and you're good to go! 🚀
+
+## 📚 Optional: RAG (LlamaIndex) Tools
+
+This repo includes an isolated RAG module under `embeddinggemma_feasibility`.
+
+- Install ML extras with Poetry:
+  - `poetry install --with ml`
+- Or install subproject requirements directly:
+  - `poetry run pip install -r embeddinggemma_feasibility/requirements.txt`
+
+Run the interactive RAG CLI:
+- `poetry run rag-cli`
+
+Notes:
+- The RAG stack uses LlamaIndex + HNSWLib. Internet may be required on first run to download small HF models unless cached.
+- To stay fully offline, disable reranking in the CLI when prompted.
+
+## 📖 Documentation
+
+- Release notes: `docs/RELEASE_NOTES.md`
+- Release strategy: `docs/RELEASE_STRATEGY.md`
+- Offline bundle guide: `docs/howto/README_Offline.md`
+- Network troubleshooting: `docs/platform/NETWORK_ISSUE_SOLUTION.md`
+- Profile protection: `docs/howto/PROFILE_PROTECTION.md`
+- E2E flow diagram: `docs/reports/E2E_FLOW_DIAGRAM.md`
+- Implementation reports: `docs/reports/IMPLEMENTATION_REPORT.md`, `docs/reports/THREAD_IMPLEMENTATION_REPORT.md`
