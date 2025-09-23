@@ -59,17 +59,26 @@ class TestEmbeddingGemmaIntegration:
         assert os.path.exists(config.cache_dir)
         assert os.path.exists(config.output_dir)
     
-    @pytest.mark.skipif(not os.path.exists("requirements.txt"), reason="Requirements file not found")
     def test_dependencies_available(self):
         """Test that required dependencies are available."""
-        try:
-            import sentence_transformers
-            import torch
-            import numpy as np
-            import sklearn
-            assert True
-        except ImportError as e:
-            pytest.skip(f"Dependencies not available: {e}")
+        pytest.importorskip(
+            "sentence_transformers",
+            reason="Instale as dependências de ML com `poetry install`."
+        )
+        pytest.importorskip(
+            "torch",
+            reason="Pacotes de ML ausentes; utilize `poetry install`."
+        )
+        pytest.importorskip(
+            "numpy",
+            reason="NumPy é obrigatório; execute `poetry install`."
+        )
+        pytest.importorskip(
+            "sklearn",
+            reason="scikit-learn é obrigatório; execute `poetry install`."
+        )
+
+        assert True
     
     def test_capability_assessment_initialization(self):
         """Test capability assessment initialization."""
@@ -84,9 +93,13 @@ class TestEmbeddingGemmaIntegration:
         assert len(use_cases.sample_pos) > 0
         assert len(use_cases.sample_attachments) > 0
     
-    @pytest.mark.skipif(not os.path.exists("requirements.txt"), reason="ML libraries not available")
     def test_model_loading_simulation(self):
         """Test model loading simulation (without actually loading)."""
+        pytest.importorskip(
+            "sentence_transformers",
+            reason="Instale as dependências de ML com `poetry install`."
+        )
+
         assessment = EmbeddingGemmaCapabilityAssessment()
         
         # Mock the model loading
@@ -346,4 +359,3 @@ class TestPerformanceBenchmarks:
 if __name__ == "__main__":
     # Run tests
     pytest.main([__file__, "-v", "--tb=short"])
-

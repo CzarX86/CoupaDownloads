@@ -37,12 +37,18 @@ Supported columns (CSV/Excel) — the app fills these when available:
 
 ### Step 4: Run the Application
 ```cmd
-# Activate virtual environment
-venv\Scripts\activate
+# (Opcional) Abra uma shell do Poetry
+# poetry shell
 
 # Run the application (module mode)
-python -m src.Core_main
+poetry run python -m src.Core_main
 ```
+
+### Feedback and training loop
+- 🪄 **Guided wizard** — `poetry run python tools/feedback_cli.py wizard`
+  - Launches an interactive, English-only walkthrough for preparing review CSVs, ingesting annotations, evaluating metrics, training Sentence Transformers, and exporting Label Studio tasks.
+- ⚙️ **Classic CLI** — `poetry run python tools/feedback_cli.py --help`
+  - Ideal for automation; uses the same handlers that the wizard calls behind the scenes.
 
 ## 📚 User Guide
 For a complete end-to-end manual (installation, configuration, running, outputs, troubleshooting), see:
@@ -63,7 +69,8 @@ For a complete end-to-end manual (installation, configuration, running, outputs,
 CoupaDownloads/
 ├── setup_windows.bat          # Windows installer
 ├── download_drivers.bat       # Driver download script
-├── requirements.txt           # Python dependencies
+├── pyproject.toml             # Manifesto de dependências (Poetry)
+├── poetry.lock                # Versões travadas das dependências
 ├── drivers/                   # EdgeDriver versions (downloaded)
 ├── src/                      # Application source code
 ├── data/
@@ -125,10 +132,8 @@ To update to a new release:
 
 This repo includes an isolated RAG module under `embeddinggemma_feasibility`.
 
-- Install ML extras with Poetry:
-  - `poetry install --with ml`
-- Or install subproject requirements directly:
-  - `poetry run pip install -r embeddinggemma_feasibility/requirements.txt`
+- Instale todas as dependências (core, ML, anotação, testes) com:
+  - `poetry install`
 
 Run the interactive RAG CLI:
 - `poetry run rag-cli`
@@ -146,3 +151,6 @@ Notes:
 - Profile protection: `docs/howto/PROFILE_PROTECTION.md`
 - E2E flow diagram: `docs/reports/E2E_FLOW_DIAGRAM.md`
 - Implementation reports: `docs/reports/IMPLEMENTATION_REPORT.md`, `docs/reports/THREAD_IMPLEMENTATION_REPORT.md`
+- Guia GitHub MCP (Codex VS Code): `docs/howto/github_mcp_codex_vscode.md`
+- Blueprint de refatoração e SPA: `docs/refactor/pr32-refactor-spa-blueprint.md`
+- Wizard de treinamento guiado: `docs/cli/training_wizard.md`

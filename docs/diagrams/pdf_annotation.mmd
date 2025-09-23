@@ -1,0 +1,6 @@
+digraph PDFReview {
+  rankdir=LR
+  ReviewCSV["CSV de revisão"] -> PrepareCmd["annotate-pdf prepare"] -> LSProject["Projeto Label Studio"]
+  LSProject -> Reviewer["Revisor ajusta campos no PDF"] -> ExportJSON["Exportação JSON"]
+  ExportJSON -> IngestCmd["annotate-pdf ingest"] -> UpdatedCSV["CSV atualizado"]
+}

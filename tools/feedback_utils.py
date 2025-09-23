@@ -12,6 +12,7 @@ This module avoids new heavy deps; relies on pandas and stdlib only.
 """
 from __future__ import annotations
 
+import io
 import json
 import os
 import random
@@ -21,43 +22,14 @@ from typing import Dict, Iterable, List, Tuple
 
 import pandas as pd
 
+from server.pdf_training_app.fields import (
+    ALLOWED_STATUSES,
+    METADATA_COLUMNS,
+    NORMALIZED_TO_PRETTY,
+    PRETTY_TO_NORMALIZED,
+)
 
-# Mapping between normalized keys (snake_case) and CSV pretty headers
-NORMALIZED_TO_PRETTY: Dict[str, str] = {
-    "remarks": "Remarks",
-    "supporting_information": "Supporting Information",
-    "procurement_negotiation_strategy": "Procurement Negotiation Strategy",
-    "opportunity_available": "Opportunity Available",
-    "inflation_percent": "Inflation %",
-    "minimum_commitment_value": "Minimum Commitment Value",
-    "contractual_commercial_model": "Contractual Commercial Model",
-    "user_based_license": "User Based License",
-    "type_of_contract_l2": "Type of Contract - L2",
-    "type_of_contract_l1": "Type of Contract - L1",
-    "sow_value_eur": "SOW Value in EUR",
-    "fx": "FX",
-    "sow_currency": "SOW Currency",
-    "sow_value_lc": "SOW Value in LC",
-    "managed_by": "Managed By",
-    "contract_end_date": "Contract End Date",
-    "contract_start_date": "Contract Start Date",
-    "contract_type": "Contract Type",
-    "contract_name": "Contract Name",
-    "high_level_scope": "High Level Scope",
-    "platform_technology": "Platform/Technology",
-    "pwo_number": "PWO#",
-}
-
-PRETTY_TO_NORMALIZED: Dict[str, str] = {v: k for k, v in NORMALIZED_TO_PRETTY.items()}
-
-METADATA_COLS = [
-    "Source File",
-    "Extraction Confidence",
-    "Extraction Method",
-    "NLP Libraries Used",
-]
-
-ALLOWED_STATUSES = {"OK", "CORRECTED", "NEW", "MISSING", "REJECTED"}
+METADATA_COLS = METADATA_COLUMNS
 
 
 def _coalesce_header(df: pd.DataFrame, pretty: str) -> str | None:
@@ -83,6 +55,36 @@ def _ensure_dir(path: str | Path) -> Path:
     p = Path(path)
     p.mkdir(parents=True, exist_ok=True)
     return p
+
+
+def _needs_sep_hint_skip(path: Path, encoding: str = "utf-8-sig") -> int:
+    """Return 1 when the CSV uses an Excel sep hint on the first line."""
+    try:
+        with path.open("r", encoding=encoding) as fh:
+            first_line = fh.readline().strip()
+    except FileNotFoundError:
+        return 0
+    return 1 if first_line.lower().startswith("sep=") else 0
+
+
+def read_review_csv(review_csv: str | Path, **kwargs) -> pd.DataFrame:
+    """Load review CSVs while ignoring optional Excel ``sep=,`` hints."""
+    path = Path(review_csv)
+    encoding = kwargs.get("encoding", "utf-8-sig")
+    if "skiprows" not in kwargs:
+        kwargs["skiprows"] = _needs_sep_hint_skip(path, encoding=encoding)
+    kwargs["encoding"] = encoding
+    return pd.read_csv(path, **kwargs)
+
+
+def write_review_csv(df: pd.DataFrame, out_csv: str | Path) -> str:
+    """Persist review CSVs with Excel-friendly ``sep=,`` hints and BOM."""
+    out_path = Path(out_csv)
+    _ensure_dir(out_path.parent)
+    buffer = io.StringIO()
+    df.to_csv(buffer, index=False, lineterminator="\n")
+    out_path.write_text("sep=,\n" + buffer.getvalue(), encoding="utf-8-sig")
+    return str(out_path)
 
 
 def make_review_csv(
@@ -146,10 +148,7 @@ def make_review_csv(
         review_cols.append(aux)
 
     # Persist (UTF-8 BOM, \n, QUOTE_MINIMAL handled by pandas defaults mostly)
-    out_path = Path(out_csv)
-    _ensure_dir(out_path.parent)
-    df.to_csv(out_path, index=False, encoding="utf-8-sig", line_terminator="\n")
-    return str(out_path)
+    return write_review_csv(df, out_csv)
 
 
 def ingest_review_csv(review_csv: str | Path, out_dir: str | Path) -> Dict[str, str]:
@@ -161,7 +160,7 @@ def ingest_review_csv(review_csv: str | Path, out_dir: str | Path) -> Dict[str, 
     - training_analysis.json (via ContractDataTrainer)
     """
     outp = _ensure_dir(out_dir)
-    df = pd.read_csv(review_csv)
+    df = read_review_csv(review_csv)
 
     # Discover fields from *_gold columns
     gold_cols = [c for c in df.columns if c.endswith("_gold")]
@@ -246,9 +245,9 @@ def ingest_review_csv(review_csv: str | Path, out_dir: str | Path) -> Dict[str, 
 
         analysis_path = outp / "training_analysis.json"
         trainer = ContractDataTrainer(str(review_csv))
-        if trainer.load_data():
-            trainer.analyze_field_patterns()
-            trainer.save_training_data(str(analysis_path))
+        trainer.df = df.copy()
+        trainer.analyze_field_patterns()
+        trainer.save_training_data(str(analysis_path), df=df)
     except Exception as e:
         # Non-fatal; analysis is optional
         with open(outp / "training_analysis.error.txt", "w", encoding="utf-8") as ef:
@@ -271,7 +270,7 @@ def evaluate_review_csv(review_csv: str | Path, report_dir: str | Path) -> Dict[
     Produces metrics.json and metrics.md in report_dir.
     """
     outp = _ensure_dir(report_dir)
-    df = pd.read_csv(review_csv)
+    df = read_review_csv(review_csv)
     gold_cols = [c for c in df.columns if c.endswith("_gold")]
     bases: List[str] = [c[:-5] for c in gold_cols]
 
@@ -335,7 +334,7 @@ def export_labelstudio_tasks(review_csv: str | Path, out_json: str | Path) -> st
 
     Each task includes source_file and field predictions as initial data.
     """
-    df = pd.read_csv(review_csv)
+    df = read_review_csv(review_csv)
     gold_cols = [c for c in df.columns if c.endswith("_gold")]
     bases: List[str] = [c[:-5] for c in gold_cols]
 
@@ -357,4 +356,3 @@ def export_labelstudio_tasks(review_csv: str | Path, out_json: str | Path) -> st
     with open(outp, "w", encoding="utf-8") as f:
         json.dump(tasks, f, indent=2, ensure_ascii=False)
     return str(outp)
-

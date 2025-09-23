@@ -7,9 +7,6 @@ authors = ["CzarX86 <julio.cezar@outlook.com>"]
 [tool.poetry.dependencies]
 python = ">=3.12"
 
-# Include dependencies from requirements.txt
-file = "requirements.txt"
-
 [build-system]
 requires = ["poetry-core>=1.0.0"]
 build-backend = "poetry.core.masonry.api"

@@ -108,9 +108,10 @@ class CSVProcessor:
                 skipped_count += 1
                 continue
             
-            # Clean PO number (remove PO prefix if present)
+            # Clean PO number (remove PO or PM prefix if present; case-insensitive)
             display_po = po_number
-            clean_po = po_number.replace("PO", "") if po_number.startswith("PO") else po_number
+            up = (po_number or '').upper()
+            clean_po = po_number[2:] if up.startswith(("PO", "PM")) else po_number
             
             # Validate PO number format
             if clean_po.isdigit() and len(clean_po) >= 6:
@@ -120,7 +121,8 @@ class CSVProcessor:
                 print(f"  ❌ Invalid PO format: {po_number}")
                 # Update status to FAILED
                 # Generate URL even for invalid PO for reference
-                clean_po_attempt = po_number.replace("PO", "") if po_number.startswith("PO") else po_number
+                up = (po_number or '').upper()
+                clean_po_attempt = po_number[2:] if up.startswith(("PO", "PM")) else po_number
                 invalid_url = Config.BASE_URL.format(clean_po_attempt)
                 CSVProcessor.update_po_status(po_number, 'FAILED', error_message='Invalid PO format', coupa_url=invalid_url)
         

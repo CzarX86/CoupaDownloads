@@ -7,8 +7,8 @@ Este módulo permite extrair informações estruturadas de documentos PDF usando
 ### 🚀 Quick Start
 
 ```bash
-cd src/MyScript/embeddinggemma_feasibility
-python extract_pdf_info.py
+poetry install
+poetry run python embeddinggemma_feasibility/extract_pdf_info.py
 ```
 
 ### 📁 Estrutura de Arquivos
@@ -17,7 +17,7 @@ python extract_pdf_info.py
 src/MyScript/embeddinggemma_feasibility/
 ├── pdf_information_extractor.py    # Extrator principal
 ├── extract_pdf_info.py             # Script simplificado
-├── requirements.txt                # Dependências (inclui PDF)
+├── pyproject.toml                  # Manifesto sincronizado com o projeto principal
 └── reports/                        # Resultados salvos aqui
 ```
 

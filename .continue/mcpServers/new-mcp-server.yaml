@@ -1,0 +1,13 @@
+name: context7
+version: 0.0.1
+schema: v1
+mcpServers:
+  - name: context7
+    command: npx
+    args:
+      - -y
+      - @upstash/context7-mcp
+      - --api-key
+      - ${CONTEXT7_API_KEY}   # substitua ou configure no env
+    env:
+      CONTEXT7_API_KEY: "ctx7sk-f58c342f-3dd6-4be4-a929-7217eb1ed7e4"

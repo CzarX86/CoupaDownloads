@@ -27,7 +27,7 @@ A estrutura do sistema MyScript foi **completamente organizada** seguindo as mel
 - `config_advanced.py` - Configuração avançada
 - `profile_config.py` - Configuração de perfil do Edge
 - `myscript_config.json` - Configuração JSON do sistema
-- `requirements_gui.txt` - Dependências da GUI
+- `pyproject.toml` (raiz) - Manifesto único de dependências gerenciado pelo Poetry
 
 #### 🔧 **Utilitários e Suporte**
 - `logging_advanced.py` - Sistema de logging avançado

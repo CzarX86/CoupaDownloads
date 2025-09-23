@@ -37,7 +37,7 @@ Esta pasta contém todos os arquivos de teste, validação e experimentação do
 
 ### 📋 **Pré-requisitos**
 
-1. **Dependências instaladas**: Certifique-se de que todas as dependências estão instaladas
+1. **Dependências instaladas**: Execute `poetry install` na raiz do repositório
 2. **Configuração**: Arquivo `config.py` configurado corretamente
 3. **Perfil Edge**: Perfil do Edge configurado (se necessário)
 
@@ -45,16 +45,16 @@ Esta pasta contém todos os arquivos de teste, validação e experimentação do
 
 ```bash
 # Teste de GUI
-python3 tests/test_gui_execution.py
+poetry run python tests/test_gui_execution.py
 
 # Teste de integração
-python3 tests/test_integration.py
+poetry run python tests/test_integration.py
 
 # Teste completo
-python3 tests/test_complete.py
+poetry run python tests/test_complete.py
 
 # Teste do sistema avançado
-python3 tests/test_advanced_system_comprehensive.py
+poetry run python tests/test_advanced_system_comprehensive.py
 ```
 
 ### 🧪 **Execução em Lote**
@@ -63,7 +63,7 @@ python3 tests/test_advanced_system_comprehensive.py
 # Executar todos os testes
 for test in tests/test_*.py; do
     echo "Executando: $test"
-    python3 "$test"
+    poetry run python "$test"
     echo "---"
 done
 ```
@@ -158,7 +158,7 @@ Os testes foram atualizados para usar os novos nomes de módulos:
    ModuleNotFoundError: No module named 'customtkinter'
    ```
 
-   **Solução**: Instale as dependências com `pip install -r requirements.txt`
+   **Solução**: Instale as dependências com `poetry install`
 
 3. **Erro de Configuração**
    ```
@@ -173,10 +173,10 @@ Os testes foram atualizados para usar os novos nomes de módulos:
 ls -la ../
 
 # Verificar dependências
-python3 -c "import customtkinter; print('✅ GUI OK')"
+poetry run python -c "import customtkinter; print('✅ GUI OK')"
 
 # Verificar configuração
-python3 -c "from config import config_manager; print('✅ Config OK')"
+poetry run python -c "from config import config_manager; print('✅ Config OK')"
 ```
 
 ## 📚 **Documentação Relacionada**

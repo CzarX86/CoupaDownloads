@@ -256,15 +256,21 @@ class Downloader:
         Main workflow to find and download all attachments for a specific PO.
         Returns a dict with success, message, supplier_name, counts, url, and names.
         """
-        # Remove "PO" prefix if present to get the correct order number
-        order_number = po_number.replace("PO", "") if po_number.startswith("PO") else po_number
+        # Remove "PO" or "PM" prefix (case-insensitive) to get the correct order number
+        up = (po_number or "").upper()
+        order_number = po_number[2:] if up.startswith(("PO", "PM")) else po_number
         url = f"{Config.BASE_URL}/order_headers/{order_number}"
         print(f"\nProcessing PO #{po_number}")
         print(f"   Navigating to: {url}")
         self.driver.get(url)
 
-        # Check for error page, a useful feature from the recent changes
-        if "Oops! We couldn't find what you wanted" in self.driver.page_source:
+        # Early error page detection (fast‑fail)
+        page = (self.driver.page_source or '').lower()
+        try:
+            markers = getattr(Config, 'ERROR_PAGE_MARKERS', []) or []
+        except Exception:
+            markers = ["Oops! We couldn't find what you wanted"]
+        if any((m or '').lower() in page for m in markers):
             msg = "PO not found or page error detected."
             print(f"   ❌ {msg}")
             return {

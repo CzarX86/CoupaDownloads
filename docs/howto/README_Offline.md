@@ -6,7 +6,7 @@
 1. **Extract** this ZIP file to a folder
 2. **Run** `setup_windows_offline.bat` as Administrator
 3. **Edit** `data/input/input.csv` with your PO numbers
-4. **Run** `python src/main.py`
+4. **Run** `poetry run python src/main.py`
 
 ## 🎯 Offline Features
 
@@ -28,6 +28,12 @@ This bundle includes multiple EdgeDriver versions:
 - Multiple driver versions included
 - Automatic fallback mechanisms
 - Comprehensive error handling
+
+## 📦 Gestão de Dependências (Poetry)
+
+- O pacote inclui `pyproject.toml` e `poetry.lock`; utilize `poetry install --sync` para replicar o ambiente completo.
+- Todas as bibliotecas (core, ML, anotação, testes) são instaladas com esse único comando — não há extras separados.
+- Execute os comandos dentro do diretório extraído garantindo que o Poetry esteja disponível no PATH.
 
 ## 📋 Requirements
 
@@ -59,7 +65,8 @@ This bundle includes multiple EdgeDriver versions:
 ```
 CoupaDownloads_Windows_Offline/
 ├── setup_windows_offline.bat    # Offline setup script
-├── requirements.txt              # Python dependencies
+├── pyproject.toml                 # Manifesto das dependências (Poetry)
+├── poetry.lock                    # Versões travadas para instalação offline
 ├── drivers/                      # Pre-included WebDrivers
 │   ├── msedgedriver.exe         # Default driver
 │   ├── msedgedriver_120.exe     # Edge 120 driver
@@ -80,23 +87,26 @@ CoupaDownloads_Windows_Offline/
 # Run offline setup (as Administrator)
 setup_windows_offline.bat
 
-# Activate virtual environment
-venv\Scripts\activate
+# (Opcional) Abrir shell do Poetry
+poetry shell
+
+# Reinstalar dependências manualmente (quando necessário)
+poetry install --sync
 
 # Edit input file
 notepad data\input\input.csv
 
 # Run application
-python src\main.py
+poetry run python src\main.py
 ```
 
 ### Regular Usage
 ```bash
-# Activate virtual environment
-venv\Scripts\activate
+# (Opcional) Abrir shell do Poetry
+poetry shell
 
 # Run application
-python src\main.py
+poetry run python src\main.py
 ```
 
 ## 🔧 Troubleshooting

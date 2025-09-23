@@ -9,7 +9,8 @@ This subproject provides a comprehensive feasibility and capability assessment f
 ```
 src/MyScript/embeddinggemma_feasibility/
 ├── README.md                           # This file
-├── requirements.txt                    # Isolated dependencies
+├── pyproject.toml                      # Manifesto do subprojeto
+├── poetry.lock                         # Versões travadas (sincronizadas com o projeto raiz)
 ├── config.py                          # Configuration for EmbeddingGemma
 ├── capability_assessment.py           # Main assessment framework
 ├── integration_tests.py               # Integration tests
@@ -57,13 +58,13 @@ src/MyScript/embeddinggemma_feasibility/
 
 ## Quick Start
 
-1. Install (Poetry with ML/RAG extras):
+1. Instale todas as dependências com Poetry:
 
    ```bash
-   poetry install --with ml
+   poetry install
    ```
 
-2. Run the interactive RAG CLI:
+2. Execute a CLI interativa de RAG:
 
    ```bash
    poetry run rag-cli
@@ -71,14 +72,7 @@ src/MyScript/embeddinggemma_feasibility/
    poetry run python -m embeddinggemma_feasibility.interactive_cli
    ```
 
-3. Legacy direct usage (pip-only):
-
-   ```bash
-   pip install -r embeddinggemma_feasibility/requirements.txt
-   python -m embeddinggemma_feasibility.interactive_cli
-   ```
-
-4. Assessment utilities:
+3. Ferramentas de avaliação:
 
    ```bash
    poetry run python embeddinggemma_feasibility/capability_assessment.py
@@ -117,7 +111,7 @@ This repository includes a lightweight Human-in-the-Loop feedback loop to improv
 - Prepare a review CSV with triplets per field:
 
   ```bash
-  python tools/feedback_cli.py prepare \
+  poetry run python tools/feedback_cli.py prepare \
     --pred-csv reports/advanced_coupa_fields_extraction_*.csv \
     --out reports/feedback/review.csv \
     --fields contract_name,contract_type,sow_value_eur,pwo_number,managed_by \
@@ -127,19 +121,19 @@ This repository includes a lightweight Human-in-the-Loop feedback loop to improv
 - Ingest, build datasets and analysis:
 
   ```bash
-  python tools/feedback_cli.py ingest --review-csv reports/feedback/review.csv --out-dir datasets/
+  poetry run python tools/feedback_cli.py ingest --review-csv reports/feedback/review.csv --out-dir datasets/
   ```
 
 - Evaluate metrics:
 
   ```bash
-  python tools/feedback_cli.py eval --review-csv reports/feedback/review.csv --report-dir reports/feedback/
+  poetry run python tools/feedback_cli.py eval --review-csv reports/feedback/review.csv --report-dir reports/feedback/
   ```
 
 - Optional: fine-tune Sentence Transformers from pairs:
 
   ```bash
-  python tools/feedback_cli.py train-st --dataset datasets/st_pairs.jsonl --output embeddinggemma_feasibility/models/st_custom_v1
+  poetry run python tools/feedback_cli.py train-st --dataset datasets/st_pairs.jsonl --output embeddinggemma_feasibility/models/st_custom_v1
   ```
 
 See also: `docs/HITL_FEEDBACK_WORKFLOW.md`.

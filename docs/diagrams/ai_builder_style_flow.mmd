@@ -1,0 +1,6 @@
+flowchart TD
+  Upload[Upload docs] --> Analyze[Auto-tag entities]
+  Analyze --> Review[Guided review]
+  Review --> Train[Retrain model]
+  Train --> Metrics[Evaluation report]
+  Metrics -->|Loop| Upload

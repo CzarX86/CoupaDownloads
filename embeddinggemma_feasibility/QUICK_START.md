@@ -12,21 +12,29 @@ This subproject provides a comprehensive feasibility assessment for integrating 
 
 ### Installation
 
-1. **Navigate to the assessment directory**:
+1. **Instale as dependências com Poetry na raiz do projeto**:
+
+   ```bash
+   poetry install
+   ```
+
+2. **(Opcional) Ative o ambiente virtual para usar `python` diretamente**:
+
+   ```bash
+   poetry shell
+   ```
+
+   > Caso prefira não ativar a shell, utilize `poetry run <comando>` nos passos seguintes.
+
+3. **(Opcional) Entre na pasta do subprojeto para rodar scripts diretamente**:
 
    ```bash
    cd src/MyScript/embeddinggemma_feasibility
    ```
 
-2. **Install dependencies** (isolated from main project):
-
+4. **Verify installation**:
    ```bash
-   pip install -r requirements.txt
-   ```
-
-3. **Verify installation**:
-   ```bash
-   python config.py
+   poetry run python embeddinggemma_feasibility/config.py
    ```
 
 ### Running the Assessment
@@ -34,7 +42,7 @@ This subproject provides a comprehensive feasibility assessment for integrating 
 #### Option 1: Complete Assessment (Recommended)
 
 ```bash
-python capability_assessment.py
+poetry run python embeddinggemma_feasibility/capability_assessment.py
 ```
 
 This will run all capability tests and generate a comprehensive report.
@@ -42,7 +50,7 @@ This will run all capability tests and generate a comprehensive report.
 #### Option 2: Use Case Demonstrations
 
 ```bash
-python use_case_examples.py
+poetry run python embeddinggemma_feasibility/use_case_examples.py
 ```
 
 This will demonstrate practical use cases for EmbeddingGemma in CoupaDownloads.
@@ -50,7 +58,7 @@ This will demonstrate practical use cases for EmbeddingGemma in CoupaDownloads.
 #### Option 3: Performance Benchmarks
 
 ```bash
-python performance_benchmarks.py
+poetry run python embeddinggemma_feasibility/performance_benchmarks.py
 ```
 
 This will run detailed performance tests and memory profiling.
@@ -58,13 +66,13 @@ This will run detailed performance tests and memory profiling.
 #### Option 4: Integration Tests
 
 ```bash
-python integration_tests.py
+poetry run python embeddinggemma_feasibility/integration_tests.py
 ```
 
 #### Option 5: PDF Information Extraction
 
 ```bash
-python extract_pdf_info.py
+poetry run python embeddinggemma_feasibility/extract_pdf_info.py
 ```
 
 This will extract information from PDFs in the P2 folder using EmbeddingGemma.
@@ -72,7 +80,7 @@ This will extract information from PDFs in the P2 folder using EmbeddingGemma.
 #### Option 6: Coupa Specific Fields Extraction (Advanced)
 
 ```bash
-python extract_advanced_coupa_fields.py
+poetry run python embeddinggemma_feasibility/extract_advanced_coupa_fields.py
 ```
 
 This uses the advanced extractor to extract the 22 specific Coupa fields from PDFs and generate a CSV file.
@@ -80,7 +88,7 @@ This uses the advanced extractor to extract the 22 specific Coupa fields from PD
 #### Option 7: Advanced NLP Fields Extraction
 
 ```bash
-python extract_advanced_coupa_fields.py
+poetry run python embeddinggemma_feasibility/extract_advanced_coupa_fields.py
 ```
 
 This uses multiple NLP libraries (spaCy, BERT, Sentence Transformers, LangChain, Ollama) for advanced field extraction.
@@ -154,7 +162,7 @@ Feasibility Score: 0.85
 1. **"ML libraries not available"**
 
    ```bash
-   pip install sentence-transformers torch numpy scikit-learn
+   poetry install
    ```
 
 2. **"Model loading failed"**

@@ -16,20 +16,20 @@ Requirements
 
 Install (subproject)
 ```
-pip install -r embeddinggemma_feasibility/requirements.txt
+poetry install
 ```
 
 Commands
 Build index from a directory:
 ```
-python -m embeddinggemma_feasibility.rag.cli build \
+poetry run python -m embeddinggemma_feasibility.rag.cli build \
   --source embeddinggemma_feasibility/data/sample_documents \
   --persist embeddinggemma_feasibility/data/rag_index
 ```
 
 Query an index:
 ```
-python -m embeddinggemma_feasibility.rag.cli query \
+poetry run python -m embeddinggemma_feasibility.rag.cli query \
   --index embeddinggemma_feasibility/data/rag_index \
   --q "Qual é o prazo de pagamento?" \
   --top-k 8 --return-k 3 --reranker

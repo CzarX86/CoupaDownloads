@@ -74,8 +74,29 @@ class BaseTabManager(ITabManager):
             print(f"   URL: {url}")
             
             self.driver.get(url)
-            
-            # Aguardar carregamento
+
+            # Early error detection before full readyState wait (optional)
+            try:
+                from src.core.config import Config as _Cfg
+                if getattr(_Cfg, 'EARLY_ERROR_CHECK_BEFORE_READY', True):
+                    t0 = time.time()
+                    found = False
+                    timeout_s = float(getattr(_Cfg, 'ERROR_PAGE_CHECK_TIMEOUT', 4))
+                    markers = [m.lower() for m in getattr(_Cfg, 'ERROR_PAGE_MARKERS', []) or []]
+                    while time.time() - t0 < timeout_s:
+                        page = (self.driver.page_source or '').lower()
+                        if any(m in page for m in markers):
+                            found = True
+                            break
+                        time.sleep(0.1)
+                    if found:
+                        print(f"🚫 [" + threading.current_thread().name + f"] Error page detected early for URL {url_index+1}")
+                        return None
+            except Exception:
+                # Fail silent on early detection path; proceed to normal wait
+                pass
+
+            # Aguardar carregamento (normal load wait)
             wait = WebDriverWait(self.driver, 10)
             wait.until(lambda d: d.execute_script("return document.readyState") == "complete")
             
@@ -227,8 +248,13 @@ class BaseTabManager(ITabManager):
                 self.driver.switch_to.window(tab_id)
                 
             # Verificar se contém a mensagem de erro do Coupa
-            page_source = self.driver.page_source
-            error_detected = "Oops! We couldn't find what you wanted" in page_source
+            page_source = (self.driver.page_source or '').lower()
+            try:
+                from src.core.config import Config as _Cfg
+                markers = [m.lower() for m in getattr(_Cfg, 'ERROR_PAGE_MARKERS', []) or []]
+                error_detected = any(m in page_source for m in markers)
+            except Exception:
+                error_detected = "oops! we couldn't find what you wanted" in page_source
             
             if error_detected:
                 print(f"🚫 Página de erro detectada para aba {tab_id}")

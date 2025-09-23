@@ -66,11 +66,8 @@ python src/MyScript/install_gui.py
 ### 2. Instalação Manual
 
 ```bash
-# Instalar CustomTkinter
-pip install customtkinter
-
-# Instalar outras dependências
-pip install -r src/MyScript/requirements_gui.txt
+# Preparar dependências com Poetry
+poetry install
 ```
 
 ### 3. Execução da GUI
@@ -280,4 +277,3 @@ Este projeto segue a mesma licença do projeto principal CoupaDownloads.
 ---
 
 **🎉 Aproveite a nova interface gráfica do MyScript!**
-

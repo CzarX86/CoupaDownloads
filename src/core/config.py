@@ -59,6 +59,16 @@ class Config:
     ATTACHMENT_WAIT_TIMEOUT = 15
     DOWNLOAD_WAIT_TIMEOUT = 30
 
+    # Error page detection (Coupa "Oops/No Access" markers)
+    ERROR_PAGE_MARKERS = [
+        "Oops! We couldn't find what you wanted",
+        "You are not authorized",
+        "Access denied",
+        "The page you were looking for doesn't exist",
+    ]
+    ERROR_PAGE_CHECK_TIMEOUT = int(os.environ.get("ERROR_PAGE_CHECK_TIMEOUT", "4"))
+    EARLY_ERROR_CHECK_BEFORE_READY = os.environ.get("EARLY_ERROR_CHECK_BEFORE_READY", "true").lower() == "true"
+
     # Output verbosity controls
     SHOW_EDGE_CRASH_STACKTRACE = False
     VERBOSE_OUTPUT = os.environ.get("VERBOSE_OUTPUT", "false").lower() == "true"
