@@ -129,20 +129,41 @@ async def get_document_detail(document_id: str) -> DocumentDetail:
     return build_document_detail(document)
 
 
+async def get_document_content_path(document_id: str) -> Path:
+    async with async_session() as session:
+        document = await repository.get_document(session, document_id)
+    if not document:
+        raise ValueError("Document not found")
+    
+    file_path = Path(document.storage_path)
+    if not file_path.exists():
+        raise ValueError("PDF file not found")
+    
+    return file_path
+
+
+# This maps the internal database status enums to the string values the SPA frontend expects.
+# This is necessary to fix a data contract mismatch identified during integration.
+STATUS_MAP = {
+    AnnotationStatus.pending.value: "new",
+    AnnotationStatus.in_review.value: "reviewing",
+    AnnotationStatus.completed.value: "completed",
+}
+
+
 def build_document_summary(document: Document) -> DocumentSummary:
-    latest_annotation: Optional[Annotation] = document.annotations[0] if document.annotations else None
     latest_annotation: Optional[Annotation] = None
     if document.annotations:
         latest_annotation = max(document.annotations, key=lambda ann: ann.updated_at)
-    status = (latest_annotation.status.value if latest_annotation else AnnotationStatus.pending.value)
 
-    status = latest_annotation.status.value if latest_annotation else AnnotationStatus.pending.value
+    db_status = latest_annotation.status.value if latest_annotation else AnnotationStatus.pending.value
+    api_status = STATUS_MAP.get(db_status, db_status)  # Fallback to original value if not in map
     return DocumentSummary(
         id=document.id,
         filename=document.filename,
         content_type=document.content_type,
         size_bytes=document.size_bytes,
-        status=status,
+        status=api_status,
         created_at=document.created_at,
         updated_at=document.updated_at,
     )

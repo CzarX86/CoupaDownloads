@@ -19,7 +19,7 @@ const PdfTrainingWizard: React.FC = () => {
 
   return (
     <QueryClientProvider client={queryClient}>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+      <div className="wizard-dashboard">
         <div>
           <WarningsPanel warnings={warnings} />
           <DocumentTable onSelectDocument={handleSelectDocument} />

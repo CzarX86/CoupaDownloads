@@ -72,6 +72,15 @@ async def get_document_endpoint(document_id: str) -> DocumentDetail:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+@router.get("/documents/{document_id}/content")
+async def get_document_content_endpoint(document_id: str) -> FileResponse:
+    try:
+        file_path = await get_document_content_path(document_id)
+        return FileResponse(file_path, media_type="application/pdf")
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 @router.post("/documents/{document_id}/analyze", response_model=JobResponse)
 async def analyze_document_endpoint(document_id: str) -> JobResponse:
     try:

@@ -40,7 +40,7 @@ const DocumentTable: React.FC<DocumentTableProps> = ({ onSelectDocument }) => {
   }
 
   return (
-    <div onDragOver={(e) => e.preventDefault()} onDrop={handleFileDrop}>
+    <div className="document-table" onDragOver={(e) => e.preventDefault()} onDrop={handleFileDrop}>
       <h2>Documents</h2>
       <input type="file" onChange={handleFileChange} />
       <table>

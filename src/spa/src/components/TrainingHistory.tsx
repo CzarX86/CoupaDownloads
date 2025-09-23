@@ -13,7 +13,7 @@ const TrainingHistory: React.FC = () => {
   }
 
   return (
-    <div>
+    <div className="training-history">
       <h2>Training History</h2>
       {trainingRuns?.map((run: TrainingRun) => (
         <div key={run.id} style={{ border: '1px solid #ccc', margin: '10px', padding: '10px' }}>

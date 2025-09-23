@@ -49,7 +49,7 @@ const AnnotationCard: React.FC<AnnotationCardProps> = ({ doc }) => {
   }
 
   return (
-    <div>
+    <div className="annotation-card">
       <h3>Reviewing: {doc.filename}</h3>
       <p>Upload annotation export JSON:</p>
       <input type="file" accept=".json" onChange={handleFileChange} />

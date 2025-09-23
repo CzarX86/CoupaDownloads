@@ -52,3 +52,10 @@ export const getJobs = async (): Promise<Job[]> => {
 export const submitAnnotation = async (documentId: number, annotationData: unknown): Promise<void> => {
     await axios.post(`${API_BASE_URL}/documents/${documentId}/annotations`, annotationData);
 };
+
+export const fetchPdfContent = async (documentId: string): Promise<string> => {
+  const response = await axios.get(`${API_BASE_URL}/documents/${documentId}/content`, {
+    responseType: 'blob', // Important: responseType must be 'blob' for file downloads
+  });
+  return URL.createObjectURL(response.data); // Return a URL to the blob
+};
