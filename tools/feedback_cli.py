@@ -482,6 +482,8 @@ def main() -> None:
         "--datasets-out",
         help="Directory for regenerated datasets when helpers are enabled (defaults to ./datasets)",
     )
+    p_train.add_argument("--use-db", action="store_true", help="Use the database-backed training pipeline.")
+    p_train.add_argument("--document-ids", help="Comma-separated document IDs for DB-backed training.")
     p_train.set_defaults(func=cmd_train_st)
 
     p_ls = sub.add_parser("export-labelstudio", help="Export minimal tasks JSON for Label Studio")

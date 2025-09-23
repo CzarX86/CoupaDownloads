@@ -158,6 +158,17 @@ async def get_annotation_by_document(
     return result.scalars().first()
 
 
+async def get_completed_annotations(session: AsyncSession) -> Sequence[Annotation]:
+    stmt = (
+        select(Annotation)
+        .where(Annotation.status == AnnotationStatus.completed)
+        .options(selectinload(Annotation.document))
+        .order_by(Annotation.updated_at.desc())
+    )
+    result = await session.execute(stmt)
+    return result.scalars().unique().all()
+
+
 async def create_job(
     session: AsyncSession,
     *,
