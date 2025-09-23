@@ -70,8 +70,8 @@ class JobManager:
             return None
         return JobDetail(
             id=job.id,
-            job_type=ApiJobType(job.job_type.value),
-            status=ApiJobStatus(job.status.value),
+            job_type=ApiJobType(job.job_type.value.upper()),
+            status=ApiJobStatus(job.status.value.upper()),
             detail=job.detail,
             payload=job.payload,
             resource_type=job.resource_type,
@@ -88,8 +88,8 @@ class JobManager:
         return [
             JobDetail(
                 id=job.id,
-                job_type=ApiJobType(job.job_type.value),
-                status=ApiJobStatus(job.status.value),
+                job_type=ApiJobType(job.job_type.value.upper()),
+                status=ApiJobStatus(job.status.value.upper()),
                 detail=job.detail,
                 payload=job.payload,
                 resource_type=job.resource_type,

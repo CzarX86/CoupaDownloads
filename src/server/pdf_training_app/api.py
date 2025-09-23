@@ -3,9 +3,10 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
-from typing import Optional
+from typing import List, Optional
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi.responses import FileResponse
 from sqlalchemy import select, func
 
 from server.db import repository
@@ -15,6 +16,7 @@ from server.db.session import async_session
 from .models import (
     AnnotationDetail,
     DocumentDetail,
+    DocumentSummary,
     DocumentListResponse,
     DocumentUploadRequest,
     ErrorResponse,
@@ -29,9 +31,12 @@ from .services import (
     create_document,
     create_training_run,
     get_document_detail,
+    get_training_run_dataset,
+    get_training_run_model_path,
     get_job,
     ingest_annotation_export,
     list_documents,
+    list_training_runs,
     list_jobs,
     start_analysis,
 )
@@ -53,10 +58,10 @@ async def upload_document(
     return await create_document(file, metadata_payload)
 
 
-@router.get("/documents", response_model=DocumentListResponse)
-async def list_documents_endpoint() -> DocumentListResponse:
+@router.get("/documents", response_model=List[DocumentSummary])
+async def list_documents_endpoint() -> List[DocumentSummary]:
     documents = await list_documents()
-    return DocumentListResponse(items=documents)
+    return documents
 
 
 @router.get("/documents/{document_id}", response_model=DocumentDetail)
@@ -92,6 +97,12 @@ async def ingest_annotation_endpoint(
 @router.post("/training-runs", response_model=JobResponse)
 async def create_training_run_endpoint(payload: TrainingRunCreateRequest) -> JobResponse:
     return await create_training_run(payload.document_ids, payload.triggered_by)
+
+
+@router.get("/training-runs", response_model=List[JobDetail])
+async def list_training_runs_endpoint() -> List[JobDetail]:
+    runs = await list_training_runs()
+    return runs
 
 
 @router.get("/training-runs/{run_id}/dataset")

@@ -340,10 +340,24 @@ flowchart LR
 - Ao concluir, a etapa *Retrain* reingesta o CSV revisado, gera datasets, roda `eval` e treina um modelo ST mínimo (1 época) — o painel mostra onde encontrar métricas e pesos.
 - A experiência completa (UX, endpoints, diagramas) está descrita em `docs/refactor/pr32-refactor-spa-blueprint.md` e `docs/diagrams/ai_builder_style_flow.mmd`.
 - **Como executar:**
-  1. `poetry install` (garante dependências backend, incluindo FastAPI).
-  2. `PYTHONPATH=src poetry run python -m server.pdf_training_app.main` — inicia o backend em `http://127.0.0.1:8008`.
-  3. Em outro terminal: `cd src/spa && npm install` (apenas na primeira vez) e depois `npm run dev`.
-  4. Abra `http://localhost:5173` e siga o wizard.
+  A forma mais fácil é usar os scripts de inicialização na raiz do projeto. Eles cuidam de iniciar os servidores e abrir o navegador para você, aguardando um tempo para que tudo esteja pronto.
+
+  - **No Windows:**
+    ```bash
+    start_spa.bat
+    ```
+  - **No macOS ou Linux (aguarda 15 segundos para inicialização):**
+    ```bash
+    ./start_spa.sh
+    ```
+    (Pode ser necessário dar permissão de execução primeiro com `chmod +x ./start_spa.sh`)
+
+  **Execução Manual (para depuração):**
+  Se preferir iniciar os serviços separadamente:
+  1.  **Terminal 1 (Backend)**: `PYTHONPATH=src poetry run python -m server.pdf_training_app.main`
+  2.  **Terminal 2 (Frontend)**: `cd src/spa && npm run dev`
+  3.  **Navegador**: Abra a URL `http://localhost:5173`.
+
   5. Quando o wizard solicitar revisão, importe `analysis/config.xml` e `analysis/tasks.json` no Label Studio (instruções no próprio painel).
 
 ---

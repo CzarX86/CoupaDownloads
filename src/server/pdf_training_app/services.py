@@ -131,9 +131,12 @@ async def get_document_detail(document_id: str) -> DocumentDetail:
 
 def build_document_summary(document: Document) -> DocumentSummary:
     latest_annotation: Optional[Annotation] = document.annotations[0] if document.annotations else None
+    latest_annotation: Optional[Annotation] = None
     if document.annotations:
         latest_annotation = max(document.annotations, key=lambda ann: ann.updated_at)
     status = (latest_annotation.status.value if latest_annotation else AnnotationStatus.pending.value)
+
+    status = latest_annotation.status.value if latest_annotation else AnnotationStatus.pending.value
     return DocumentSummary(
         id=document.id,
         filename=document.filename,
@@ -147,14 +150,16 @@ def build_document_summary(document: Document) -> DocumentSummary:
 
 def build_document_detail(document: Document) -> DocumentDetail:
     summary = build_document_summary(document)
+    from .models import DocumentVersionInfo
+
     versions = [
-        {
-            "id": version.id,
-            "ordinal": version.ordinal,
-            "source_storage_path": version.source_storage_path,
-            "created_at": version.created_at,
-            "updated_at": version.updated_at,
-        }
+        DocumentVersionInfo(
+            id=version.id,
+            ordinal=version.ordinal,
+            source_storage_path=version.source_storage_path,
+            created_at=version.created_at,
+            updated_at=version.updated_at,
+        )
         for version in sorted(document.versions, key=lambda v: v.ordinal)
     ]
     annotations = [
@@ -276,6 +281,12 @@ async def list_jobs() -> List[JobDetail]:
     return await job_manager.list()
 
 
+async def list_training_runs() -> List[JobDetail]:
+    """Lists all jobs that are training runs."""
+    all_jobs = await job_manager.list()
+    return [job for job in all_jobs if job.job_type == ApiJobType.training]
+
+
 async def get_job(job_id: str) -> JobDetail:
     job = await job_manager.get(job_id)
     if not job:
@@ -356,10 +367,11 @@ async def create_training_run(document_ids: Optional[Iterable[str]], triggered_b
     return JobResponse(job_id=job_id, job_type=ApiJobType.training, status=ApiJobStatus.pending)
 
 
-async def build_training_datasets(training_run_id: str) -> datasets.DatasetBundle:
+async def build_training_datasets(training_run_id: str):
     async with async_session() as session:
-        bundle = await datasets.build_dataset_bundle(session, training_run_id)
-    return bundle
+        dataset_builder = datasets.DatasetBuilder(session)
+        records = await dataset_builder.build_from_annotations()
+    return records
 
 
 async def get_training_run_dataset(training_run_id: str) -> list[dict]:
