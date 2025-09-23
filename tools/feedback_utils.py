@@ -22,11 +22,12 @@ from typing import Dict, Iterable, List, Tuple
 
 import pandas as pd
 
-from server.pdf_training_app.fields import (
+from src.config.feedback_constants import (
     ALLOWED_STATUSES,
     METADATA_COLUMNS,
     NORMALIZED_TO_PRETTY,
     PRETTY_TO_NORMALIZED,
+    CATEGORICAL_ST_FIELDS,
 )
 
 METADATA_COLS = METADATA_COLUMNS

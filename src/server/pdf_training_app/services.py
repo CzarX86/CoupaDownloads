@@ -360,3 +360,22 @@ async def build_training_datasets(training_run_id: str) -> datasets.DatasetBundl
     async with async_session() as session:
         bundle = await datasets.build_dataset_bundle(session, training_run_id)
     return bundle
+
+
+async def get_training_run_dataset(training_run_id: str) -> list[dict]:
+    """Builds and returns the dataset for a given training run."""
+    async with async_session() as session:
+        # In the future, this could be enhanced to build a dataset
+        # specific to the documents in the training run.
+        dataset_builder = datasets.DatasetBuilder(session)
+        records = await dataset_builder.build_from_annotations()
+        return records
+
+
+async def get_training_run_model_path(training_run_id: str) -> Optional[Path]:
+    """Returns the path to the model artifact for a given training run."""
+    async with async_session() as session:
+        run = await repository.get_training_run(session, training_run_id)
+        if not run or not run.model_version:
+            return None
+        return Path(run.model_version.artifact_path)

@@ -100,6 +100,41 @@ def _build_export_payload(tasks: List[Dict[str, object]]) -> List[Dict[str, obje
 
 
 @pytest.mark.asyncio
+async def test_dataset_builder(service_context: SimpleNamespace) -> None:
+    repository = service_context.repository
+    services = service_context.services
+    models = service_context.models
+
+    async with service_context.db_session.async_session() as session:
+        doc = await repository.create_document(
+            session,
+            document_id="doc1",
+            filename="test.pdf",
+            content_type="application/pdf",
+            storage_path="/test/path",
+            checksum="abc",
+            size_bytes=123,
+            extra_metadata={},
+        )
+        annotation = await repository.get_annotation_by_document(session, "doc1")
+        await repository.update_annotation_status(
+            session,
+            annotation_id=annotation.id,
+            status=models.AnnotationStatus.completed,
+            latest_payload={"field": "value"},
+        )
+        await session.commit()
+
+    async with service_context.db_session.async_session() as session:
+        builder = services.datasets.DatasetBuilder(session)
+        records = await builder.build_from_annotations()
+
+    assert len(records) == 1
+    assert records[0]["document_id"] == "doc1"
+    assert records[0]["payload"] == {"field": "value"}
+
+
+@pytest.mark.asyncio
 async def test_document_flow_end_to_end(service_context: SimpleNamespace) -> None:
     services = service_context.services
     job_manager = service_context.job_manager
@@ -109,7 +144,7 @@ async def test_document_flow_end_to_end(service_context: SimpleNamespace) -> Non
     document_detail = await services.create_document(upload, {"ingested_by": "test"})
 
     assert document_detail.document.filename == "sample.pdf"
-    version_path = Path(document_detail.versions[0]["source_storage_path"])
+    version_path = Path(document_detail.versions[0].source_storage_path)
     assert version_path.exists()
 
     analysis_job = await services.start_analysis(document_detail.document.id)
@@ -155,9 +190,9 @@ async def test_document_flow_end_to_end(service_context: SimpleNamespace) -> Non
         document = await repository.get_document(session, document_detail.document.id)
         assert document is not None
         annotation = document.annotations[0]
-        assert annotation.status.name == "COMPLETED"
+        assert annotation.status.value == "COMPLETED"
         run = await session.get(service_context.models.TrainingRun, training_run_id)
-        assert run is not None and run.status.name == "SUCCEEDED"
+        assert run is not None and run.status.value == "SUCCEEDED"
 
     documents = await services.list_documents()
     assert any(doc.id == document_detail.document.id and doc.status == "COMPLETED" for doc in documents)

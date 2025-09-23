@@ -94,6 +94,26 @@ async def create_training_run_endpoint(payload: TrainingRunCreateRequest) -> Job
     return await create_training_run(payload.document_ids, payload.triggered_by)
 
 
+@router.get("/training-runs/{run_id}/dataset")
+async def get_training_run_dataset_endpoint(run_id: str):
+    try:
+        dataset = await get_training_run_dataset(run_id)
+        return dataset
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/training-runs/{run_id}/model")
+async def get_training_run_model_endpoint(run_id: str):
+    try:
+        model_path = await get_training_run_model_path(run_id)
+        if not model_path or not model_path.exists():
+            raise HTTPException(status_code=404, detail="Model artifact not found")
+        return FileResponse(model_path, filename=model_path.name)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 @router.get("/jobs", response_model=JobListResponse)
 async def list_jobs_endpoint() -> JobListResponse:
     jobs = await list_jobs()

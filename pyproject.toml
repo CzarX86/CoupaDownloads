@@ -79,10 +79,14 @@ hnswlib = ">=0.8.0"
 diskcache = ">=5.6.1"
 ollama = ">=0.5.4,<0.6.0"
 mlflow = ">=2.0.0"
+typer = "^0.19.2"
 
 [tool.poetry.scripts]
 coupa-downloader = "src.main:main"
 rag-cli = "embeddinggemma_feasibility.interactive_cli:main"
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]
