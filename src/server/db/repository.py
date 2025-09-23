@@ -253,6 +253,16 @@ async def list_jobs(session: AsyncSession) -> Sequence[AsyncJob]:
     return result.scalars().all()
 
 
+async def get_training_run(session: AsyncSession, training_run_id: str) -> Optional[TrainingRun]:
+    stmt = (
+        select(TrainingRun)
+        .where(TrainingRun.id == training_run_id)
+        .options(selectinload(TrainingRun.model_version))
+    )
+    result = await session.execute(stmt)
+    return result.scalars().first()
+
+
 async def create_training_run(
     session: AsyncSession,
     *,

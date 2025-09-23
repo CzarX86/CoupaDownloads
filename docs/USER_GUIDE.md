@@ -237,7 +237,7 @@ poetry run python -m src.Core_main
 | `poetry run python tools/feedback_cli.py prepare` | Criar CSV de revisão com colunas *_pred/gold/status; prepara o terreno para feedback humano. | Antes de revisar previsões geradas pelo modelo. |
 | `poetry run python tools/feedback_cli.py ingest` | Transformar o CSV revisado em datasets (`supervised.jsonl`, `st_pairs.jsonl`). | Depois que o analista preencheu o CSV. |
 | `poetry run python tools/feedback_cli.py eval` | Calcular métricas (acurácia/coverage) e gerar relatórios Markdown/JSON. | Para verificar progresso de correções. |
-| `poetry run python tools/feedback_cli.py train-st` | Treinar um Sentence Transformer usando os pares produzidos; com `--enable-llm-helpers` abre a interface gamificada. | Quando se deseja atualizar o modelo ST. |
+| `poetry run python tools/feedback_cli.py train-st` | Treinar um Sentence Transformer usando os pares produzidos; com `--enable-llm-helpers` abre a interface gamificada. **Com `--use-db`, utiliza o pipeline de treinamento baseado em banco de dados.** | Quando se deseja atualizar o modelo ST. |
 | `poetry run python tools/feedback_cli.py export-labelstudio` | Criar JSON simples para importar no Label Studio. | Se quiser revisar no Label Studio ou compartilhar com terceiros. |
 | `tools/llm_critique.py` | Enviar a planilha para um LLM (DeepSeek/OpenAI), pedir sugestões e gerar JSONL/CSV com colunas `_llm_suggested`. | Para acelerar revisões humanas com sugestões automáticas. |
 | `tools/self_augment.py` | Pedir ao LLM variações de valores categóricos e gerar pares adicionais para treino. | Quando o dataset de treino precisa de diversidade. |
