@@ -4,6 +4,7 @@ import DocumentTable from '../components/DocumentTable';
 import TrainingHistory from '../components/TrainingHistory';
 import AnnotationCard from '../components/AnnotationCard';
 import WarningsPanel from '../components/WarningsPanel';
+import PdfViewer from '../components/PdfViewer'; // Import PdfViewer
 import { Document } from '../api/pdfTraining';
 
 const queryClient = new QueryClient();
@@ -23,6 +24,8 @@ const PdfTrainingWizard: React.FC = () => {
         <div>
           <WarningsPanel warnings={warnings} />
           <DocumentTable onSelectDocument={handleSelectDocument} />
+          {/* Add PdfViewer here */}
+          <PdfViewer documentId={selectedDoc ? String(selectedDoc.id) : null} />
         </div>
         <div>
           <AnnotationCard doc={selectedDoc} />

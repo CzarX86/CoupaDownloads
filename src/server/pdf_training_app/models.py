@@ -49,6 +49,16 @@ class AnnotationDetail(BaseModel):
     updated_at: datetime
 
 
+class EntityLocation(BaseModel):
+    page_num: int
+    bbox: List[float] # [x1, y1, x2, y2]
+
+class Entity(BaseModel):
+    type: str
+    value: str
+    location: Optional[EntityLocation] = None
+
+
 class DocumentDetail(BaseModel):
     document: DocumentSummary
     versions: List[DocumentVersionInfo]

@@ -43,6 +43,7 @@ from .models import (
     JobResponse,
     JobStatus as ApiJobStatus,
     JobType as ApiJobType,
+    Entity,
 )
 
 
@@ -140,6 +141,53 @@ async def get_document_content_path(document_id: str) -> Path:
         raise ValueError("PDF file not found")
     
     return file_path
+
+
+async def get_document_entities(document_id: str) -> List[Entity]:
+    async with async_session() as session:
+        document = await repository.get_document(session, document_id)
+        if not document:
+            raise ValueError(f"Document with ID {document_id} not found.")
+
+        if not document.versions:
+            return [] # No versions, no entities
+
+        # Get the latest document version
+        latest_version = max(document.versions, key=lambda v: v.created_at)
+
+        if not latest_version.extractions:
+            return [] # No extractions, no entities
+
+        # Get the latest extraction for this version
+        latest_extraction = max(latest_version.extractions, key=lambda e: e.created_at)
+
+        # The predictions field contains a dictionary with 'tasks_path'
+        predictions_payload = latest_extraction.predictions
+        tasks_json_path_str = predictions_payload.get("tasks_path")
+
+        if not tasks_json_path_str:
+            return [] # No tasks_path in predictions, cannot find entities
+
+        tasks_json_path = Path(tasks_json_path_str)
+        if not tasks_json_path.exists():
+            raise ValueError(f"Tasks JSON file not found at {tasks_json_path}")
+
+        # Read the tasks.json file
+        tasks_data = await asyncio.to_thread(lambda: json.loads(tasks_json_path.read_text(encoding="utf-8")))
+
+        entities: List[Entity] = []
+        if tasks_data and isinstance(tasks_data, list):
+            # Assuming there's only one task per document for now, or we take the first one
+            # The design doc implies a single document context for this endpoint
+            if tasks_data:
+                first_task_data = tasks_data[0].get("data", {})
+                for key, value in first_task_data.items():
+                    if key.endswith("_pred") and value:
+                        pretty_name = key.replace("_pred", "")
+                        # Use NORMALIZED_TO_PRETTY to get the original pretty name if needed
+                        # For now, we'll use the pretty_name directly from the key
+                        entities.append(Entity(type=pretty_name, value=str(value)))
+        return entities
 
 
 # This maps the internal database status enums to the string values the SPA frontend expects.

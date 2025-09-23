@@ -39,6 +39,7 @@ from .services import (
     list_training_runs,
     list_jobs,
     start_analysis,
+    get_document_entities,
 )
 
 router = APIRouter()
@@ -77,6 +78,14 @@ async def get_document_content_endpoint(document_id: str) -> FileResponse:
     try:
         file_path = await get_document_content_path(document_id)
         return FileResponse(file_path, media_type="application/pdf")
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/documents/{document_id}/entities", response_model=List[Entity])
+async def get_document_entities_endpoint(document_id: str) -> List[Entity]:
+    try:
+        return await get_document_entities(document_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 

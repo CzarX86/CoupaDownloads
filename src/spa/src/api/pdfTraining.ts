@@ -1,16 +1,17 @@
 import axios from 'axios';
+import { Entity } from '../models'; // Import Entity interface
 
 const API_BASE_URL = '/api/pdf-training';
 
 export interface Document {
-  id: number;
+  id: string; // Changed from number to string to match backend
   filename: string;
   status: 'new' | 'extracted' | 'reviewing' | 'completed';
   created_at: string;
 }
 
 export interface TrainingRun {
-  id: number;
+  id: string; // Changed from number to string to match backend
   started_at: string;
   status: 'running' | 'completed' | 'failed';
   metrics: Record<string, unknown>;
@@ -49,7 +50,7 @@ export const getJobs = async (): Promise<Job[]> => {
     return response.data;
 };
 
-export const submitAnnotation = async (documentId: number, annotationData: unknown): Promise<void> => {
+export const submitAnnotation = async (documentId: string, annotationData: unknown): Promise<void> => { // Changed documentId to string
     await axios.post(`${API_BASE_URL}/documents/${documentId}/annotations`, annotationData);
 };
 
@@ -58,4 +59,9 @@ export const fetchPdfContent = async (documentId: string): Promise<string> => {
     responseType: 'blob', // Important: responseType must be 'blob' for file downloads
   });
   return URL.createObjectURL(response.data); // Return a URL to the blob
+};
+
+export const fetchEntities = async (documentId: string): Promise<Entity[]> => {
+  const response = await axios.get(`${API_BASE_URL}/documents/${documentId}/entities`);
+  return response.data;
 };

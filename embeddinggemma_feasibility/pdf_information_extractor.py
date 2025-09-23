@@ -12,55 +12,19 @@ from dataclasses import dataclass, asdict
 from datetime import datetime
 import logging
 
+from src.server.pdf_training_app.models import Entity
+
 # PDF processing libraries
-try:
-    import PyPDF2
-    import pdfplumber
-    PDF_LIBRARIES_AVAILABLE = True
-except ImportError:
-    PDF_LIBRARIES_AVAILABLE = False
+from src.server.pdf_training_app.models import Entity
 
-# OCR libraries (for scanned PDFs)
-try:
-    import pytesseract
-    from PIL import Image
-    import fitz  # PyMuPDF
-    OCR_LIBRARIES_AVAILABLE = True
-except ImportError:
-    OCR_LIBRARIES_AVAILABLE = False
-
-# ML libraries
-try:
-    from sentence_transformers import SentenceTransformer
-    from sklearn.metrics.pairwise import cosine_similarity
-    import numpy as np
-    ML_LIBRARIES_AVAILABLE = True
-except ImportError:
-    ML_LIBRARIES_AVAILABLE = False
-
-# Configuration
-from config import get_config
-
-
-@dataclass
-class PDFDocument:
-    """Representação de um documento PDF."""
-    file_path: str
-    filename: str
-    file_size: int
-    page_count: int
-    text_content: str
-    extracted_metadata: Dict[str, Any]
-    processing_time: float
-    error_message: Optional[str] = None
-
+# ...
 
 @dataclass
 class ExtractedInformation:
     """Informações extraídas de um documento PDF."""
     document: PDFDocument
     key_phrases: List[str]
-    entities: Dict[str, List[str]]
+    entities: List[Entity]
     summary: str
     categories: List[str]
     relevance_score: float
@@ -358,7 +322,7 @@ class PDFInformationExtractor:
             return ExtractedInformation(
                 document=document,
                 key_phrases=[],
-                entities={},
+                entities=[],
                 summary="Erro na extração",
                 categories=[],
                 relevance_score=0.0,
