@@ -19,6 +19,7 @@ from .models import (
     DocumentSummary,
     DocumentListResponse,
     DocumentUploadRequest,
+    Entity,
     ErrorResponse,
     HealthResponse,
     JobDetail,

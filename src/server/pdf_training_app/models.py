@@ -97,10 +97,6 @@ class TrainingRunCreateRequest(BaseModel):
     document_ids: Optional[List[str]] = Field(default=None, description="Subset of document IDs to include in the run")
     triggered_by: Optional[str] = Field(default=None, description="Identifier for the user/process triggering the run")
 
-<<<<<<< ours
-<<<<<<< ours
-<<<<<<< ours
-<<<<<<< ours
     @validator('document_ids')
     def validate_document_ids(cls, v):
         if v is None:
@@ -115,27 +111,6 @@ class TrainingRunCreateRequest(BaseModel):
                 raise ValueError(f'Invalid document ID format: {doc_id}')
         return cleaned
 
-=======
->>>>>>> theirs
-=======
-=======
->>>>>>> theirs
-    @validator('document_ids')
-    def validate_document_ids(cls, v):
-        if v is not None:
-            if len(v) == 0:
-                raise ValueError('document_ids cannot be empty list')
-            for doc_id in v:
-                if not isinstance(doc_id, str) or len(doc_id) != 32:
-                    raise ValueError(f'Invalid document ID format: {doc_id}')
-        return v
-
-<<<<<<< ours
->>>>>>> theirs
-=======
->>>>>>> theirs
-=======
->>>>>>> theirs
 
 class HealthResponse(BaseModel):
     status: str

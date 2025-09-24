@@ -114,3 +114,5 @@ poetry.lock
 .mypy_cache/
 .dmypy.json
 dmypy.json
+# SPA dependencies (Node.js/Vite)
+**/node_modules/

@@ -286,24 +286,6 @@ async def get_document_entities(document_id: str) -> List[Entity]:
         return entities
 
 
-<<<<<<< ours
-<<<<<<< ours
-<<<<<<< ours
-<<<<<<< ours
-# This maps the internal database status enums to the string values the SPA frontend expects.
-# This is necessary to fix a data contract mismatch identified during integration.
-STATUS_MAP = {
-    AnnotationStatus.pending.value: AnnotationStatus.pending.value,
-    AnnotationStatus.in_review.value: AnnotationStatus.in_review.value,
-    AnnotationStatus.completed.value: AnnotationStatus.completed.value,
-}
-
-
-=======
->>>>>>> theirs
-=======
-=======
->>>>>>> theirs
 # This maps the internal database status enums to the string values the SPA frontend expects.
 # This is necessary to fix a data contract mismatch identified during integration.
 STATUS_MAP = {
@@ -313,12 +295,6 @@ STATUS_MAP = {
 }
 
 
-<<<<<<< ours
->>>>>>> theirs
-=======
->>>>>>> theirs
-=======
->>>>>>> theirs
 def build_document_summary(document: Document) -> DocumentSummary:
     latest_annotation: Optional[Annotation] = None
     if document.annotations:
