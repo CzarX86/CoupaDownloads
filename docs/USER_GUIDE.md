@@ -326,39 +326,18 @@ flowchart LR
   I'm new”: `docs/cli/training_wizard.md`.
 
 ### Revisão visual com PDFs
-- `poetry run python tools/feedback_cli.py annotate-pdf prepare --review-csv reports/feedback/review.csv --out-dir reports/feedback/pdf_annotation --pdf-root <pasta_dos_pdfs>`
-- Abra o Label Studio, importe `config.xml` e `tasks.json` e conecte o storage local à pasta `pdfs/` gerada.
-- Ajuste os campos diretamente na interface visual (predições aparecem como ponto de partida).
-- Exporte em JSON e rode `poetry run python tools/feedback_cli.py annotate-pdf ingest --export-json <export.json> --review-csv reports/feedback/review.csv --out reports/feedback/review_annotated.csv`.
-- Detalhes completos em `docs/feedback/pdf_annotation.md`.
+- Utilize a página **PDF Training Wizard** em `src/spa`. Ela carrega os documentos cadastrados via API e mostra o `PdfViewer` com o conteúdo em PDF.
+- Se existirem planilhas antigas, execute `poetry run python scripts/migrate_review_csv.py --training-run <nome> '<glob>'` antes de abrir a interface para trazer os dados para o banco.
+- As correções aprovadas ficam registradas em `annotations.latest_payload`, eliminando a etapa de exportar/importar JSON no Label Studio.
 
 ### Assistente visual estilo AI Builder (SPA local)
-- Frontend em `src/spa` (React + Vite) com quatro etapas: **Upload**, **Auto-tag**, **Review**, **Retrain** (acesse `npm run dev`).
-- Backend FastAPI (execute `PYTHONPATH=src poetry run python -m server.pdf_training_app.main`) expõe `/api/pdf-training/*` e orquestra os comandos existentes do `feedback_cli`.
-- Cada sessão salva artefatos em `storage/pdf_training/<session>` (CSV, PDFs, tarefas, export, métricas, modelo).
-- A etapa *Review* aponta diretamente para os arquivos `config.xml`/`tasks.json` prontos para o Label Studio e captura o JSON exportado.
-- Ao concluir, a etapa *Retrain* reingesta o CSV revisado, gera datasets, roda `eval` e treina um modelo ST mínimo (1 época) — o painel mostra onde encontrar métricas e pesos.
-- A experiência completa (UX, endpoints, diagramas) está descrita em `docs/refactor/pr32-refactor-spa-blueprint.md` e `docs/diagrams/ai_builder_style_flow.mmd`.
-- **Como executar:**
-  A forma mais fácil é usar os scripts de inicialização na raiz do projeto. Eles cuidam de iniciar os servidores e abrir o navegador para você, aguardando um tempo para que tudo esteja pronto.
-
-  - **No Windows:**
-    ```bash
-    start_spa.bat
-    ```
-  - **No macOS ou Linux (aguarda 15 segundos para inicialização):**
-    ```bash
-    ./start_spa.sh
-    ```
-    (Pode ser necessário dar permissão de execução primeiro com `chmod +x ./start_spa.sh`)
-
-  **Execução Manual (para depuração):**
-  Se preferir iniciar os serviços separadamente:
-  1.  **Terminal 1 (Backend)**: `PYTHONPATH=src poetry run python -m server.pdf_training_app.main`
-  2.  **Terminal 2 (Frontend)**: `cd src/spa && npm run dev`
-  3.  **Navegador**: Abra a URL `http://localhost:5173`.
-
-  5. Quando o wizard solicitar revisão, importe `analysis/config.xml` e `analysis/tasks.json` no Label Studio (instruções no próprio painel).
+- Frontend em `src/spa` (React + Vite) com etapas **Documents**, **Annotations**, **Training history** e **Warnings**.
+- Backend FastAPI (`PYTHONPATH=src poetry run python -m server.pdf_training_app.main`) expõe `/api/pdf-training/*` e salva blobs em `storage/pdf_training/blobs`.
+- Para iniciar rapidamente use `./start_spa.sh` (Linux/macOS) ou `start_spa.bat` (Windows). Para depuração:
+  1. **Terminal 1 (Backend)**: `PYTHONPATH=src poetry run python -m server.pdf_training_app.main`
+  2. **Terminal 2 (Frontend)**: `cd src/spa && npm run dev`
+  3. Abra `http://localhost:5173` no navegador.
+- O painel **Training history** permite disparar novas execuções, acompanhar status e baixar datasets/modelos sem recorrer ao CLI legado.
 
 ---
 
@@ -406,37 +385,26 @@ flowchart LR
 # Fluxo principal
 poetry run python -m src.Core_main
 
-# Preparar revisão
-poetry run python tools/feedback_cli.py prepare --pred-csv reports/advanced_*.csv --out reports/feedback/review.csv
+# Migrar planilhas legadas para o banco
+poetry run python scripts/migrate_review_csv.py --training-run migração-inicial 'reports/feedback/*.csv'
 
-# Ingestar revisão
-poetry run python tools/feedback_cli.py ingest --review-csv reports/feedback/review.csv --out-dir datasets/
+# Servidor FastAPI
+PYTHONPATH=src poetry run python -m server.pdf_training_app.main
 
-# Avaliar resultados
-poetry run python tools/feedback_cli.py eval --review-csv reports/feedback/review.csv --report-dir reports/feedback/
+# SPA (frontend)
+cd src/spa && npm run dev
 
-# Treinar ST (com interface gamificada se houver LLM)
-poetry run python tools/feedback_cli.py train-st --dataset datasets/st_pairs.jsonl --output models/st_custom
-poetry run python tools/feedback_cli.py train-st --enable-llm-helpers --llm-jsonl reports/llm_critique/llm_critique_*.jsonl --review-csv reports/feedback/review.csv --output models/st_llm
+# Consultar documentos disponíveis
+curl http://localhost:8008/api/pdf-training/documents
 
-# Criticar com LLM
-poetry run python tools/llm_critique.py --pred-csv reports/advanced_*.csv --review-csv reports/feedback/review.csv --out-dir reports/llm_critique/
+# Baixar conteúdo em PDF
+curl -o sample.pdf http://localhost:8008/api/pdf-training/documents/<document_id>/content
 
-# Auto-augmentação
-poetry run python tools/self_augment.py --input datasets/supervised.jsonl --out datasets/st_pairs_aug.jsonl
-
-# Anotação visual em PDF
-poetry run python tools/feedback_cli.py annotate-pdf prepare --review-csv reports/feedback/review.csv --out-dir reports/feedback/pdf_annotation --pdf-root <pasta_dos_pdfs>
-poetry run python tools/feedback_cli.py annotate-pdf ingest --export-json export.json --review-csv reports/feedback/review.csv --out reports/feedback/review_annotated.csv
-
-# Comparar execuções (A/B)
-poetry run python tools/ab_compare_cli.py --pred-a reports/runA.csv --pred-b reports/runB.csv --out-dir reports/ab_compare/
+# Criar um treinamento usando IDs selecionados
+curl -X POST http://localhost:8008/api/pdf-training/training-runs \
+  -H 'Content-Type: application/json' \
+  -d '{"document_ids": ["<doc_id>"], "triggered_by": "cli"}'
 ```
-
-### Review CSV vs. Excel
-- `prepare` agora escreve uma primeira linha `sep=,` (mantendo o BOM) para avisar o Excel que o separador é vírgula.
-- Ingestão, avaliação e exportadores ignoram automaticamente essa dica; nenhum fluxo precisa mudar.
-- Abra o arquivo com duplo clique e o Excel alinhará as colunas sem prompts extras.
 
 ```mermaid
 flowchart LR

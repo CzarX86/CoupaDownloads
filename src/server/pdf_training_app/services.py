@@ -190,28 +190,18 @@ async def get_document_entities(document_id: str) -> List[Entity]:
         return entities
 
 
-# This maps the internal database status enums to the string values the SPA frontend expects.
-# This is necessary to fix a data contract mismatch identified during integration.
-STATUS_MAP = {
-    AnnotationStatus.pending.value: "new",
-    AnnotationStatus.in_review.value: "reviewing",
-    AnnotationStatus.completed.value: "completed",
-}
-
-
 def build_document_summary(document: Document) -> DocumentSummary:
     latest_annotation: Optional[Annotation] = None
     if document.annotations:
         latest_annotation = max(document.annotations, key=lambda ann: ann.updated_at)
 
-    db_status = latest_annotation.status.value if latest_annotation else AnnotationStatus.pending.value
-    api_status = STATUS_MAP.get(db_status, db_status)  # Fallback to original value if not in map
+    status_value = latest_annotation.status.value if latest_annotation else AnnotationStatus.pending.value
     return DocumentSummary(
         id=document.id,
         filename=document.filename,
         content_type=document.content_type,
         size_bytes=document.size_bytes,
-        status=api_status,
+        status=status_value,
         created_at=document.created_at,
         updated_at=document.updated_at,
     )
@@ -245,6 +235,11 @@ def build_document_detail(document: Document) -> DocumentDetail:
 
 
 async def start_analysis(document_id: str) -> JobResponse:
+    async with async_session() as session:
+        document = await repository.get_document(session, document_id)
+    if not document:
+        raise ValueError("Document not found")
+
     async def task(job_id: str) -> Dict[str, Any]:
         async with async_session() as session:
             document = await repository.get_document(session, document_id)

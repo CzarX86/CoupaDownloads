@@ -33,3 +33,12 @@ async def get_session() -> AsyncIterator[AsyncSession]:
 
 async def close_engine() -> None:
     await _engine.dispose()
+
+
+async def reconfigure_engine(url: str) -> None:
+    """Dispose the current engine and create a new one pointing to ``url``."""
+
+    global _engine, _async_session_factory
+    await _engine.dispose()
+    _engine = create_async_engine(url, echo=_settings.echo, future=True)
+    _async_session_factory = async_sessionmaker(bind=_engine, expire_on_commit=False)
