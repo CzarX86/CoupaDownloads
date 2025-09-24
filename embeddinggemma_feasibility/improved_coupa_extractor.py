@@ -5,11 +5,11 @@ Integra padrões aprendidos da planilha real.
 """
 
 import json
-import re
 import os
 from pathlib import Path
 from typing import Dict, List
-from advanced_coupa_field_extractor import AdvancedCoupaPDFFieldExtractor, CoupaFieldExtraction
+from .advanced_coupa_field_extractor import AdvancedCoupaPDFFieldExtractor, CoupaFieldExtraction
+from .entity_parsing import has_numeric_content
 
 class ImprovedCoupaFieldExtractor(AdvancedCoupaPDFFieldExtractor):
     """Extrator melhorado com padrões aprendidos dos dados reais."""
@@ -43,23 +43,19 @@ class ImprovedCoupaFieldExtractor(AdvancedCoupaPDFFieldExtractor):
     def extract_fields_with_trained_patterns(self, text: str) -> Dict[str, str]:
         """Extrair campos usando padrões aprendidos dos dados reais."""
         extracted = {}
-        
+
         for field, patterns in self.training_patterns.items():
             for pattern in patterns:
-                try:
-                    match = re.search(pattern, text, re.IGNORECASE | re.MULTILINE)
-                    if match:
-                        value = match.group(1).strip()
-                        
-                        # Validar valor baseado nas distribuições
-                        if self._validate_value(field, value):
-                            extracted[field] = value
-                            break
-                            
-                except Exception as e:
-                    self.logger.debug(f"⚠️ Erro no padrão {pattern}: {e}")
-                    continue
-        
+                entities = self.entity_parser.extract_entities(
+                    text,
+                    field_hint=pattern,
+                    target_field=field,
+                )
+                value = getattr(entities, field, None)
+                if value and self._validate_value(field, value):
+                    extracted[field] = value
+                    break
+
         return extracted
     
     def _validate_value(self, field: str, value: str) -> bool:
@@ -72,7 +68,7 @@ class ImprovedCoupaFieldExtractor(AdvancedCoupaPDFFieldExtractor):
         # Validações específicas por campo
         if field == 'pwo_number':
             # PWO deve ser numérico
-            return bool(re.search(r'\d+', value))
+            return has_numeric_content(value)
         
         elif field == 'contract_type':
             # Tipos válidos baseados nos dados
@@ -91,7 +87,7 @@ class ImprovedCoupaFieldExtractor(AdvancedCoupaPDFFieldExtractor):
         
         elif field == 'sow_value_eur':
             # Valores monetários devem conter números
-            return bool(re.search(r'\d+', value))
+            return has_numeric_content(value)
         
         # Validação de comprimento baseada na distribuição
         if distribution.get('avg_length'):

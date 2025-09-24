@@ -31,6 +31,7 @@ from .services import (
     create_document,
     create_training_run,
     get_document_detail,
+    get_document_content_path,
     get_training_run_dataset,
     get_training_run_model_path,
     get_job,

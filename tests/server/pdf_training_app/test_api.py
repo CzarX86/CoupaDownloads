@@ -7,12 +7,15 @@ import os
 import sys
 import tempfile
 from io import BytesIO
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Dict, List, Generator
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 SRC_PATH = PROJECT_ROOT / "src"
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 if str(SRC_PATH) not in sys.path:
     sys.path.insert(0, str(SRC_PATH))
 
@@ -45,7 +48,7 @@ def _reload_modules() -> SimpleNamespace:
     )
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="function")
 def api_context() -> Generator[SimpleNamespace, None, None]:
     with tempfile.TemporaryDirectory() as tmpdir:
         base_path = Path(tmpdir)
@@ -69,7 +72,7 @@ def api_context() -> Generator[SimpleNamespace, None, None]:
 def client(api_context: SimpleNamespace) -> TestClient:
     """Create a test client for the API."""
     from server.pdf_training_app import app
-    return TestClient(app.app)
+    return TestClient(app)
 
 
 def _make_upload_file(content: bytes, filename: str, content_type: str) -> UploadFile:
@@ -211,6 +214,108 @@ class TestDocumentEndpoints:
         assert data["document"]["id"] == document_id
         assert data["document"]["filename"] == "test.pdf"
 
+<<<<<<< ours
+<<<<<<< ours
+<<<<<<< ours
+<<<<<<< ours
+    def test_get_document_entities_not_found(self, client: TestClient):
+        """Document entities endpoint returns 404 for unknown documents."""
+        response = client.get("/api/pdf-training/documents/unknown/entities")
+        assert response.status_code == 404
+
+    def test_get_document_entities_success(
+        self,
+        client: TestClient,
+        api_context: SimpleNamespace,
+    ) -> None:
+        """Entities endpoint returns preprocessed predictions."""
+
+        pdf_content = _create_test_pdf()
+        upload_response = client.post(
+            "/api/pdf-training/documents",
+            files={"file": ("test.pdf", pdf_content, "application/pdf")},
+        )
+        document_id = upload_response.json()["document"]["id"]
+
+        tasks_path = api_context.storage_root / "analysis" / f"{document_id}_tasks.json"
+        tasks_path.parent.mkdir(parents=True, exist_ok=True)
+        tasks_payload = [
+            {
+                "id": 1,
+                "data": {
+                    "row_id": 1,
+                    "po_number_pred": "PO-00001",
+                    "amount_pred": "$250.00",
+                    "amount_bbox": {"page_num": 2, "bbox": [15, 25, 35, 45]},
+                },
+            }
+        ]
+        tasks_path.write_text(json.dumps(tasks_payload), encoding="utf-8")
+
+        async def _seed_extraction() -> None:
+            async with api_context.db_session.async_session() as session:
+                document = await api_context.services.repository.get_document(session, document_id)
+                assert document is not None
+                latest_version = max(
+                    document.versions,
+                    key=lambda version: version.created_at or datetime.min,
+                )
+                await api_context.services.repository.create_extraction(
+                    session,
+                    document_version_id=latest_version.id,
+                    extractor_name="unit-test",
+                    predictions={"tasks_path": str(tasks_path)},
+                    confidence_summary=None,
+                )
+                await session.commit()
+
+        asyncio.run(_seed_extraction())
+
+        response = client.get(
+            f"/api/pdf-training/documents/{document_id}/entities"
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert isinstance(data, list)
+        assert len(data) == 2
+        entity_map = {item["type"]: item for item in data}
+        assert entity_map["PO Number"]["value"] == "PO-00001"
+        amount_entity = entity_map["Amount"]
+        assert amount_entity["value"] == "$250.00"
+        assert amount_entity["location"]["page_num"] == 2
+        assert amount_entity["location"]["bbox"] == [15.0, 25.0, 35.0, 45.0]
+=======
+=======
+>>>>>>> theirs
+    def test_get_document_content_success(self, client: TestClient):
+        """Document content endpoint returns the stored PDF bytes."""
+        pdf_content = _create_test_pdf()
+        upload_response = client.post(
+            "/api/pdf-training/documents",
+            files={"file": ("test.pdf", pdf_content, "application/pdf")}
+        )
+        document_id = upload_response.json()["document"]["id"]
+
+        response = client.get(f"/api/pdf-training/documents/{document_id}/content")
+        assert response.status_code == 200
+        assert response.headers["content-type"] == "application/pdf"
+        assert response.content == pdf_content
+
+    def test_get_document_content_not_found(self, client: TestClient):
+        """Document content endpoint returns 404 when the document is missing."""
+        response = client.get("/api/pdf-training/documents/missing-id/content")
+        assert response.status_code == 404
+        assert "Document not found" in response.json()["detail"]
+<<<<<<< ours
+>>>>>>> theirs
+
+=======
+>>>>>>> theirs
+=======
+
+>>>>>>> theirs
+=======
+>>>>>>> theirs
 
 class TestAnalysisEndpoints:
     """Test analysis-related endpoints."""

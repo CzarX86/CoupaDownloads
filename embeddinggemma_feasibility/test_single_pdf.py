@@ -6,7 +6,12 @@ Script de teste para processar um único PDF com o extrator avançado.
 import os
 import sys
 from pathlib import Path
-from advanced_coupa_field_extractor import AdvancedCoupaPDFFieldExtractor
+
+if __package__ in (None, ''):
+    sys.path.append(str(Path(__file__).resolve().parent))
+    from advanced_coupa_field_extractor import AdvancedCoupaPDFFieldExtractor
+else:
+    from .advanced_coupa_field_extractor import AdvancedCoupaPDFFieldExtractor
 
 def test_single_pdf(pdf_path: str):
     """Testar extração em um único PDF."""

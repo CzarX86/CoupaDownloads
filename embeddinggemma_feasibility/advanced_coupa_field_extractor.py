@@ -7,7 +7,6 @@ import os
 import json
 import time
 import csv
-import re
 from typing import List, Dict, Any, Optional, Tuple
 from pathlib import Path
 from dataclasses import dataclass, asdict
@@ -75,6 +74,7 @@ except ImportError:
 
 # Configuration
 from .config import get_config
+from .entity_parsing import ContractEntityParser, parse_numeric_amount
 
 
 @dataclass
@@ -133,11 +133,12 @@ class AdvancedCoupaPDFFieldExtractor:
         self.logger = self._setup_logger()
         self.use_rag = use_rag
         self.use_validations = use_validations
-        
+
         # Inicializar bibliotecas NLP disponíveis
         self.nlp_models = {}
         self.available_libraries = []
         self._initialize_nlp_libraries()
+        self.entity_parser = ContractEntityParser()
         
         # Campos para extração
         self.target_fields = [
@@ -717,21 +718,11 @@ class AdvancedCoupaPDFFieldExtractor:
     
     def _extract_value_from_chunk(self, field: str, chunk: str) -> str:
         """Extrair valor específico de um chunk de texto."""
-        # Padrões simples para extrair valores específicos
-        patterns = {
-            'contract_start_date': r'(\d{1,2}[/-]\d{1,2}[/-]\d{4})',
-            'contract_end_date': r'(\d{1,2}[/-]\d{1,2}[/-]\d{4})',
-            'sow_value_eur': r'([€]\s*\d+(?:,\d{3})*(?:\.\d{2})?)',
-            'pwo_number': r'(PWO\s*#?\s*\d+)',
-            'managed_by': r'(VMO|SL|SAM|Business)',
-            'contract_type': r'(SOW|CR|Subs\s+Order)'
-        }
-        
-        if field in patterns:
-            match = re.search(patterns[field], chunk, re.IGNORECASE)
-            if match:
-                return match.group(1)
-        
+        entities = self.entity_parser.extract_entities(chunk, target_field=field)
+        value = getattr(entities, field, None)
+        if value:
+            return value
+
         # Para outros campos, retornar o chunk completo (limitado)
         return chunk[:100] + "..." if len(chunk) > 100 else chunk
     
@@ -1028,17 +1019,12 @@ class AdvancedCoupaPDFFieldExtractor:
         return None
 
     def _validate_amounts(self, eur: str, lc: str, fx: str) -> bool:
-        import re
         def to_num(s: str) -> float | None:
             s = (s or "").strip()
             if not s:
                 return None
-            s = s.replace("€", "").replace("$", "").replace(",", "").replace(" ", "")
-            m = re.search(r"-?\d+(?:\.\d+)?", s)
-            try:
-                return float(m.group(0)) if m else None
-            except Exception:
-                return None
+            numeric = parse_numeric_amount(s)
+            return numeric
         eur_v = to_num(eur)
         lc_v = to_num(lc)
         fx_v = to_num(fx)

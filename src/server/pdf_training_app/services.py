@@ -34,7 +34,7 @@ from tools.pdf_annotation import prepare_pdf_annotation_project
 
 from . import datasets
 from .jobs import job_manager
-from .fields import METADATA_COLUMNS, NORMALIZED_TO_PRETTY
+from .fields import METADATA_COLUMNS, NORMALIZED_TO_PRETTY, normalized_to_pretty
 from .models import (
     AnnotationDetail,
     DocumentDetail,
@@ -44,6 +44,7 @@ from .models import (
     JobStatus as ApiJobStatus,
     JobType as ApiJobType,
     Entity,
+    EntityLocation,
 )
 
 
@@ -143,6 +144,85 @@ async def get_document_content_path(document_id: str) -> Path:
     return file_path
 
 
+def _stringify_prediction_value(value: Any) -> str | None:
+    """Normalize raw prediction values to a string representation."""
+
+    if value is None:
+        return None
+
+    if isinstance(value, str):
+        text = value.strip()
+        return text or None
+
+    if isinstance(value, (int, float)):
+        return str(value)
+
+    if isinstance(value, (list, tuple)):
+        flattened = [str(item).strip() for item in value if item not in (None, "")]
+        if not flattened:
+            return None
+        return ", ".join(flattened)
+
+    return str(value)
+
+
+def _parse_entity_location(payload: Any) -> EntityLocation | None:
+    """Build an EntityLocation instance if payload resembles a bounding box."""
+
+    if payload is None:
+        return None
+
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except json.JSONDecodeError:
+            return None
+
+    page: int | None = None
+    bbox: list[float] | None = None
+
+    if isinstance(payload, dict):
+        page_candidate = payload.get("page_num") or payload.get("page") or payload.get("pageNumber")
+        if page_candidate is not None:
+            try:
+                page = int(page_candidate)
+            except (TypeError, ValueError):
+                page = None
+
+        bbox_raw = (
+            payload.get("bbox")
+            or payload.get("box")
+            or payload.get("coordinates")
+            or payload.get("rect")
+        )
+
+        if isinstance(bbox_raw, str):
+            try:
+                bbox_raw = json.loads(bbox_raw)
+            except json.JSONDecodeError:
+                bbox_raw = None
+
+        if isinstance(bbox_raw, dict):
+            keys = ["x1", "y1", "x2", "y2"]
+            if all(key in bbox_raw for key in keys):
+                bbox = [float(bbox_raw[key]) for key in keys]
+                if page is None:
+                    page = int(bbox_raw.get("page") or bbox_raw.get("page_num") or 1)
+        elif isinstance(bbox_raw, (list, tuple)) and len(bbox_raw) == 4:
+            bbox = [float(coord) for coord in bbox_raw]
+
+    elif isinstance(payload, (list, tuple)) and len(payload) == 4:
+        bbox = [float(coord) for coord in payload]
+
+    if bbox is None:
+        return None
+
+    if page is None:
+        page = 1
+
+    return EntityLocation(page_num=page, bbox=bbox)
+
+
 async def get_document_entities(document_id: str) -> List[Entity]:
     async with async_session() as session:
         document = await repository.get_document(session, document_id)
@@ -173,23 +253,57 @@ async def get_document_entities(document_id: str) -> List[Entity]:
             raise ValueError(f"Tasks JSON file not found at {tasks_json_path}")
 
         # Read the tasks.json file
-        tasks_data = await asyncio.to_thread(lambda: json.loads(tasks_json_path.read_text(encoding="utf-8")))
+        try:
+            tasks_data = await asyncio.to_thread(
+                lambda: json.loads(tasks_json_path.read_text(encoding="utf-8"))
+            )
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(f"Invalid tasks JSON at {tasks_json_path}") from exc
 
         entities: List[Entity] = []
-        if tasks_data and isinstance(tasks_data, list):
-            # Assuming there's only one task per document for now, or we take the first one
-            # The design doc implies a single document context for this endpoint
-            if tasks_data:
-                first_task_data = tasks_data[0].get("data", {})
-                for key, value in first_task_data.items():
-                    if key.endswith("_pred") and value:
-                        pretty_name = key.replace("_pred", "")
-                        # Use NORMALIZED_TO_PRETTY to get the original pretty name if needed
-                        # For now, we'll use the pretty_name directly from the key
-                        entities.append(Entity(type=pretty_name, value=str(value)))
+        if isinstance(tasks_data, list):
+            for task in tasks_data:
+                task_data = task.get("data") if isinstance(task, dict) else None
+                if not isinstance(task_data, dict):
+                    continue
+
+                for key, raw_value in task_data.items():
+                    if not key.endswith("_pred"):
+                        continue
+                    normalized_name = key[:-5]
+                    value = _stringify_prediction_value(raw_value)
+                    if not value:
+                        continue
+
+                    pretty_name = NORMALIZED_TO_PRETTY.get(normalized_name) or normalized_to_pretty(normalized_name)
+                    location_payload = (
+                        task_data.get(f"{normalized_name}_bbox")
+                        or task_data.get(f"{normalized_name}_location")
+                    )
+                    location = _parse_entity_location(location_payload)
+                    entities.append(Entity(type=pretty_name, value=value, location=location))
+
         return entities
 
 
+<<<<<<< ours
+<<<<<<< ours
+<<<<<<< ours
+<<<<<<< ours
+# This maps the internal database status enums to the string values the SPA frontend expects.
+# This is necessary to fix a data contract mismatch identified during integration.
+STATUS_MAP = {
+    AnnotationStatus.pending.value: AnnotationStatus.pending.value,
+    AnnotationStatus.in_review.value: AnnotationStatus.in_review.value,
+    AnnotationStatus.completed.value: AnnotationStatus.completed.value,
+}
+
+
+=======
+>>>>>>> theirs
+=======
+=======
+>>>>>>> theirs
 # This maps the internal database status enums to the string values the SPA frontend expects.
 # This is necessary to fix a data contract mismatch identified during integration.
 STATUS_MAP = {
@@ -199,6 +313,12 @@ STATUS_MAP = {
 }
 
 
+<<<<<<< ours
+>>>>>>> theirs
+=======
+>>>>>>> theirs
+=======
+>>>>>>> theirs
 def build_document_summary(document: Document) -> DocumentSummary:
     latest_annotation: Optional[Annotation] = None
     if document.annotations:

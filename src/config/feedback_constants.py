@@ -24,6 +24,8 @@ NORMALIZED_TO_PRETTY: Dict[str, str] = {
     "high_level_scope": "High Level Scope",
     "platform_technology": "Platform/Technology",
     "pwo_number": "PWO#",
+    "po_number": "PO Number",
+    "amount": "Amount",
 }
 
 PRETTY_TO_NORMALIZED: Dict[str, str] = {value: key for key, value in NORMALIZED_TO_PRETTY.items()}

@@ -13,6 +13,8 @@ from typing import Dict, List
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 SRC_PATH = PROJECT_ROOT / "src"
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 if str(SRC_PATH) not in sys.path:
     sys.path.insert(0, str(SRC_PATH))
 
@@ -200,3 +202,43 @@ async def test_document_flow_end_to_end(service_context: SimpleNamespace) -> Non
     jobs = await services.list_jobs()
     job_types = {job.job_type for job in jobs}
     assert {"ANALYSIS", "TRAINING"}.issubset(job_types)
+
+
+@pytest.mark.asyncio
+async def test_get_document_entities_returns_predictions(service_context: SimpleNamespace) -> None:
+    services = service_context.services
+    job_manager = service_context.job_manager
+
+    upload = _make_upload_file(b"%PDF-1.4\n1 0 obj\n<<>>\nendobj\n", "entities.pdf", "application/pdf")
+    document_detail = await services.create_document(upload, {"ingested_by": "entities-test"})
+
+    analysis_job = await services.start_analysis(document_detail.document.id)
+    completed_analysis = await job_manager.wait_until_complete(analysis_job.job_id, timeout=5)
+    analysis_payload = completed_analysis.payload or {}
+    analysis_info = analysis_payload.get("analysis") or {}
+    tasks_path_str = analysis_info.get("tasks_path")
+    assert tasks_path_str, "Expected analysis to provide a tasks.json path"
+    tasks_path = Path(tasks_path_str)
+
+    tasks_payload = [
+        {
+            "id": 1,
+            "data": {
+                "row_id": 1,
+                "po_number_pred": "PO-99999",
+                "amount_pred": "$123.45",
+                "amount_bbox": {"page_num": 1, "bbox": [10, 20, 30, 40]},
+            },
+        }
+    ]
+    tasks_path.write_text(json.dumps(tasks_payload), encoding="utf-8")
+
+    entities = await services.get_document_entities(document_detail.document.id)
+    assert len(entities) == 2
+    entity_map = {entity.type: entity for entity in entities}
+    assert entity_map["PO Number"].value == "PO-99999"
+    amount_entity = entity_map["Amount"]
+    assert amount_entity.value == "$123.45"
+    assert amount_entity.location is not None
+    assert amount_entity.location.page_num == 1
+    assert amount_entity.location.bbox == [10.0, 20.0, 30.0, 40.0]

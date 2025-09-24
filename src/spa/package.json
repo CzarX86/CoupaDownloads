@@ -11,8 +11,34 @@
   "dependencies": {
     "@tanstack/react-query": "^5.51.21",
     "axios": "^1.7.2",
+<<<<<<< ours
+<<<<<<< ours
+<<<<<<< ours
+<<<<<<< ours
+    "pdfjs-dist": "^5.4.149",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-pdf": "^10.1.0"
+=======
+    "pdfjs-dist": "^3.11.174",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-pdf": "^7.7.1"
+>>>>>>> theirs
+=======
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
+>>>>>>> theirs
+=======
+    "pdfjs-dist": "^3.11.174",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-pdf": "^7.7.1"
+>>>>>>> theirs
+=======
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+>>>>>>> theirs
   },
   "devDependencies": {
     "@types/react": "^18.2.43",
