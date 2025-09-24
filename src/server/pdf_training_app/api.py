@@ -19,17 +19,20 @@ from .models import (
     DocumentSummary,
     DocumentListResponse,
     DocumentUploadRequest,
+    Entity,
     ErrorResponse,
     HealthResponse,
     JobDetail,
     JobListResponse,
     JobResponse,
+    JobType,
     SystemStatusResponse,
     TrainingRunCreateRequest,
 )
 from .services import (
     create_document,
     create_training_run,
+    get_document_content_path,
     get_document_detail,
     get_training_run_dataset,
     get_training_run_model_path,
@@ -59,10 +62,10 @@ async def upload_document(
     return await create_document(file, metadata_payload)
 
 
-@router.get("/documents", response_model=List[DocumentSummary])
-async def list_documents_endpoint() -> List[DocumentSummary]:
+@router.get("/documents", response_model=DocumentListResponse)
+async def list_documents_endpoint() -> DocumentListResponse:
     documents = await list_documents()
-    return documents
+    return DocumentListResponse(items=documents)
 
 
 @router.get("/documents/{document_id}", response_model=DocumentDetail)
@@ -146,12 +149,16 @@ async def get_training_run_model_endpoint(run_id: str):
 @router.get("/jobs", response_model=JobListResponse)
 async def list_jobs_endpoint() -> JobListResponse:
     jobs = await list_jobs()
-    return JobListResponse(jobs=jobs)
+    training_jobs = [job for job in jobs if job.job_type == JobType.training]
+    return JobListResponse(jobs=training_jobs)
 
 
 @router.get("/jobs/{job_id}", response_model=JobDetail)
 async def get_job_endpoint(job_id: str) -> JobDetail:
-    job = await get_job(job_id)
+    try:
+        job = await get_job(job_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     return job

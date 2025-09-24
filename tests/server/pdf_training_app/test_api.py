@@ -12,6 +12,8 @@ from types import SimpleNamespace
 from typing import Dict, List, Generator
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 SRC_PATH = PROJECT_ROOT / "src"
 if str(SRC_PATH) not in sys.path:
     sys.path.insert(0, str(SRC_PATH))
@@ -204,12 +206,32 @@ class TestDocumentEndpoints:
             files={"file": ("test.pdf", pdf_content, "application/pdf")}
         )
         document_id = upload_response.json()["document"]["id"]
-        
+
         response = client.get(f"/api/pdf-training/documents/{document_id}")
         assert response.status_code == 200
         data = response.json()
         assert data["document"]["id"] == document_id
         assert data["document"]["filename"] == "test.pdf"
+
+    def test_get_document_content_success(self, client: TestClient):
+        """Document content endpoint returns the stored PDF bytes."""
+        pdf_content = _create_test_pdf()
+        upload_response = client.post(
+            "/api/pdf-training/documents",
+            files={"file": ("test.pdf", pdf_content, "application/pdf")}
+        )
+        document_id = upload_response.json()["document"]["id"]
+
+        response = client.get(f"/api/pdf-training/documents/{document_id}/content")
+        assert response.status_code == 200
+        assert response.headers["content-type"] == "application/pdf"
+        assert response.content == pdf_content
+
+    def test_get_document_content_not_found(self, client: TestClient):
+        """Document content endpoint returns 404 when the document is missing."""
+        response = client.get("/api/pdf-training/documents/missing-id/content")
+        assert response.status_code == 404
+        assert "Document not found" in response.json()["detail"]
 
 
 class TestAnalysisEndpoints:

@@ -4,17 +4,11 @@ CLI for the feedback loop (HITL): prepare review CSVs, ingest annotations,
 evaluate metrics, optional fine-tune of Sentence Transformers, and export
 simple tasks for Label Studio.
 
-Usage examples:
-  poetry run python tools/feedback_cli.py prepare --pred-csv reports/advanced_*.csv --out review.csv \
-      --fields contract_name,contract_type,sow_value_eur,pwo_number,managed_by --sample 30
+Legacy CLI entrypoints for the feedback workflow.
 
-  poetry run python tools/feedback_cli.py ingest --review-csv review.csv --out-dir datasets/
-
-  poetry run python tools/feedback_cli.py eval --review-csv review.csv --report-dir reports/feedback/
-
-  poetry run python tools/feedback_cli.py train-st --dataset datasets/st_pairs.jsonl --output embeddinggemma_feasibility/models/st_custom_v1
-
-  poetry run python tools/feedback_cli.py export-labelstudio --review-csv review.csv --out reports/feedback/tasks.json
+The CSV-based commands have been retired in favour of the database-backed
+pipeline. Invocations now exit with a guidance message that points to the
+`scripts/migrate_review_csv.py` utility and the new UI.
 """
 from __future__ import annotations
 
@@ -53,7 +47,15 @@ from tools.pdf_annotation import (
     ingest_pdf_annotation_export,
     prepare_pdf_annotation_project,
 )
-from tools.training_wizard import run_wizard
+CSV_REMOVAL_MESSAGE = (
+    "The CSV-based feedback workflow has been removed. "
+    "Run `poetry run python scripts/migrate_review_csv.py` to migrate legacy datasets "
+    "and use the database-first pipeline exposed by the server and SPA."
+)
+
+
+def _csv_workflow_removed(command: str) -> None:
+    raise SystemExit(f"{command}: {CSV_REMOVAL_MESSAGE}")
 
 
 # ---------------------------------------------------------------------------
@@ -284,6 +286,7 @@ def _run_gamified_session(
 
 
 def cmd_prepare(args: argparse.Namespace) -> None:
+    _csv_workflow_removed("prepare")
     # Expand globs for input CSV
     matches: List[str] = []
     for pat in args.pred_csv:
@@ -298,12 +301,14 @@ def cmd_prepare(args: argparse.Namespace) -> None:
 
 
 def cmd_ingest(args: argparse.Namespace) -> None:
+    _csv_workflow_removed("ingest")
     outputs = ingest_review_csv(args.review_csv, args.out_dir)
     for k, v in outputs.items():
         print(f"✅ {k}: {v}")
 
 
 def cmd_eval(args: argparse.Namespace) -> None:
+    _csv_workflow_removed("eval")
     outputs = evaluate_review_csv(args.review_csv, args.report_dir)
     for k, v in outputs.items():
         print(f"✅ {k}: {v}")
@@ -321,6 +326,7 @@ def _load_st_pairs(pairs_jsonl: str):
 
 
 def cmd_train_st(args: argparse.Namespace) -> None:
+    _csv_workflow_removed("train-st")
     try:
         from sentence_transformers import SentenceTransformer, InputExample, losses
         from torch.utils.data import DataLoader
@@ -388,11 +394,13 @@ def cmd_train_st(args: argparse.Namespace) -> None:
 
 
 def cmd_export_labelstudio(args: argparse.Namespace) -> None:
+    _csv_workflow_removed("export-labelstudio")
     out = export_labelstudio_tasks(args.review_csv, args.out)
     print(f"✅ Label Studio tasks: {out}")
 
 
 def cmd_annotate_pdf_prepare(args: argparse.Namespace) -> None:
+    _csv_workflow_removed("annotate-pdf prepare")
     result = prepare_pdf_annotation_project(
         review_csv=args.review_csv,
         out_dir=args.out_dir,
@@ -413,6 +421,7 @@ def cmd_annotate_pdf_prepare(args: argparse.Namespace) -> None:
 
 
 def cmd_annotate_pdf_ingest(args: argparse.Namespace) -> None:
+    _csv_workflow_removed("annotate-pdf ingest")
     result = ingest_pdf_annotation_export(
         export_json=args.export_json,
         review_csv=args.review_csv,
@@ -436,7 +445,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Feedback loop CLI (HITL)")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
-    p_prep = sub.add_parser("prepare", help="Create review CSV with *_pred/_gold/_status columns")
+    p_prep = sub.add_parser("prepare", help="[deprecated] Legacy CSV workflow (see scripts/migrate_review_csv.py)")
     p_prep.add_argument("--pred-csv", nargs="+", required=True, help="CSV path(s) or glob patterns from the pipeline")
     p_prep.add_argument("--out", required=True, help="Output review CSV path")
     p_prep.add_argument(
@@ -449,17 +458,17 @@ def main() -> None:
     p_prep.add_argument("--sample", type=int, help="Optional number of rows to sample for review")
     p_prep.set_defaults(func=cmd_prepare)
 
-    p_ing = sub.add_parser("ingest", help="Ingest reviewed CSV and create datasets/analysis")
+    p_ing = sub.add_parser("ingest", help="[deprecated] Legacy CSV workflow (see scripts/migrate_review_csv.py)")
     p_ing.add_argument("--review-csv", required=True, help="Reviewed CSV path")
     p_ing.add_argument("--out-dir", required=True, help="Output directory for datasets")
     p_ing.set_defaults(func=cmd_ingest)
 
-    p_eval = sub.add_parser("eval", help="Evaluate predictions vs gold and emit metrics")
+    p_eval = sub.add_parser("eval", help="[deprecated] Legacy CSV workflow (see scripts/migrate_review_csv.py)")
     p_eval.add_argument("--review-csv", required=True, help="Reviewed CSV path")
     p_eval.add_argument("--report-dir", required=True, help="Output directory for metrics")
     p_eval.set_defaults(func=cmd_eval)
 
-    p_train = sub.add_parser("train-st", help="Fine-tune Sentence Transformers on pair dataset")
+    p_train = sub.add_parser("train-st", help="[deprecated] Legacy CSV workflow (see scripts/migrate_review_csv.py)")
     p_train.add_argument("--dataset", help="st_pairs.jsonl (skip when using --enable-llm-helpers)")
     p_train.add_argument("--output", required=True, help="Output directory for the trained model")
     p_train.add_argument("--batch-size", type=int, default=16)
@@ -486,25 +495,15 @@ def main() -> None:
     p_train.add_argument("--document-ids", help="Comma-separated document IDs for DB-backed training.")
     p_train.set_defaults(func=cmd_train_st)
 
-    p_ls = sub.add_parser("export-labelstudio", help="Export minimal tasks JSON for Label Studio")
+    p_ls = sub.add_parser("export-labelstudio", help="[deprecated] Legacy CSV workflow (see scripts/migrate_review_csv.py)")
     p_ls.add_argument("--review-csv", required=True)
     p_ls.add_argument("--out", required=True)
     p_ls.set_defaults(func=cmd_export_labelstudio)
 
-    p_wizard = sub.add_parser("wizard", help="Interactive menu that guides common workflows")
-    p_wizard.set_defaults(
-        func=lambda _args: run_wizard(
-            {
-                "prepare": cmd_prepare,
-                "ingest": cmd_ingest,
-                "eval": cmd_eval,
-                "train-st": cmd_train_st,
-                "export-labelstudio": cmd_export_labelstudio,
-            }
-        )
-    )
+    p_wizard = sub.add_parser("wizard", help="[deprecated] Legacy CSV workflow (see scripts/migrate_review_csv.py)")
+    p_wizard.set_defaults(func=lambda _args: _csv_workflow_removed("wizard"))
 
-    p_ann = sub.add_parser("annotate-pdf", help="PDF-centric review workflow")
+    p_ann = sub.add_parser("annotate-pdf", help="[deprecated] Legacy CSV workflow (see scripts/migrate_review_csv.py)")
     ann_sub = p_ann.add_subparsers(dest="annotate_cmd", required=True)
 
     p_ann_prep = ann_sub.add_parser("prepare", help="Create Label Studio project assets")

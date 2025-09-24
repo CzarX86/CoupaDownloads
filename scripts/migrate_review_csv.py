@@ -1,255 +1,396 @@
-import typer
-import pandas as pd
-from pathlib import Path
-from typing import Optional, Dict, Any, List
-import logging
-import glob
+"""Migrate legacy review.csv files into the database-backed workflow."""
+from __future__ import annotations
+
+import asyncio
+import hashlib
+import json
 import uuid
-from datetime import datetime
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from glob import glob
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Sequence
 
-from sqlalchemy import create_engine, func
-from sqlalchemy.orm import sessionmaker, Session
-from sqlalchemy.exc import IntegrityError
+import pandas as pd
+import typer
 
-from src.server.db.config import resolve_sync_database_url
-from src.server.db.models import Base, Document, Annotation, TrainingRun, AnnotationStatus # Added AnnotationStatus
-from tools.feedback_utils import read_review_csv # Assuming this returns a pandas DataFrame
+from server.db import repository, models
+from server.db.models import AnnotationStatus, TrainingRunStatus
+from server.db.session import async_session, close_engine
+from server.db.storage import document_blob_path
+from tools.feedback_utils import read_review_csv
 
-# --- Database Setup (Synchronous) ---
-SYNC_DATABASE_URL = resolve_sync_database_url()
-engine = create_engine(SYNC_DATABASE_URL)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+app = typer.Typer(help="Import historical review.csv annotations into the database.")
 
-# Ensure tables are created (for standalone script, useful for initial setup)
-# In a migration context, tables should already exist.
-# Base.metadata.create_all(engine)
 
-# --- Logging Setup ---
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
+CSV_SUFFIXES = ("_pred", "_gold", "_status")
 
-app = typer.Typer(help="Migrate legacy review CSV data to the database.")
 
-def get_db():
-    """Dependency for getting a database session."""
-    db = SessionLocal()
+@dataclass
+class FieldSnapshot:
+    name: str
+    predicted: Optional[str]
+    gold: Optional[str]
+    status: Optional[str]
+
+
+@dataclass
+class RowSummary:
+    row_index: int
+    document_id: Optional[str]
+    outcome: str
+    message: Optional[str] = None
+
+
+@dataclass
+class FileSummary:
+    path: Path
+    status: str
+    migrated: int = 0
+    skipped: int = 0
+    rows: List[RowSummary] = field(default_factory=list)
+
+
+@dataclass
+class MigrationSummary:
+    training_run_id: Optional[str]
+    files: List[FileSummary]
+    total_documents: int
+    total_skipped: int
+
+
+def _is_nan(value: Any) -> bool:
+    if value is None:
+        return True
     try:
-        yield db
-    finally:
-        db.close()
-
-def map_csv_row_to_db_objects(
-    row: pd.Series,
-    training_run: TrainingRun,
-    csv_filename: str
-) -> Optional[Dict[str, Any]]:
-    """
-    Maps a single CSV row to Document and Annotation objects.
-    This is a placeholder and needs to be adapted to the actual CSV structure
-    and database model requirements.
-    """
-    try:
-        # Example mapping - adjust based on your actual CSV columns and DB schema
-        # You'll need to infer or generate document_id if not present in CSV
-        document_id = row.get('document_id', str(uuid.uuid4()))
-        filename = row.get('document_name', f"Migrated from {csv_filename}")
-        storage_path = f"migrated_documents/{document_id}.pdf" # Placeholder for storage_path
-
-        document = Document(
-            id=document_id,
-            filename=filename,
-            storage_path=storage_path,
-            # Add other document fields as necessary
-        )
-
-        annotations = []
-        # Iterate through columns to find field_name, pred_value, gold_value, status
-        # This part is highly dependent on how your CSV stores annotations
-        # Example: 'contract_name_pred', 'contract_name_gold', 'contract_name_status'
-        for col in row.index:
-            if col.endswith('_pred'):
-                field_name = col.replace('_pred', '')
-                pred_value = row[col]
-                gold_value = row.get(f'{field_name}_gold', None)
-                status = row.get(f'{field_name}_status', 'PENDING') # Default status
-
-                if pd.isna(pred_value) and pd.isna(gold_value):
-                    continue # Skip if no prediction or gold value
-
-                # Construct the payload for the annotation
-                payload = {
-                    "field_name": field_name,
-                    "predicted_value": str(pred_value) if pd.notna(pred_value) else None,
-                    "gold_value": str(gold_value) if pd.notna(gold_value) else None,
-                }
-
-                # Map status string to AnnotationStatus enum
-                annotation_status = AnnotationStatus.pending # Default
-                if status.upper() in [s.value for s in AnnotationStatus]:
-                    annotation_status = AnnotationStatus(status.upper())
-                else:
-                    logger.warning(f"Unknown annotation status '{status}'. Defaulting to PENDING.")
+        return bool(pd.isna(value))
+    except Exception:
+        return False
 
 
-                annotation = Annotation(
-                    id=str(uuid.uuid4()),
-                    document_id=document.id,
-                    status=annotation_status,
-                    latest_payload=payload,
-                    # Add other annotation fields as necessary
-                )
-                annotations.append(annotation)
-
-        return {"document": document, "annotations": annotations}
-    except Exception as e:
-        logger.error(f"Error mapping CSV row to DB objects for row: {row.to_dict()}. Error: {e}")
+def _coerce_value(value: Any) -> Optional[str]:
+    if _is_nan(value):
         return None
+    if isinstance(value, datetime):
+        return value.isoformat()
+    return str(value)
+
+
+def _extract_fields(row: pd.Series) -> List[FieldSnapshot]:
+    snapshots: Dict[str, FieldSnapshot] = {}
+    for column in row.index:
+        for suffix in CSV_SUFFIXES:
+            if column.endswith(suffix):
+                base = column[: -len(suffix)]
+                if base not in snapshots:
+                    snapshots[base] = FieldSnapshot(name=base, predicted=None, gold=None, status=None)
+    for base, snapshot in snapshots.items():
+        snapshot.predicted = _coerce_value(row.get(f"{base}_pred"))
+        snapshot.gold = _coerce_value(row.get(f"{base}_gold"))
+        snapshot.status = _coerce_value(row.get(f"{base}_status"))
+    return list(snapshots.values())
+
+
+def _resolve_annotation_status(fields: Sequence[FieldSnapshot]) -> AnnotationStatus:
+    statuses = { (field.status or "").upper() for field in fields if field.status }
+    if any(status in {"ACCEPTED", "CORRECTED", "APPROVED", "COMPLETED"} for status in statuses):
+        return AnnotationStatus.completed
+    if any("REVIEW" in status for status in statuses):
+        return AnnotationStatus.in_review
+    if any(field.gold for field in fields):
+        return AnnotationStatus.completed
+    return AnnotationStatus.pending
+
+
+def _row_metadata(row: pd.Series, csv_path: Path, pdf_source: Optional[Path]) -> Dict[str, Any]:
+    metadata: Dict[str, Any] = {
+        "source_csv": str(csv_path),
+        "row_index": int(row.name),
+    }
+    if pdf_source:
+        metadata["source_pdf"] = str(pdf_source)
+    for key, value in row.items():
+        coerced = _coerce_value(value)
+        if coerced is not None:
+            metadata[str(key)] = coerced
+    return metadata
+
+
+def _candidate_pdf_paths(row: pd.Series) -> Sequence[str]:
+    keys = [
+        "Source File",
+        "source_file",
+        "pdf_path",
+        "document_path",
+        "document_name",
+    ]
+    values: List[str] = []
+    for key in keys:
+        value = row.get(key)
+        coerced = _coerce_value(value)
+        if coerced:
+            values.append(coerced)
+    return values
+
+
+def _resolve_pdf_path(row: pd.Series, csv_path: Path, pdf_root: Optional[Path]) -> Optional[Path]:
+    candidates = _candidate_pdf_paths(row)
+    if not candidates:
+        return None
+    parent = csv_path.parent
+    for candidate in candidates:
+        candidate_path = Path(candidate)
+        if not candidate_path.is_absolute():
+            if pdf_root:
+                candidate_path = pdf_root / candidate_path
+            else:
+                candidate_path = parent / candidate_path
+        if candidate_path.exists():
+            return candidate_path.resolve()
+    return None
+
+
+async def _copy_pdf(document_id: str, source: Path, dry_run: bool) -> tuple[Path, Optional[str], Optional[int]]:
+    target = document_blob_path(document_id, source.name)
+    if dry_run:
+        stat = source.stat()
+        return target, None, stat.st_size
+    data = await asyncio.to_thread(source.read_bytes)
+    await asyncio.to_thread(target.write_bytes, data)
+    checksum = hashlib.sha256(data).hexdigest()
+    return target, checksum, len(data)
+
+
+async def _migrate_row(
+    session,
+    *,
+    row: pd.Series,
+    csv_path: Path,
+    dry_run: bool,
+    pdf_root: Optional[Path],
+    allow_missing_pdf: bool,
+) -> RowSummary:
+    fields = _extract_fields(row)
+    pdf_path = _resolve_pdf_path(row, csv_path, pdf_root)
+    if pdf_path is None and not allow_missing_pdf:
+        return RowSummary(row_index=int(row.name), document_id=None, outcome="skipped", message="PDF file not found")
+
+    raw_id = row.get("document_id") or row.get("row_id")
+    document_id = str(raw_id) if raw_id else str(uuid.uuid4())
+
+    filename_hint = _coerce_value(row.get("document_name")) or _coerce_value(row.get("Source File"))
+    if filename_hint and not filename_hint.lower().endswith(".pdf"):
+        filename_hint = f"{filename_hint}.pdf"
+    if not filename_hint:
+        filename_hint = f"migrated-{csv_path.stem}-{row.name}.pdf"
+
+    storage_path: Path
+    checksum: Optional[str]
+    size_bytes: Optional[int]
+    outcome_message: Optional[str] = None
+    if pdf_path is not None:
+        storage_path, checksum, size_bytes = await _copy_pdf(document_id, pdf_path, dry_run)
+    else:
+        storage_path = document_blob_path(document_id, filename_hint)
+        checksum = None
+        size_bytes = None
+        outcome_message = "PDF source missing"
+
+    metadata = _row_metadata(row, csv_path, pdf_path)
+    annotation_payload = {
+        "fields": [field.__dict__ for field in fields if field.predicted or field.gold],
+        "migrated_from": csv_path.name,
+    }
+    status = _resolve_annotation_status(fields)
+
+    if dry_run:
+        return RowSummary(row_index=int(row.name), document_id=document_id, outcome="dry-run", message=outcome_message)
+
+    await repository.create_document(
+        session,
+        document_id=document_id,
+        filename=Path(storage_path).name,
+        content_type="application/pdf",
+        storage_path=str(storage_path),
+        checksum=checksum,
+        size_bytes=size_bytes,
+        extra_metadata=metadata,
+    )
+    annotation = await repository.get_annotation_by_document(session, document_id)
+    if annotation:
+        await repository.update_annotation_status(
+            session,
+            annotation_id=annotation.id,
+            status=status,
+            latest_payload=annotation_payload,
+        )
+    await session.commit()
+    return RowSummary(row_index=int(row.name), document_id=document_id, outcome="migrated", message=outcome_message)
+
+
+async def _migrate_file(
+    session,
+    *,
+    csv_path: Path,
+    dry_run: bool,
+    pdf_root: Optional[Path],
+    allow_missing_pdf: bool,
+) -> FileSummary:
+    df = read_review_csv(csv_path)
+    summary = FileSummary(path=csv_path, status="processed")
+    if df.empty:
+        summary.status = "skipped_empty"
+        return summary
+
+    for index, row in df.iterrows():
+        row.name = index  # ensure row index is available for metadata
+        result = await _migrate_row(
+            session,
+            row=row,
+            csv_path=csv_path,
+            dry_run=dry_run,
+            pdf_root=pdf_root,
+            allow_missing_pdf=allow_missing_pdf,
+        )
+        summary.rows.append(result)
+        if result.outcome == "migrated":
+            summary.migrated += 1
+        else:
+            summary.skipped += 1
+    if any(row.outcome == "skipped" for row in summary.rows):
+        summary.status = "partial"
+    return summary
+
+
+async def _run_migration(
+    csv_pattern: str,
+    training_run_name: str,
+    *,
+    dry_run: bool,
+    report_dir: Optional[Path],
+    pdf_root: Optional[Path],
+    allow_missing_pdf: bool,
+) -> MigrationSummary:
+    csv_files = sorted(Path(p) for p in glob(csv_pattern, recursive=True))
+    if not csv_files:
+        raise typer.Exit(f"No CSV files found for pattern: {csv_pattern}")
+
+    summaries: List[FileSummary] = []
+    training_run_id: Optional[str] = None
+
+    async with async_session() as session:
+        async with session.bind.begin() as conn:  # type: ignore[union-attr]
+            await conn.run_sync(models.Base.metadata.create_all)
+
+    async with async_session() as session:
+        if not dry_run:
+            training_run_id = uuid.uuid4().hex
+            await repository.create_training_run(
+                session,
+                training_run_id=training_run_id,
+                triggered_by="csv-migration",
+                parameters={"name": training_run_name, "source_pattern": csv_pattern},
+            )
+            await session.commit()
+
+        for csv_path in csv_files:
+            summary = await _migrate_file(
+                session,
+                csv_path=csv_path,
+                dry_run=dry_run,
+                pdf_root=pdf_root,
+                allow_missing_pdf=allow_missing_pdf,
+            )
+            summaries.append(summary)
+
+        if not dry_run and training_run_id:
+            seen: Dict[str, None] = {}
+            document_ids = []
+            for file in summaries:
+                for row in file.rows:
+                    if row.document_id and row.outcome == "migrated" and row.document_id not in seen:
+                        seen[row.document_id] = None
+                        document_ids.append(row.document_id)
+            await repository.attach_training_documents(
+                session,
+                training_run_id=training_run_id,
+                document_ids=document_ids,
+            )
+            status = TrainingRunStatus.succeeded if document_ids else TrainingRunStatus.failed
+            await repository.set_training_run_status(
+                session,
+                training_run_id=training_run_id,
+                status=status,
+                notes=f"Migrated {len(document_ids)} documents from legacy CSV workflow",
+                completed_at=datetime.now(timezone.utc),
+            )
+            await session.commit()
+
+    total_documents = sum(file.migrated for file in summaries)
+    total_skipped = sum(file.skipped for file in summaries)
+
+    if report_dir:
+        report_dir.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        report_path = report_dir / f"migration-report-{timestamp}.json"
+        payload = {
+            "training_run_id": training_run_id,
+            "files": [
+                {
+                    "path": str(file.path),
+                    "status": file.status,
+                    "migrated": file.migrated,
+                    "skipped": file.skipped,
+                    "rows": [row.__dict__ for row in file.rows],
+                }
+                for file in summaries
+            ],
+            "total_documents": total_documents,
+            "total_skipped": total_skipped,
+        }
+        report_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        typer.echo(f"Detailed report written to {report_path}")
+
+    return MigrationSummary(
+        training_run_id=training_run_id,
+        files=summaries,
+        total_documents=total_documents,
+        total_skipped=total_skipped,
+    )
+
 
 @app.command()
 def migrate(
-    csv_glob_pattern: str = typer.Argument(..., help="Glob pattern to find review CSV files (e.g., 'reports/feedback/*.csv')."),
-    training_run_name: str = typer.Option(..., "--training-run-name", "-t", help="Name for the new training run to associate migrated documents."),
-    dry_run: bool = typer.Option(False, "--dry-run", "-d", help="Run without committing changes to the database."),
-    report_dir: Optional[Path] = typer.Option(None, "--report-dir", "-r", help="Directory to save the migration report."),
-):
-    """
-    Migrates legacy review CSV data to the database.
-    """
-    logger.info(f"Starting migration with CSV glob: '{csv_glob_pattern}', training run name: '{training_run_name}', dry run: {dry_run}")
+    csv_pattern: str = typer.Argument(..., help="Glob pattern pointing to review.csv files"),
+    training_run_name: str = typer.Option(..., "--training-run", help="Name recorded on the training run created during migration"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Analyse the migration without writing to the database"),
+    report_dir: Optional[Path] = typer.Option(None, "--report-dir", help="Optional directory for a JSON summary"),
+    pdf_root: Optional[Path] = typer.Option(None, "--pdf-root", help="Base directory containing the original PDFs"),
+    allow_missing_pdf: bool = typer.Option(False, "--allow-missing-pdf", help="Import rows even when the source PDF cannot be located"),
+) -> None:
+    """Execute the migration process."""
 
-    if report_dir and not report_dir.exists():
-        report_dir.mkdir(parents=True, exist_ok=True)
-        logger.info(f"Created report directory: {report_dir}")
-
-    csv_files = glob.glob(csv_glob_pattern)
-    if not csv_files:
-        logger.warning(f"No CSV files found matching pattern: {csv_glob_pattern}")
-        typer.echo(f"No CSV files found matching pattern: {csv_glob_pattern}")
-        raise typer.Exit(code=1)
-
-    total_documents_migrated = 0
-    total_annotations_migrated = 0
-    total_errors = 0
-    migration_reports: List[Dict[str, Any]] = []
-
-    with next(get_db()) as db:
-        # Create a new TrainingRun for this migration
-        training_run = TrainingRun(
-            id=str(uuid.uuid4()),
-            notes=training_run_name,
-            created_at=datetime.utcnow(),
-            # Add other training run fields as necessary
+    summary = asyncio.run(
+        _run_migration(
+            csv_pattern,
+            training_run_name,
+            dry_run=dry_run,
+            report_dir=report_dir,
+            pdf_root=pdf_root,
+            allow_missing_pdf=allow_missing_pdf,
         )
-        if not dry_run:
-            db.add(training_run)
-            try:
-                db.commit()
-                db.refresh(training_run)
-                logger.info(f"Created new TrainingRun: {training_run.notes} (ID: {training_run.id})")
-            except IntegrityError:
-                db.rollback()
-                logger.error(f"TrainingRun with notes '{training_run_name}' already exists. Please choose a unique name.")
-                raise typer.Exit(code=1)
-        else:
-            logger.info(f"Dry run: Would create TrainingRun: {training_run_name} (ID: {training_run.id})")
+    )
 
-        for csv_file_path_str in csv_files:
-            csv_file_path = Path(csv_file_path_str)
-            logger.info(f"Processing CSV file: {csv_file_path}")
-            file_documents_migrated = 0
-            file_annotations_migrated = 0
-            file_errors = 0
-            file_report: Dict[str, Any] = {
-                "csv_file": str(csv_file_path),
-                "status": "SUCCESS",
-                "documents_migrated": 0,
-                "annotations_migrated": 0,
-                "errors": [],
-            }
+    typer.echo("=== Migration summary ===")
+    typer.echo(f"Training run id: {summary.training_run_id or 'n/a (dry-run)'}")
+    typer.echo(f"Files processed: {len(summary.files)}")
+    typer.echo(f"Documents migrated: {summary.total_documents}")
+    typer.echo(f"Rows skipped: {summary.total_skipped}")
+    for file_summary in summary.files:
+        typer.echo(f"- {file_summary.path}: {file_summary.status} (migrated={file_summary.migrated}, skipped={file_summary.skipped})")
 
-            try:
-                df = read_review_csv(csv_file_path)
-                if df.empty:
-                    logger.warning(f"CSV file {csv_file_path} is empty. Skipping.")
-                    file_report["status"] = "SKIPPED_EMPTY"
-                    migration_reports.append(file_report)
-                    continue
+    asyncio.run(close_engine())
 
-                for index, row in df.iterrows():
-                    mapped_objects = map_csv_row_to_db_objects(row, training_run, csv_file_path.name)
-                    if mapped_objects:
-                        document = mapped_objects["document"]
-                        annotations = mapped_objects["annotations"]
-
-                        if not dry_run:
-                            db.add(document)
-                            db.add_all(annotations)
-                            training_run.documents.append(document) # Establish relationship
-                            try:
-                                db.commit()
-                                db.refresh(document)
-                                file_documents_migrated += 1
-                                file_annotations_migrated += len(annotations)
-                            except IntegrityError as e:
-                                db.rollback()
-                                file_errors += 1
-                                error_msg = f"Integrity error for document {document.id} from row {index}: {e}"
-                                logger.error(error_msg)
-                                file_report["errors"].append(error_msg)
-                            except Exception as e:
-                                db.rollback()
-                                file_errors += 1
-                                error_msg = f"Unexpected error for document {document.id} from row {index}: {e}"
-                                logger.error(error_msg)
-                                file_report["errors"].append(error_msg)
-                        else:
-                            logger.info(f"Dry run: Would migrate document {document.id} with {len(annotations)} annotations from row {index}")
-                            file_documents_migrated += 1
-                            file_annotations_migrated += len(annotations)
-                    else:
-                        file_errors += 1
-                        error_msg = f"Failed to map row {index} from {csv_file_path} to DB objects."
-                        logger.error(error_msg)
-                        file_report["errors"].append(error_msg)
-
-            except Exception as e:
-                file_errors += 1
-                error_msg = f"Error processing CSV file {csv_file_path}: {e}"
-                logger.error(error_msg)
-                file_report["status"] = "FAILED"
-                file_report["errors"].append(error_msg)
-
-            file_report["documents_migrated"] = file_documents_migrated
-            file_report["annotations_migrated"] = file_annotations_migrated
-            if file_errors > 0:
-                file_report["status"] = "FAILED_PARTIAL" if file_documents_migrated > 0 else "FAILED"
-            migration_reports.append(file_report)
-
-            total_documents_migrated += file_documents_migrated
-            total_annotations_migrated += file_annotations_migrated
-            total_errors += file_errors
-
-    # --- Final Report ---
-    typer.echo("""
---- Migration Summary ---""")
-    typer.echo(f"Total CSV files processed: {len(csv_files)}")
-    typer.echo(f"Total documents migrated: {total_documents_migrated}")
-    typer.echo(f"Total annotations migrated: {total_annotations_migrated}")
-    typer.echo(f"Total errors encountered: {total_errors}")
-
-    if report_dir:
-        report_filename = f"migration_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-        full_report_path = report_dir / report_filename
-        import json
-        with open(full_report_path, 'w') as f:
-            json.dump(migration_reports, f, indent=2)
-        typer.echo(f"Detailed report saved to: {full_report_path}")
-
-    if total_errors > 0:
-        typer.echo("Migration completed with errors. Please check the logs and detailed report.")
-        raise typer.Exit(code=1)
-    else:
-        typer.echo("Migration completed successfully.")
 
 if __name__ == "__main__":
     app()

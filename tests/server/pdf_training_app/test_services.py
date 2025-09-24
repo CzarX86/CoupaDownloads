@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import asyncio
 import json
 import os
 import sys
@@ -12,6 +13,8 @@ from types import SimpleNamespace
 from typing import Dict, List
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 SRC_PATH = PROJECT_ROOT / "src"
 if str(SRC_PATH) not in sys.path:
     sys.path.insert(0, str(SRC_PATH))
@@ -132,6 +135,47 @@ async def test_dataset_builder(service_context: SimpleNamespace) -> None:
     assert len(records) == 1
     assert records[0]["document_id"] == "doc1"
     assert records[0]["payload"] == {"field": "value"}
+
+
+@pytest.mark.asyncio
+async def test_get_document_content_path_success(service_context: SimpleNamespace) -> None:
+    services = service_context.services
+
+    upload = _make_upload_file(b"%PDF-1.4\n1 0 obj\n<<>>\nendobj\n", "sample.pdf", "application/pdf")
+    document_detail = await services.create_document(upload, {"ingested_by": "tests"})
+
+    content_path = await services.get_document_content_path(document_detail.document.id)
+    assert content_path.exists()
+    assert content_path.suffix == ".pdf"
+
+
+@pytest.mark.asyncio
+async def test_get_document_content_path_missing_document(service_context: SimpleNamespace) -> None:
+    services = service_context.services
+
+    with pytest.raises(ValueError, match="Document not found"):
+        await services.get_document_content_path("non-existent")
+
+
+@pytest.mark.asyncio
+async def test_get_document_content_path_missing_file(service_context: SimpleNamespace) -> None:
+    repository = service_context.repository
+
+    async with service_context.db_session.async_session() as session:
+        await repository.create_document(
+            session,
+            document_id="doc-missing",
+            filename="missing.pdf",
+            content_type="application/pdf",
+            storage_path=str(service_context.storage_root / "ghost.pdf"),
+            checksum="abc",
+            size_bytes=0,
+            extra_metadata={},
+        )
+        await session.commit()
+
+    with pytest.raises(ValueError, match="PDF file not found"):
+        await service_context.services.get_document_content_path("doc-missing")
 
 
 @pytest.mark.asyncio

@@ -5,7 +5,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, validator
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class JobStatus(str, Enum):
@@ -96,16 +96,6 @@ class JobListResponse(BaseModel):
 class TrainingRunCreateRequest(BaseModel):
     document_ids: Optional[List[str]] = Field(default=None, description="Subset of document IDs to include in the run")
     triggered_by: Optional[str] = Field(default=None, description="Identifier for the user/process triggering the run")
-
-    @validator('document_ids')
-    def validate_document_ids(cls, v):
-        if v is not None:
-            if len(v) == 0:
-                raise ValueError('document_ids cannot be empty list')
-            for doc_id in v:
-                if not isinstance(doc_id, str) or len(doc_id) != 32:
-                    raise ValueError(f'Invalid document ID format: {doc_id}')
-        return v
 
 
 class HealthResponse(BaseModel):
