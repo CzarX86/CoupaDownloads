@@ -12,6 +12,8 @@ from types import SimpleNamespace
 from typing import Dict, List, Generator
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 SRC_PATH = PROJECT_ROOT / "src"
 if str(SRC_PATH) not in sys.path:
     sys.path.insert(0, str(SRC_PATH))
@@ -30,6 +32,7 @@ def _reload_modules() -> SimpleNamespace:
     from server.db import models
     from server.db import session as db_session
     from server.pdf_training_app import api, services
+    from server.pdf_training_app import jobs as jobs_module
 
     async def _create_schema() -> None:
         async with db_session._engine.begin() as conn:  # type: ignore[attr-defined]
@@ -42,10 +45,26 @@ def _reload_modules() -> SimpleNamespace:
         db_session=db_session,
         api=api,
         services=services,
+        job_manager=jobs_module.job_manager,
     )
 
 
-@pytest.fixture(scope="module")
+def _wait_for_document_jobs(
+    client: TestClient,
+    api_context: SimpleNamespace,
+    document_id: str,
+    *,
+    timeout: float = 15.0,
+) -> None:
+    async def _wait() -> None:
+        jobs = await api_context.job_manager.list(resource_type="document", resource_id=document_id)
+        for job in jobs:
+            await api_context.job_manager.wait_until_complete(job.id, timeout=timeout)
+
+    asyncio.run(_wait())
+
+
+@pytest.fixture(scope="function")
 def api_context() -> Generator[SimpleNamespace, None, None]:
     with tempfile.TemporaryDirectory() as tmpdir:
         base_path = Path(tmpdir)
@@ -53,6 +72,7 @@ def api_context() -> Generator[SimpleNamespace, None, None]:
         db_path = base_path / "app.db"
         os.environ["PDF_TRAINING_STORAGE_ROOT"] = str(storage_root)
         os.environ["PDF_TRAINING_DB_URL"] = f"sqlite+aiosqlite:///{db_path}"
+        os.environ["PDF_TRAINING_FORCE_SYNC_JOBS"] = "1"
 
         ctx = _reload_modules()
         try:
@@ -62,14 +82,21 @@ def api_context() -> Generator[SimpleNamespace, None, None]:
                 storage_root=storage_root,
             )
         finally:
+            os.environ.pop("PDF_TRAINING_FORCE_SYNC_JOBS", None)
             asyncio.run(ctx.db_session.close_engine())
 
 
 @pytest.fixture
-def client(api_context: SimpleNamespace) -> TestClient:
+def client(api_context: SimpleNamespace) -> Generator[TestClient, None, None]:
     """Create a test client for the API."""
     from server.pdf_training_app import app
-    return TestClient(app.app)
+
+    test_client = TestClient(app)
+    try:
+        yield test_client
+    finally:
+        asyncio.run(api_context.job_manager.drain(timeout=15.0))
+        test_client.close()
 
 
 def _make_upload_file(content: bytes, filename: str, content_type: str) -> UploadFile:
@@ -171,7 +198,7 @@ class TestDocumentEndpoints:
         response = client.get("/api/pdf-training/documents")
         assert response.status_code == 200
         data = response.json()
-        assert data["items"] == []
+        assert data == []
 
     def test_list_documents_with_data(self, client: TestClient):
         """Test listing documents after uploading one."""
@@ -185,8 +212,8 @@ class TestDocumentEndpoints:
         response = client.get("/api/pdf-training/documents")
         assert response.status_code == 200
         data = response.json()
-        assert len(data["items"]) == 1
-        assert data["items"][0]["filename"] == "test.pdf"
+        assert len(data) == 1
+        assert data[0]["filename"] == "test.pdf"
 
     def test_get_document_not_found(self, client: TestClient):
         """Test getting a non-existent document."""
@@ -204,12 +231,32 @@ class TestDocumentEndpoints:
             files={"file": ("test.pdf", pdf_content, "application/pdf")}
         )
         document_id = upload_response.json()["document"]["id"]
-        
+
         response = client.get(f"/api/pdf-training/documents/{document_id}")
         assert response.status_code == 200
         data = response.json()
         assert data["document"]["id"] == document_id
         assert data["document"]["filename"] == "test.pdf"
+
+    def test_get_document_content_success(self, client: TestClient):
+        """Document content endpoint returns the stored PDF bytes."""
+        pdf_content = _create_test_pdf()
+        upload_response = client.post(
+            "/api/pdf-training/documents",
+            files={"file": ("test.pdf", pdf_content, "application/pdf")}
+        )
+        document_id = upload_response.json()["document"]["id"]
+
+        response = client.get(f"/api/pdf-training/documents/{document_id}/content")
+        assert response.status_code == 200
+        assert response.headers["content-type"] == "application/pdf"
+        assert response.content == pdf_content
+
+    def test_get_document_content_not_found(self, client: TestClient):
+        """Document content endpoint returns 404 when the document is missing."""
+        response = client.get("/api/pdf-training/documents/missing-id/content")
+        assert response.status_code == 404
+        assert "Document not found" in response.json()["detail"]
 
 
 class TestAnalysisEndpoints:
@@ -222,7 +269,7 @@ class TestAnalysisEndpoints:
         data = response.json()
         assert "Document not found" in data["detail"]
 
-    def test_analyze_document_success(self, client: TestClient):
+    def test_analyze_document_success(self, client: TestClient, api_context: SimpleNamespace):
         """Test successful document analysis."""
         # First upload a document
         pdf_content = _create_test_pdf()
@@ -231,13 +278,44 @@ class TestAnalysisEndpoints:
             files={"file": ("test.pdf", pdf_content, "application/pdf")}
         )
         document_id = upload_response.json()["document"]["id"]
-        
+
+        _wait_for_document_jobs(client, api_context, document_id)
+
         response = client.post(f"/api/pdf-training/documents/{document_id}/analyze")
         assert response.status_code == 200
         data = response.json()
-        assert "job_id" in data
-        assert data["job_type"] == "ANALYSIS"
-        assert data["status"] == "PENDING"
+        assert set(data.keys()) == {"job_id", "job_type", "status"}
+
+        asyncio.run(
+            api_context.job_manager.wait_until_complete(data["job_id"], timeout=10)
+        )
+
+
+class TestLLMSupportEndpoints:
+    """Ensure the LLM helper support endpoints behave as expected."""
+
+    def test_llm_support_flow(self, client: TestClient, api_context: SimpleNamespace):
+        pdf_content = _create_test_pdf()
+        upload_response = client.post(
+            "/api/pdf-training/documents",
+            files={"file": ("support.pdf", pdf_content, "application/pdf")},
+        )
+        assert upload_response.status_code == 200
+        document_id = upload_response.json()["document"]["id"]
+
+        async def _prepare_payload() -> None:
+            analysis_job = await api_context.services.start_analysis(document_id)
+            await api_context.job_manager.wait_until_complete(analysis_job.job_id, timeout=30)
+            support_job = await api_context.services.start_llm_support(document_id, dry_run=True)
+            await api_context.job_manager.wait_until_complete(support_job.job_id, timeout=30)
+
+        asyncio.run(_prepare_payload())
+
+        payload_response = client.get(f"/api/pdf-training/documents/{document_id}/support/llm")
+        assert payload_response.status_code == 200
+        payload = payload_response.json()
+        assert payload["document_id"] == document_id
+        assert isinstance(payload["rows"], list)
 
 
 class TestAnnotationEndpoints:
@@ -279,7 +357,7 @@ class TestAnnotationEndpoints:
 class TestTrainingEndpoints:
     """Test training-related endpoints."""
     
-    def test_create_training_run_empty_documents(self, client: TestClient):
+    def test_create_training_run_empty_documents(self, client: TestClient, api_context: SimpleNamespace):
         """Test creating a training run with no documents."""
         payload = {
             "document_ids": [],
@@ -293,7 +371,11 @@ class TestTrainingEndpoints:
         assert data["job_type"] == "TRAINING"
         assert data["status"] == "PENDING"
 
-    def test_create_training_run_with_documents(self, client: TestClient):
+        asyncio.run(
+            api_context.job_manager.wait_until_complete(data["job_id"], timeout=10)
+        )
+
+    def test_create_training_run_with_documents(self, client: TestClient, api_context: SimpleNamespace):
         """Test creating a training run with specific documents."""
         # First upload a document
         pdf_content = _create_test_pdf()
@@ -302,10 +384,12 @@ class TestTrainingEndpoints:
             files={"file": ("test.pdf", pdf_content, "application/pdf")}
         )
         document_id = upload_response.json()["document"]["id"]
-        
+
+        _wait_for_document_jobs(client, api_context, document_id)
+
         payload = {
             "document_ids": [document_id],
-            "triggered_by": "test"
+            "triggered_by": "test",
         }
         
         response = client.post("/api/pdf-training/training-runs", json=payload)
@@ -314,6 +398,10 @@ class TestTrainingEndpoints:
         assert "job_id" in data
         assert data["job_type"] == "TRAINING"
         assert data["status"] == "PENDING"
+
+        asyncio.run(
+            api_context.job_manager.wait_until_complete(data["job_id"], timeout=10)
+        )
 
 
 class TestJobEndpoints:

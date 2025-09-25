@@ -104,36 +104,9 @@ After completing the assessment:
 3. Decide on integration approach or alternative solutions
 4. Clean up assessment files if not proceeding with integration
 
-## HITL Feedback (Review → Ingest → Evaluate → Train)
+## HITL Feedback (legado CSV)
 
-This repository includes a lightweight Human-in-the-Loop feedback loop to improve extraction quality without changing defaults:
+> ⚠️ **Importante:** o pipeline acima dependia de `tools/feedback_cli.py`, agora reduzido a um stub que apenas informa a descontinuação do fluxo CSV. Mantenha as instruções abaixo somente como registro histórico.
 
-- Prepare a review CSV with triplets per field:
-
-  ```bash
-  poetry run python tools/feedback_cli.py prepare \
-    --pred-csv reports/advanced_coupa_fields_extraction_*.csv \
-    --out reports/feedback/review.csv \
-    --fields contract_name,contract_type,sow_value_eur,pwo_number,managed_by \
-    --sample 30
-  ```
-
-- Ingest, build datasets and analysis:
-
-  ```bash
-  poetry run python tools/feedback_cli.py ingest --review-csv reports/feedback/review.csv --out-dir datasets/
-  ```
-
-- Evaluate metrics:
-
-  ```bash
-  poetry run python tools/feedback_cli.py eval --review-csv reports/feedback/review.csv --report-dir reports/feedback/
-  ```
-
-- Optional: fine-tune Sentence Transformers from pairs:
-
-  ```bash
-  poetry run python tools/feedback_cli.py train-st --dataset datasets/st_pairs.jsonl --output embeddinggemma_feasibility/models/st_custom_v1
-  ```
-
-See also: `docs/HITL_FEEDBACK_WORKFLOW.md`.
+- Consulte `docs/HITL_FEEDBACK_WORKFLOW.md` para o processo suportado (upload de PDFs no wizard, revisão no viewer e treinamento via backend).
+- Scripts como `tools/feedback_cli.py prepare/ingest/eval/train-st` devem ser evitados em ambientes novos; use-os apenas para reproduzir experimentos antigos em ambientes isolados.

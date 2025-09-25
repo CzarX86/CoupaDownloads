@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Document, Page, pdfjs } from 'react-pdf';
 import 'react-pdf/dist/Page/AnnotationLayer.css';
 import 'react-pdf/dist/Page/TextLayer.css';
-import { fetchPdfContent } from '../api/pdfTraining';
+import { fetchPdfContent, getJobs, JobDetail } from '../api/pdfTraining';
 
 // Set up PDF.js worker source
 pdfjs.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.js`;
@@ -27,6 +27,14 @@ const PdfViewer: React.FC<PdfViewerProps> = ({ documentId }) => {
     enabled: !!documentId, // Only run the query if documentId is available
   });
 
+  const { data: jobs = [] } = useQuery<JobDetail[]>({
+    queryKey: ['document-jobs', documentId],
+    queryFn: () => getJobs({ resourceType: 'document', resourceId: documentId as string }),
+    enabled: !!documentId,
+  });
+
+  const activeJob = jobs.find((job) => job.status === 'PENDING' || job.status === 'RUNNING');
+
   const onDocumentLoadSuccess = ({ numPages }: { numPages: number }) => {
     setNumPages(numPages);
     setPageNumber(1); // Reset to first page on new document load
@@ -37,8 +45,19 @@ const PdfViewer: React.FC<PdfViewerProps> = ({ documentId }) => {
   }
 
   if (isLoading) {
+    if (activeJob) {
+      return (
+        <div className="pdf-viewer-loading" aria-live="polite">
+          <span className="processing-status__spinner" aria-hidden="true" />
+          <div>
+            <strong>Analyzing document…</strong>
+            <div>{activeJob.detail || 'Preparing annotation assets before rendering the PDF.'}</div>
+          </div>
+        </div>
+      );
+    }
     return <div className="pdf-viewer-loading">Loading PDF...</div>;
-  };
+  }
 
   if (isError) {
     return <div className="pdf-viewer-error">Error loading PDF: {(error as Error).message}</div>;

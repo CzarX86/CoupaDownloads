@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Set
 from uuid import uuid4
 
@@ -38,6 +39,23 @@ class JobManager:
             )
             await session.commit()
 
+        if os.getenv("PDF_TRAINING_FORCE_SYNC_JOBS"):
+            async with async_session() as session:
+                await repository.mark_job_running(session, job_id)
+                await session.commit()
+            try:
+                payload = await coro_factory(job_id)
+            except Exception as exc:
+                async with async_session() as session:
+                    await repository.mark_job_failed(session, job_id, str(exc))
+                    await session.commit()
+                raise
+            else:
+                async with async_session() as session:
+                    await repository.mark_job_succeeded(session, job_id, payload)
+                    await session.commit()
+                return job_id
+
         async def runner() -> None:
             async with async_session() as session:
                 await repository.mark_job_running(session, job_id)
@@ -63,6 +81,23 @@ class JobManager:
         task.add_done_callback(_cleanup)
         return job_id
 
+    async def drain(self, *, timeout: float = 5.0) -> None:
+        """Wait for all pending tasks to complete.
+
+        The job manager launches background tasks for submitted jobs. Test
+        suites that operate inside short-lived event loops should await those
+        tasks before tearing the loop down to avoid ``RuntimeError: Event loop
+        is closed`` errors raised by driver threads (e.g. ``aiosqlite``).
+        """
+
+        async with self._lock:
+            pending = [task for task in self._tasks if not task.done()]
+
+        if not pending:
+            return
+
+        await asyncio.wait_for(asyncio.gather(*pending, return_exceptions=True), timeout)
+
     async def get(self, job_id: str) -> Optional[JobDetail]:
         async with async_session() as session:
             job = await repository.get_job(session, job_id)
@@ -82,9 +117,17 @@ class JobManager:
             updated_at=job.updated_at,
         )
 
-    async def list(self) -> List[JobDetail]:
+    async def list(
+        self,
+        resource_type: Optional[str] = None,
+        resource_id: Optional[str] = None,
+    ) -> List[JobDetail]:
         async with async_session() as session:
-            jobs = await repository.list_jobs(session)
+            jobs = await repository.list_jobs(
+                session,
+                resource_type=resource_type,
+                resource_id=resource_id,
+            )
         return [
             JobDetail(
                 id=job.id,

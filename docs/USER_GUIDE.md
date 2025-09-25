@@ -77,10 +77,9 @@ graph TD
     D --> E[Anexos no disco]
     B --> F[src/core/excel_processor.py]
     F --> G[data/input/...] 
-    B --> H[tools/feedback_cli.py]
-    H --> I[tools/llm_critique.py]
-    H --> J[tools/self_augment.py]
-    H --> K[Modelos ST]
+    B --> H[server/pdf_training_app]
+    H --> I[src/spa (PDF Training Wizard)]
+    H --> J[API / storage]
 ```
 
 ### Objetivos das principais camadas
@@ -176,9 +175,9 @@ CoupaDownloads/
 ├── src/
 │   └── core/
 └── tools/
-    ├── feedback_cli.py
-    ├── llm_critique.py
-    └── self_augment.py
+    ├── feedback_cli.py (legacy stub)
+    ├── llm_critique.py (legacy CSV helper)
+    └── self_augment.py (legacy CSV helper)
 ```
 
 ### Diagrama do fluxo principal
@@ -233,23 +232,20 @@ poetry run python -m src.Core_main
 | Comando | Objetivo | Quando usar |
 | --- | --- | --- |
 | `poetry run python -m src.Core_main` | Executar o fluxo completo de download de anexos, guiado por um wizard interativo. | Operação diária de coleta de anexos. |
-| `poetry run python tools/feedback_cli.py wizard` | Abre o assistente guiado que pergunta pelos parâmetros, mostra o comando equivalente e executa o fluxo escolhido. | Quando você prefere uma conversa passo a passo em vez de decorar flags. |
-| `poetry run python tools/feedback_cli.py prepare` | Criar CSV de revisão com colunas *_pred/gold/status; prepara o terreno para feedback humano. | Antes de revisar previsões geradas pelo modelo. |
-| `poetry run python tools/feedback_cli.py ingest` | Transformar o CSV revisado em datasets (`supervised.jsonl`, `st_pairs.jsonl`). | Depois que o analista preencheu o CSV. |
-| `poetry run python tools/feedback_cli.py eval` | Calcular métricas (acurácia/coverage) e gerar relatórios Markdown/JSON. | Para verificar progresso de correções. |
-| `poetry run python tools/feedback_cli.py train-st` | Treinar um Sentence Transformer usando os pares produzidos; com `--enable-llm-helpers` abre a interface gamificada. **Com `--use-db`, utiliza o pipeline de treinamento baseado em banco de dados.** | Quando se deseja atualizar o modelo ST. |
-| `poetry run python tools/feedback_cli.py export-labelstudio` | Criar JSON simples para importar no Label Studio. | Se quiser revisar no Label Studio ou compartilhar com terceiros. |
-| `tools/llm_critique.py` | Enviar a planilha para um LLM (DeepSeek/OpenAI), pedir sugestões e gerar JSONL/CSV com colunas `_llm_suggested`. | Para acelerar revisões humanas com sugestões automáticas. |
-| `tools/self_augment.py` | Pedir ao LLM variações de valores categóricos e gerar pares adicionais para treino. | Quando o dataset de treino precisa de diversidade. |
-| `tools/ab_compare_cli.py` | Comparar resultados de dois CSVs (A/B) já gerados. | Para avaliar impacto de configurações ou modelos diferentes. |
+| `PYTHONPATH=src poetry run python -m server.pdf_training_app.main` | Subir o backend FastAPI responsável pelo armazenamento no banco e pelos jobs de pré-processamento. | Necessário antes de usar o SPA ou automatizações via API. |
+| `cd src/spa && npm run dev` | Iniciar o SPA (PDF Training Wizard) com hot reload. | Revisar/anotar PDFs direto no navegador. |
+| `curl "http://localhost:8008/api/pdf-training/jobs?resource_type=document&resource_id=<document_id>"` | Acompanhar o status do pré-processamento para um documento específico. | Integrar dashboards ou validar se o job já concluiu. |
+| `tools/llm_critique.py` | **Legacy CSV** – Enviar planilhas para um LLM, gerar colunas auxiliares e revisar manualmente. | Mantido apenas como referência histórica; o pipeline oficial usa o PDF viewer. |
+| `tools/self_augment.py` | **Legacy CSV** – Gerar pares sintéticos com LLM para datasets categóricos. | Utilize somente em experimentos controlados. |
+| `tools/ab_compare_cli.py` | **Legacy CSV** – Comparar resultados de dois CSVs (A/B). | Útil apenas para auditorias de datasets antigos. |
 
 > **Explicando LLMs para pessoas novas**: imagine que o LLM é um consultor que
 > leu muitos contratos. Você pede para ele revisar a planilha e sugerir termos
 > melhores. As ferramentas apenas organizam essa conversa de forma segura.
 
-> **Quer visualizar o wizard?** Consulte `docs/cli/training_wizard.md` para um
-> tutorial completo, com diagrama Mermaid, perguntas frequentes e um resumo
-> “explica como se eu fosse iniciante”.
+> **Observação:** o antigo `feedback_cli` foi descontinuado. Todo o ciclo de
+> feedback deve ocorrer via interface PDF ou pelos endpoints REST descritos
+> neste guia.
 
 ---
 
@@ -295,70 +291,33 @@ flowchart TD
 
 ```mermaid
 flowchart LR
-    Prep[1. feedback_cli prepare] --> ReviewCSV[Planilha de revisão]
-    ReviewCSV --> Manual[2. Analista revisa manualmente]
-    Manual --> Critique[3. LLM Critique (opcional)]
-    Critique --> Gamified[4. Gamificado aceita/rejeita]
-    Gamified --> Ingest[5. feedback_cli ingest]
-    Ingest --> Metrics[6. feedback_cli eval]
-    Metrics --> Train[7. feedback_cli train-st]
-    Train --> Deploy[Modelos/ST atualizados]
+    Upload[1. Upload pela UI] --> Preprocess[2. Pré-processamento automático]
+    Preprocess --> Review[3. Revisão no viewer PDF]
+    Review --> Submit[4. Submeter anotações]
+    Submit --> Train[5. Treinamento disparado via jobs]
+    Train --> Deploy[Modelos atualizados]
 ```
 
 ### Passo a passo em linguagem simples
-1. **Prepare**: gere uma planilha com colunas “predito, ouro, status”.
-2. **Revise**: abra no Excel/Sheets e ajuste os valores errados.
-3. **LLM (opcional)**: peça ao LLM para sugerir correções. Ele anota colunas
-   `_llm_suggested` para facilitar.
-4. **Interface gamificada**: aceite ou rejeite sugestões pressionando `Y/N`.
-5. **Ingest**: converte suas decisões em arquivos `jsonl`.
-6. **Avalie**: veja acurácia, cobertura e campos problemáticos.
-7. **Treine**: atualize o modelo ST com o dataset final.
-
-### Guided wizard (English UI)
-- Execute `poetry run python tools/feedback_cli.py wizard` para abrir um menu em inglês
-  que cobre as etapas acima (prepare, ingest, eval, train-st e export-labelstudio).
-- Cada menu mostra um resumo da tarefa, pede apenas os campos obrigatórios e
-  sugere valores padrão para o restante.
-- Antes de rodar, o wizard imprime o comando equivalente para você copiar em
-  automações ou revisar com o time.
-- Documentação detalhada, incluindo diagrama Mermaid e tutorial “explain like
-  I'm new”: `docs/cli/training_wizard.md`.
+1. **Envie o PDF**: arraste o arquivo para a área “Documents” do wizard.
+2. **Aguarde o pré-processamento**: um job é disparado automaticamente para extrair texto, gerar tarefas e preencher sugestões.
+3. **Acompanhe o status**: o painel “Preprocessing” mostra spinner, etapa atual e eventuais falhas — nada de CLI ou variáveis manuais.
+4. **Anote direto na UI**: use o `PdfViewer` para revisar campos, marcar entidades e ajustar valores.
+5. **Finalize**: envie as correções pelo botão de submissão; o backend registra o payload no banco e enfileira o treinamento.
 
 ### Revisão visual com PDFs
-- `poetry run python tools/feedback_cli.py annotate-pdf prepare --review-csv reports/feedback/review.csv --out-dir reports/feedback/pdf_annotation --pdf-root <pasta_dos_pdfs>`
-- Abra o Label Studio, importe `config.xml` e `tasks.json` e conecte o storage local à pasta `pdfs/` gerada.
-- Ajuste os campos diretamente na interface visual (predições aparecem como ponto de partida).
-- Exporte em JSON e rode `poetry run python tools/feedback_cli.py annotate-pdf ingest --export-json <export.json> --review-csv reports/feedback/review.csv --out reports/feedback/review_annotated.csv`.
-- Detalhes completos em `docs/feedback/pdf_annotation.md`.
+- Utilize a página **PDF Training Wizard** em `src/spa`. Ela lista os documentos cadastrados, inicia o pré-processamento automaticamente e exibe o viewer com indicadores de progresso.
+- As correções aprovadas ficam registradas em `annotations.latest_payload`, eliminando a etapa de exportar/importar JSON no Label Studio.
+- Caso o painel exiba um erro (`FAILED`), verifique os logs do backend (`server.pdf_training_app`) e reenvie o documento após corrigir o PDF.
 
 ### Assistente visual estilo AI Builder (SPA local)
-- Frontend em `src/spa` (React + Vite) com quatro etapas: **Upload**, **Auto-tag**, **Review**, **Retrain** (acesse `npm run dev`).
-- Backend FastAPI (execute `PYTHONPATH=src poetry run python -m server.pdf_training_app.main`) expõe `/api/pdf-training/*` e orquestra os comandos existentes do `feedback_cli`.
-- Cada sessão salva artefatos em `storage/pdf_training/<session>` (CSV, PDFs, tarefas, export, métricas, modelo).
-- A etapa *Review* aponta diretamente para os arquivos `config.xml`/`tasks.json` prontos para o Label Studio e captura o JSON exportado.
-- Ao concluir, a etapa *Retrain* reingesta o CSV revisado, gera datasets, roda `eval` e treina um modelo ST mínimo (1 época) — o painel mostra onde encontrar métricas e pesos.
-- A experiência completa (UX, endpoints, diagramas) está descrita em `docs/refactor/pr32-refactor-spa-blueprint.md` e `docs/diagrams/ai_builder_style_flow.mmd`.
-- **Como executar:**
-  A forma mais fácil é usar os scripts de inicialização na raiz do projeto. Eles cuidam de iniciar os servidores e abrir o navegador para você, aguardando um tempo para que tudo esteja pronto.
-
-  - **No Windows:**
-    ```bash
-    start_spa.bat
-    ```
-  - **No macOS ou Linux (aguarda 15 segundos para inicialização):**
-    ```bash
-    ./start_spa.sh
-    ```
-    (Pode ser necessário dar permissão de execução primeiro com `chmod +x ./start_spa.sh`)
-
-  **Execução Manual (para depuração):**
-  Se preferir iniciar os serviços separadamente:
-  1.  **Terminal 1 (Backend)**: `PYTHONPATH=src poetry run python -m server.pdf_training_app.main`
-  2.  **Terminal 2 (Frontend)**: `cd src/spa && npm run dev`
-  3.  **Navegador**: Abra a URL `http://localhost:5173`.
-
-  5. Quando o wizard solicitar revisão, importe `analysis/config.xml` e `analysis/tasks.json` no Label Studio (instruções no próprio painel).
+- Frontend em `src/spa` (React + Vite) com etapas **Documents**, **Annotations**, **Training history** e **Warnings**.
+- Backend FastAPI (`PYTHONPATH=src poetry run python -m server.pdf_training_app.main`) expõe `/api/pdf-training/*` e salva blobs em `storage/pdf_training/blobs`.
+- Para iniciar rapidamente use `./start_spa.sh` (Linux/macOS) ou `start_spa.bat` (Windows). Para depuração:
+  1. **Terminal 1 (Backend)**: `PYTHONPATH=src poetry run python -m server.pdf_training_app.main`
+  2. **Terminal 2 (Frontend)**: `cd src/spa && npm run dev`
+  3. Abra `http://localhost:5173` no navegador.
+- O painel **Training history** permite disparar novas execuções, acompanhar status e baixar datasets/modelos sem recorrer ao CLI legado.
 
 ---
 
@@ -406,43 +365,25 @@ flowchart LR
 # Fluxo principal
 poetry run python -m src.Core_main
 
-# Preparar revisão
-poetry run python tools/feedback_cli.py prepare --pred-csv reports/advanced_*.csv --out reports/feedback/review.csv
+# Servidor FastAPI
+PYTHONPATH=src poetry run python -m server.pdf_training_app.main
 
-# Ingestar revisão
-poetry run python tools/feedback_cli.py ingest --review-csv reports/feedback/review.csv --out-dir datasets/
+# SPA (frontend)
+cd src/spa && npm run dev
 
-# Avaliar resultados
-poetry run python tools/feedback_cli.py eval --review-csv reports/feedback/review.csv --report-dir reports/feedback/
+# Consultar documentos disponíveis
+curl http://localhost:8008/api/pdf-training/documents
 
-# Treinar ST (com interface gamificada se houver LLM)
-poetry run python tools/feedback_cli.py train-st --dataset datasets/st_pairs.jsonl --output models/st_custom
-poetry run python tools/feedback_cli.py train-st --enable-llm-helpers --llm-jsonl reports/llm_critique/llm_critique_*.jsonl --review-csv reports/feedback/review.csv --output models/st_llm
+# Baixar conteúdo em PDF
+curl -o sample.pdf http://localhost:8008/api/pdf-training/documents/<document_id>/content
 
-# Criticar com LLM
-poetry run python tools/llm_critique.py --pred-csv reports/advanced_*.csv --review-csv reports/feedback/review.csv --out-dir reports/llm_critique/
+# Monitorar jobs do documento selecionado
+curl "http://localhost:8008/api/pdf-training/jobs?resource_type=document&resource_id=<document_id>"
 
-# Auto-augmentação
-poetry run python tools/self_augment.py --input datasets/supervised.jsonl --out datasets/st_pairs_aug.jsonl
-
-# Anotação visual em PDF
-poetry run python tools/feedback_cli.py annotate-pdf prepare --review-csv reports/feedback/review.csv --out-dir reports/feedback/pdf_annotation --pdf-root <pasta_dos_pdfs>
-poetry run python tools/feedback_cli.py annotate-pdf ingest --export-json export.json --review-csv reports/feedback/review.csv --out reports/feedback/review_annotated.csv
-
-# Comparar execuções (A/B)
-poetry run python tools/ab_compare_cli.py --pred-a reports/runA.csv --pred-b reports/runB.csv --out-dir reports/ab_compare/
-```
-
-### Review CSV vs. Excel
-- `prepare` agora escreve uma primeira linha `sep=,` (mantendo o BOM) para avisar o Excel que o separador é vírgula.
-- Ingestão, avaliação e exportadores ignoram automaticamente essa dica; nenhum fluxo precisa mudar.
-- Abra o arquivo com duplo clique e o Excel alinhará as colunas sem prompts extras.
-
-```mermaid
-flowchart LR
-    A[prepare] --> B[linha sep=,]
-    B --> C[Excel abre colunas certas]
-    B --> D[ingest/eval pulam dica]
+# Criar um treinamento usando IDs selecionados
+curl -X POST http://localhost:8008/api/pdf-training/training-runs \
+  -H 'Content-Type: application/json' \
+  -d '{"document_ids": ["<doc_id>"], "triggered_by": "cli"}'
 ```
 
 > Explicando como se fosse sua primeira revisão: colocamos um bilhete no topo do CSV dizendo “use vírgula como separador”. O Excel lê esse bilhete e já separa tudo em colunas. As outras partes do sistema simplesmente ignoram o bilhete e continuam lendo o arquivo normalmente.

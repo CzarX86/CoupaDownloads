@@ -45,6 +45,8 @@ from .models import (
     JobType as ApiJobType,
     Entity,
 )
+from .support import load_llm_support as _load_llm_support_payload
+from .support import run_llm_support as _run_llm_support
 
 
 def _utcnow() -> datetime:
@@ -113,6 +115,15 @@ async def create_document(file: UploadFile, metadata: Optional[Dict[str, Any]]) 
             extra_metadata=metadata,
         )
         await session.commit()
+
+    # Kick off background analysis so the UI can display progress immediately.
+    try:
+        await start_analysis(document_id)
+    except ValueError:
+        # If the analysis cannot be started (e.g. annotation missing), fall back to
+        # returning the document detail without blocking the upload flow.
+        pass
+
     return await get_document_detail(document_id)
 
 
@@ -190,28 +201,18 @@ async def get_document_entities(document_id: str) -> List[Entity]:
         return entities
 
 
-# This maps the internal database status enums to the string values the SPA frontend expects.
-# This is necessary to fix a data contract mismatch identified during integration.
-STATUS_MAP = {
-    AnnotationStatus.pending.value: "new",
-    AnnotationStatus.in_review.value: "reviewing",
-    AnnotationStatus.completed.value: "completed",
-}
-
-
 def build_document_summary(document: Document) -> DocumentSummary:
     latest_annotation: Optional[Annotation] = None
     if document.annotations:
         latest_annotation = max(document.annotations, key=lambda ann: ann.updated_at)
 
-    db_status = latest_annotation.status.value if latest_annotation else AnnotationStatus.pending.value
-    api_status = STATUS_MAP.get(db_status, db_status)  # Fallback to original value if not in map
+    status_value = latest_annotation.status.value if latest_annotation else AnnotationStatus.pending.value
     return DocumentSummary(
         id=document.id,
         filename=document.filename,
         content_type=document.content_type,
         size_bytes=document.size_bytes,
-        status=api_status,
+        status=status_value,
         created_at=document.created_at,
         updated_at=document.updated_at,
     )
@@ -245,7 +246,23 @@ def build_document_detail(document: Document) -> DocumentDetail:
 
 
 async def start_analysis(document_id: str) -> JobResponse:
+    async with async_session() as session:
+        document = await repository.get_document(session, document_id)
+    if not document:
+        raise ValueError("Document not found")
+
     async def task(job_id: str) -> Dict[str, Any]:
+        async def _record_progress(message: str, *, payload: Optional[Dict[str, Any]] = None) -> None:
+            async with async_session() as session:
+                await repository.update_job_detail(
+                    session,
+                    job_id,
+                    detail=message,
+                    payload=payload,
+                )
+                await session.commit()
+
+        await _record_progress("Loading document metadata")
         async with async_session() as session:
             document = await repository.get_document(session, document_id)
             if not document:
@@ -260,6 +277,7 @@ async def start_analysis(document_id: str) -> JobResponse:
             annotation_id = annotation.id
             latest_version_id = latest_version.id
 
+        await _record_progress("Preparing annotation assets")
         project_info = await asyncio.to_thread(
             _prepare_analysis_assets,
             document_path,
@@ -297,6 +315,7 @@ async def start_analysis(document_id: str) -> JobResponse:
             )
             await session.commit()
 
+        await _record_progress("Analysis assets ready", payload={"document_id": document_id})
         return {"document_id": document_id, "analysis": project_info}
 
     job_id = await job_manager.submit(
@@ -346,8 +365,14 @@ async def ingest_annotation_export(document_id: str, export_file: UploadFile) ->
     )
 
 
-async def list_jobs() -> List[JobDetail]:
-    return await job_manager.list()
+async def list_jobs(
+    resource_type: Optional[str] = None,
+    resource_id: Optional[str] = None,
+) -> List[JobDetail]:
+    return await job_manager.list(
+        resource_type=resource_type,
+        resource_id=resource_id,
+    )
 
 
 async def list_training_runs() -> List[JobDetail]:
@@ -460,3 +485,28 @@ async def get_training_run_model_path(training_run_id: str) -> Optional[Path]:
         if not run or not run.model_version:
             return None
         return Path(run.model_version.artifact_path)
+
+
+async def start_llm_support(
+    document_id: str,
+    *,
+    fields: Optional[Iterable[str]] = None,
+    provider: Optional[str] = None,
+    model: Optional[str] = None,
+    dry_run: Optional[bool] = None,
+) -> JobResponse:
+    """Trigger the LLM helper to generate suggestions for a document."""
+
+    return await _run_llm_support(
+        document_id,
+        fields=fields,
+        provider=provider,
+        model=model,
+        dry_run=dry_run,
+    )
+
+
+async def get_llm_support_payload(document_id: str) -> Dict[str, Any]:
+    """Return the cached LLM support payload for a document."""
+
+    return await _load_llm_support_payload(document_id)
