@@ -1,7 +1,10 @@
-
-import React, { useState } from 'react';
+import React from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { submitAnnotation, Document } from '../api/pdfTraining';
+import { Annotation } from '../models';
+import {
+  deleteAnnotation,
+  sendModelFeedback,
+} from '../api/pdfTraining';
 import {
   Card,
   CardContent,
@@ -11,78 +14,67 @@ import {
   CardTitle,
 } from './ui/card';
 import { Button } from './ui/button';
-import { Input } from './ui/input';
 import { useToast } from './ui/use-toast';
+import { cn } from '../lib/utils';
 
 interface AnnotationCardProps {
-  doc: Document | null;
+  doc: { id: string; filename: string } | null;
+  annotations: Annotation[];
+  onCreateAnnotation: () => void;
+  onEditAnnotation: (annotation: Annotation) => void;
 }
 
-const AnnotationCard: React.FC<AnnotationCardProps> = ({ doc }) => {
+const statusStyles: Record<Annotation['status'], string> = {
+  PENDING: 'bg-amber-100 text-amber-900 dark:bg-amber-400/20 dark:text-amber-100',
+  IN_REVIEW: 'bg-blue-100 text-blue-900 dark:bg-blue-400/20 dark:text-blue-100',
+  COMPLETED: 'bg-emerald-100 text-emerald-900 dark:bg-emerald-400/20 dark:text-emerald-100',
+};
+
+const AnnotationCard: React.FC<AnnotationCardProps> = ({
+  doc,
+  annotations,
+  onCreateAnnotation,
+  onEditAnnotation,
+}) => {
   const queryClient = useQueryClient();
   const { toast } = useToast();
-  const [annotationFile, setAnnotationFile] = useState<File | null>(null);
 
-  const mutation = useMutation({
-    mutationFn: async (annotationData: unknown) => {
-      if (!doc) {
-        throw new Error('No document selected');
-      }
-      await submitAnnotation(doc.id, annotationData);
+  const deleteMutation = useMutation({
+    mutationFn: async (annotationId: string) => {
+      await deleteAnnotation(annotationId);
     },
     onSuccess: () => {
+      if (doc) {
+        queryClient.invalidateQueries({ queryKey: ['documentDetail', doc.id] });
+      }
       queryClient.invalidateQueries({ queryKey: ['documents'] });
       toast({
-        title: 'Annotation submitted',
-        description: 'Training data has been queued for review.',
+        title: 'Annotation removed',
+        description: 'The annotation has been deleted.',
       });
-      setAnnotationFile(null);
     },
-    onError: (error: unknown) => {
-      const message =
-        error instanceof Error ? error.message : 'Unexpected error submitting annotation.';
-      toast({
-        variant: 'destructive',
-        title: 'Submission failed',
-        description: message,
-      });
+    onError: (err: unknown) => {
+      const message = err instanceof Error ? err.message : 'Failed to delete annotation.';
+      toast({ variant: 'destructive', title: 'Deletion failed', description: message });
     },
   });
 
-  const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-    setAnnotationFile(event.target.files?.[0] || null);
-  };
-
-  const handleSubmit = () => {
-    if (!annotationFile) {
-      return;
-    }
-
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      const content = e.target?.result;
-      if (typeof content !== 'string') {
-        toast({
-          variant: 'destructive',
-          title: 'Invalid file',
-          description: 'The selected file could not be read as text.',
-        });
-        return;
-      }
-
-      try {
-        const jsonData = JSON.parse(content);
-        mutation.mutate(jsonData);
-      } catch (error) {
-        toast({
-          variant: 'destructive',
-          title: 'Invalid JSON',
-          description: 'Ensure the file is a valid annotation export.',
-        });
-      }
-    };
-    reader.readAsText(annotationFile);
-  };
+  const feedbackMutation = useMutation({
+    mutationFn: async (documentId: string) => {
+      const response = await sendModelFeedback(documentId);
+      return response;
+    },
+    onSuccess: (response) => {
+      toast({
+        title: 'Feedback queued',
+        description: `Job ${response.job_id} started to train the model.`,
+      });
+    },
+    onError: (err: unknown) => {
+      const message = err instanceof Error ? err.message : 'Failed to trigger model feedback.';
+      toast({ variant: 'destructive', title: 'Feedback failed', description: message });
+    },
+  });
 
   if (!doc) {
     return (
@@ -95,25 +87,90 @@ const AnnotationCard: React.FC<AnnotationCardProps> = ({ doc }) => {
     );
   }
 
+  const handleDelete = (annotation: Annotation) => {
+    deleteMutation.mutate(annotation.id);
+  };
+
+  const handleFeedback = () => {
+    if (!doc) {
+      return;
+    }
+    feedbackMutation.mutate(doc.id);
+  };
+
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-lg">Reviewing: {doc.filename}</CardTitle>
-        <CardDescription>Upload a JSON export to update annotations.</CardDescription>
+        <CardTitle className="text-lg">Annotations</CardTitle>
+        <CardDescription>
+          Manage annotations for <strong>{doc.filename}</strong> and send them for model feedback.
+        </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
-        <Input type="file" accept="application/json" onChange={handleFileChange} />
-        <p className="text-sm text-muted-foreground">
-          The assistant will merge annotations into the training dataset immediately after upload.
-        </p>
+        <div className="flex items-center gap-2">
+          <Button size="sm" onClick={onCreateAnnotation}>
+            New annotation
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={handleFeedback}
+            disabled={feedbackMutation.isPending}
+          >
+            {feedbackMutation.isPending ? 'Sending…' : 'Send feedback'}
+          </Button>
+        </div>
+
+        {annotations.length === 0 ? (
+          <p className="text-sm text-muted-foreground">
+            No annotations captured yet. Select text in the PDF preview to create one.
+          </p>
+        ) : (
+          <ul className="space-y-3">
+            {annotations.map((annotation) => (
+              <li
+                key={annotation.id}
+                className="flex flex-col gap-2 rounded-lg border border-border bg-muted/40 p-3 text-sm"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex flex-col">
+                    <span className="font-medium text-foreground">{annotation.type ?? 'Annotation'}</span>
+                    <span className="text-muted-foreground">{annotation.value ?? '—'}</span>
+                  </div>
+                  <span
+                    className={cn(
+                      'inline-flex items-center rounded-full px-2 py-1 text-xs font-semibold',
+                      statusStyles[annotation.status],
+                    )}
+                  >
+                    {annotation.status.replace('_', ' ')}
+                  </span>
+                </div>
+                {annotation.notes && (
+                  <p className="text-xs text-muted-foreground">{annotation.notes}</p>
+                )}
+                <div className="flex items-center justify-end gap-2">
+                  <Button size="xs" variant="outline" onClick={() => onEditAnnotation(annotation)}>
+                    Edit
+                  </Button>
+                  <Button
+                    size="xs"
+                    variant="ghost"
+                    onClick={() => handleDelete(annotation)}
+                    disabled={deleteMutation.isPending}
+                  >
+                    Delete
+                  </Button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
       </CardContent>
-      <CardFooter className="justify-end">
-        <Button
-          onClick={handleSubmit}
-          disabled={!annotationFile || mutation.isPending}
-        >
-          {mutation.isPending ? 'Submitting…' : 'Submit annotation'}
-        </Button>
+      <CardFooter className="justify-end text-xs text-muted-foreground">
+        {annotations.length > 0
+          ? `${annotations.length} annotation${annotations.length === 1 ? '' : 's'} tracked`
+          : 'No annotations yet'}
       </CardFooter>
     </Card>
   );

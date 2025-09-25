@@ -1,14 +1,14 @@
 # PR 51 — Frontend - Integrar Feedback do Modelo (frontend-integrate-model-feedback)
 
-- Status: draft
-- Implementação: pending
+- Status: implemented
+- Implementação: concluída
 - Data: 2025-09-23
 - Responsáveis: Gemini
 - Observações: Este PR fecha o ciclo de feedback humano-no-loop no frontend. Depende do PR 49 (Frontend - UI de Anotação Interativa) e do PR 50 (Backend - Gatilho de Feedback Imediato do Modelo).
 
 ## Estado da revisão (2025-09-25)
 
-- [ ] Implementado no código-base. O frontend não oferece botão ou chamada para disparar feedback do modelo e `pdfTraining.ts` não possui função para o endpoint de feedback, demonstrando que a integração não foi construída.
+- [x] Implementado no código-base. `src/spa/src/api/pdfTraining.ts` expõe `sendModelFeedback` e `AnnotationCard` adiciona o botão "Send feedback" que aciona o endpoint e fornece toasts de status.
 
 ## Objetivo
 

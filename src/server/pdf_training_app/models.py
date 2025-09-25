@@ -41,11 +41,41 @@ class DocumentVersionInfo(BaseModel):
     updated_at: datetime
 
 
-class AnnotationDetail(BaseModel):
-    id: str
-    status: str
+class AnnotationStatusEnum(str, Enum):
+    pending = "PENDING"
+    in_review = "IN_REVIEW"
+    completed = "COMPLETED"
+
+
+class AnnotationBase(BaseModel):
+    type: Optional[str] = None
+    value: Optional[str] = None
+    location: Optional[EntityLocation] = None
     reviewer: Optional[str] = None
     notes: Optional[str] = None
+
+
+class AnnotationCreateRequest(AnnotationBase):
+    type: str
+    value: str
+    status: Optional[AnnotationStatusEnum] = Field(
+        default=AnnotationStatusEnum.in_review,
+        description="Initial status for the annotation",
+    )
+
+
+class AnnotationUpdateRequest(AnnotationBase):
+    status: Optional[AnnotationStatusEnum] = Field(
+        default=None,
+        description="Updated status for the annotation",
+    )
+
+
+class AnnotationDetail(AnnotationBase):
+    id: str
+    document_id: str
+    status: AnnotationStatusEnum
+    created_at: datetime
     updated_at: datetime
 
 
@@ -138,3 +168,14 @@ class DocumentUploadRequest(BaseModel):
 
 class AnnotationIngestRequest(BaseModel):
     export_format: str = Field(default="label_studio", description="Format of the annotation export")
+
+
+class FeedbackRequest(BaseModel):
+    annotation_ids: Optional[List[str]] = Field(
+        default=None,
+        description="Subset of annotation IDs to include in the feedback job",
+    )
+    triggered_by: Optional[str] = Field(
+        default=None,
+        description="Identifier for the actor triggering the feedback",
+    )

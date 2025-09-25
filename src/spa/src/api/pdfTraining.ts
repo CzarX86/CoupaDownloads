@@ -1,13 +1,20 @@
 import axios from 'axios';
-import { Entity } from '../models'; // Import Entity interface
+import { Annotation, AnnotationStatus, Entity, EntityLocation } from '../models';
 
 const API_BASE_URL = '/api/pdf-training';
 
 export interface Document {
   id: string; // Changed from number to string to match backend
   filename: string;
-  status: 'new' | 'extracted' | 'reviewing' | 'completed';
+  content_type?: string | null;
+  size_bytes?: number | null;
+  status: AnnotationStatus;
   created_at: string;
+  updated_at: string;
+}
+
+interface DocumentListResponse {
+  items: Document[];
 }
 
 export interface TrainingRun {
@@ -24,9 +31,46 @@ export interface Job {
     type: 'extraction' | 'training';
 }
 
+export interface DocumentVersion {
+  id: string;
+  ordinal: number;
+  source_storage_path: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DocumentDetail {
+  document: Document;
+  versions: DocumentVersion[];
+  annotations: Annotation[];
+}
+
+export interface AnnotationCreatePayload {
+  type: string;
+  value: string;
+  notes?: string;
+  reviewer?: string;
+  location?: EntityLocation;
+}
+
+export interface AnnotationUpdatePayload {
+  type?: string;
+  value?: string;
+  notes?: string;
+  reviewer?: string;
+  status?: AnnotationStatus;
+  location?: EntityLocation;
+}
+
+export interface JobResponse {
+  job_id: string;
+  job_type: 'ANALYSIS' | 'TRAINING';
+  status: 'PENDING' | 'RUNNING' | 'SUCCEEDED' | 'FAILED';
+}
+
 export const getDocuments = async (): Promise<Document[]> => {
-  const response = await axios.get(`${API_BASE_URL}/documents`);
-  return response.data;
+  const response = await axios.get<DocumentListResponse>(`${API_BASE_URL}/documents`);
+  return response.data.items;
 };
 
 export const uploadDocument = async (file: File): Promise<Document> => {
@@ -50,10 +94,6 @@ export const getJobs = async (): Promise<Job[]> => {
     return response.data;
 };
 
-export const submitAnnotation = async (documentId: string, annotationData: unknown): Promise<void> => { // Changed documentId to string
-    await axios.post(`${API_BASE_URL}/documents/${documentId}/annotations`, annotationData);
-};
-
 export const fetchPdfContent = async (documentId: string): Promise<string> => {
   const response = await axios.get(`${API_BASE_URL}/documents/${documentId}/content`, {
     responseType: 'blob', // Important: responseType must be 'blob' for file downloads
@@ -63,5 +103,41 @@ export const fetchPdfContent = async (documentId: string): Promise<string> => {
 
 export const fetchEntities = async (documentId: string): Promise<Entity[]> => {
   const response = await axios.get(`${API_BASE_URL}/documents/${documentId}/entities`);
+  return response.data;
+};
+
+export const getDocumentDetail = async (documentId: string): Promise<DocumentDetail> => {
+  const response = await axios.get(`${API_BASE_URL}/documents/${documentId}`);
+  return response.data;
+};
+
+export const createAnnotation = async (
+  documentId: string,
+  payload: AnnotationCreatePayload,
+): Promise<Annotation> => {
+  const response = await axios.post(
+    `${API_BASE_URL}/documents/${documentId}/annotations`,
+    payload,
+  );
+  return response.data;
+};
+
+export const updateAnnotation = async (
+  annotationId: string,
+  payload: AnnotationUpdatePayload,
+): Promise<Annotation> => {
+  const response = await axios.put(
+    `${API_BASE_URL}/annotations/${annotationId}`,
+    payload,
+  );
+  return response.data;
+};
+
+export const deleteAnnotation = async (annotationId: string): Promise<void> => {
+  await axios.delete(`${API_BASE_URL}/annotations/${annotationId}`);
+};
+
+export const sendModelFeedback = async (documentId: string): Promise<JobResponse> => {
+  const response = await axios.post(`${API_BASE_URL}/documents/${documentId}/feedback`, {});
   return response.data;
 };

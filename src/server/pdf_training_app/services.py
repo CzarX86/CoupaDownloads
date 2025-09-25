@@ -10,6 +10,8 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 from uuid import uuid4
 
+from collections import Counter
+from dataclasses import asdict, dataclass
 from fastapi import UploadFile
 import pandas as pd
 
@@ -27,18 +29,24 @@ from server.db.storage import (
     annotation_analysis_dir,
     annotation_blob_path,
     document_blob_path,
-    model_blob_path,
+    training_run_blob_path,
 )
 from tools.feedback_utils import write_review_csv
 from tools.pdf_annotation import prepare_pdf_annotation_project
+
+from embeddinggemma_feasibility.contract_data_trainer import fine_tune_model
 
 from . import datasets
 from .jobs import job_manager
 from .fields import METADATA_COLUMNS, NORMALIZED_TO_PRETTY, normalized_to_pretty
 from .models import (
+    AnnotationCreateRequest,
     AnnotationDetail,
+    AnnotationStatusEnum,
+    AnnotationUpdateRequest,
     DocumentDetail,
     DocumentSummary,
+    FeedbackRequest,
     JobDetail,
     JobResponse,
     JobStatus as ApiJobStatus,
@@ -223,6 +231,169 @@ def _parse_entity_location(payload: Any) -> EntityLocation | None:
     return EntityLocation(page_num=page, bbox=bbox)
 
 
+def _serialize_location(location: EntityLocation | None) -> dict | None:
+    if location is None:
+        return None
+    return {
+        "page_num": location.page_num,
+        "bbox": [float(coord) for coord in location.bbox],
+    }
+
+
+def _resolve_annotation_status(
+    status: AnnotationStatusEnum | str | None,
+    *,
+    default: AnnotationStatus = AnnotationStatus.in_review,
+) -> AnnotationStatus:
+    if status is None:
+        return default
+    if isinstance(status, AnnotationStatusEnum):
+        key = status.value
+    else:
+        key = str(status).upper()
+    if key == AnnotationStatusEnum.completed.value:
+        return AnnotationStatus.completed
+    if key == AnnotationStatusEnum.pending.value:
+        return AnnotationStatus.pending
+    return AnnotationStatus.in_review
+
+
+def _extract_annotation_fields(annotation: Annotation) -> tuple[str | None, str | None, EntityLocation | None]:
+    payload = annotation.latest_payload
+    if isinstance(payload, list):
+        return None, None, None
+    if not isinstance(payload, dict):
+        return None, None, None
+
+    entity_type = (
+        payload.get("type")
+        or payload.get("entity_type")
+        or payload.get("field")
+        or payload.get("label")
+    )
+
+    raw_value: Any = (
+        payload.get("value")
+        or payload.get("text")
+        or payload.get("content")
+        or payload.get("raw")
+    )
+    if raw_value is None and isinstance(payload.get("result"), list):
+        parts: list[str] = []
+        for item in payload["result"]:
+            if isinstance(item, dict):
+                value = item.get("value")
+                if isinstance(value, dict):
+                    text = value.get("text")
+                    if isinstance(text, list):
+                        parts.extend(str(chunk) for chunk in text)
+                    elif isinstance(text, str):
+                        parts.append(text)
+        raw_value = ", ".join(parts) if parts else None
+
+    if raw_value is None:
+        value = None
+    elif isinstance(raw_value, str):
+        value = raw_value
+    else:
+        value = json.dumps(raw_value, ensure_ascii=False)
+
+    location_payload = (
+        payload.get("location")
+        or payload.get("bbox")
+        or payload.get("coordinates")
+        or payload.get("region")
+    )
+    location = _parse_entity_location(location_payload)
+    return entity_type, value, location
+
+
+def build_annotation_detail_from_model(annotation: Annotation) -> AnnotationDetail:
+    entity_type, value, location = _extract_annotation_fields(annotation)
+    return AnnotationDetail(
+        id=annotation.id,
+        document_id=annotation.document_id,
+        type=entity_type,
+        value=value,
+        location=location,
+        reviewer=annotation.reviewer,
+        notes=annotation.notes,
+        status=AnnotationStatusEnum(annotation.status.value),
+        created_at=annotation.created_at,
+        updated_at=annotation.updated_at,
+    )
+
+
+def _build_annotation_payload(
+    *,
+    type_value: str | None,
+    value: str | None,
+    location: EntityLocation | None,
+) -> dict:
+    payload: dict[str, Any] = {}
+    if type_value is not None:
+        payload["type"] = type_value
+    if value is not None:
+        payload["value"] = value
+    serialized_location = _serialize_location(location)
+    if serialized_location is not None:
+        payload["location"] = serialized_location
+    return payload
+
+
+@dataclass
+class AnnotationTrainingRecord:
+    annotation_id: str
+    document_id: str
+    type: str | None
+    value: str | None
+    location: dict | None
+    status: str
+    reviewer: str | None
+    notes: str | None
+    updated_at: str
+
+
+def _annotation_to_training_record(annotation: Annotation) -> AnnotationTrainingRecord:
+    detail = build_annotation_detail_from_model(annotation)
+    return AnnotationTrainingRecord(
+        annotation_id=detail.id,
+        document_id=detail.document_id,
+        type=detail.type,
+        value=detail.value,
+        location=_serialize_location(detail.location),
+        status=detail.status.value,
+        reviewer=detail.reviewer,
+        notes=detail.notes,
+        updated_at=detail.updated_at.isoformat(),
+    )
+
+
+async def _load_annotations_for_training(
+    document_ids: list[str],
+    annotation_ids: set[str],
+) -> list[Annotation]:
+    async with async_session() as session:
+        if annotation_ids:
+            annotations: list[Annotation] = []
+            for annotation_id in annotation_ids:
+                annotation = await repository.get_annotation(session, annotation_id)
+                if not annotation:
+                    continue
+                if document_ids and annotation.document_id not in document_ids:
+                    continue
+                annotations.append(annotation)
+            return annotations
+
+        if document_ids:
+            annotations = []
+            for document_id in document_ids:
+                annotations.extend(await repository.list_annotations(session, document_id))
+            return annotations
+
+        return list(await repository.list_annotations(session))
+
+
 async def get_document_entities(document_id: str) -> List[Entity]:
     async with async_session() as session:
         document = await repository.get_document(session, document_id)
@@ -286,13 +457,99 @@ async def get_document_entities(document_id: str) -> List[Entity]:
         return entities
 
 
-# This maps the internal database status enums to the string values the SPA frontend expects.
-# This is necessary to fix a data contract mismatch identified during integration.
-STATUS_MAP = {
-    AnnotationStatus.pending.value: "new",
-    AnnotationStatus.in_review.value: "reviewing",
-    AnnotationStatus.completed.value: "completed",
-}
+async def create_annotation(
+    document_id: str,
+    payload: AnnotationCreateRequest,
+) -> AnnotationDetail:
+    async with async_session() as session:
+        document = await repository.get_document(session, document_id)
+        if not document:
+            raise ValueError("Document not found")
+
+        status = _resolve_annotation_status(payload.status)
+        annotation = await repository.create_annotation(
+            session,
+            document_id=document_id,
+            status=status,
+            reviewer=payload.reviewer,
+            notes=payload.notes,
+            latest_payload=_build_annotation_payload(
+                type_value=payload.type,
+                value=payload.value,
+                location=payload.location,
+            ),
+        )
+        await repository.append_annotation_event(
+            session,
+            annotation_id=annotation.id,
+            event_type="ANNOTATION_CREATED",
+            payload={
+                "type": payload.type,
+                "value": payload.value,
+                "location": _serialize_location(payload.location),
+            },
+        )
+        await session.commit()
+        await session.refresh(annotation)
+
+    return build_annotation_detail_from_model(annotation)
+
+
+async def update_annotation(
+    annotation_id: str,
+    payload: AnnotationUpdateRequest,
+) -> AnnotationDetail:
+    async with async_session() as session:
+        annotation = await repository.get_annotation(session, annotation_id)
+        if not annotation:
+            raise ValueError("Annotation not found")
+
+        latest_payload = annotation.latest_payload if isinstance(annotation.latest_payload, dict) else {}
+        if payload.type is not None:
+            latest_payload["type"] = payload.type
+        if payload.value is not None:
+            latest_payload["value"] = payload.value
+        if payload.location is not None:
+            latest_payload["location"] = _serialize_location(payload.location)
+
+        await repository.update_annotation(
+            session,
+            annotation_id=annotation.id,
+            status=_resolve_annotation_status(payload.status, default=annotation.status),
+            reviewer=payload.reviewer if payload.reviewer is not None else annotation.reviewer,
+            notes=payload.notes if payload.notes is not None else annotation.notes,
+            latest_payload=latest_payload,
+        )
+        await repository.append_annotation_event(
+            session,
+            annotation_id=annotation.id,
+            event_type="ANNOTATION_UPDATED",
+            payload={
+                "type": payload.type,
+                "value": payload.value,
+                "location": _serialize_location(payload.location),
+            },
+        )
+        await session.commit()
+        await session.refresh(annotation)
+
+    return build_annotation_detail_from_model(annotation)
+
+
+async def delete_annotation(annotation_id: str) -> None:
+    async with async_session() as session:
+        annotation = await repository.get_annotation(session, annotation_id)
+        if not annotation:
+            raise ValueError("Annotation not found")
+
+        await repository.append_annotation_event(
+            session,
+            annotation_id=annotation.id,
+            event_type="ANNOTATION_DELETED",
+            payload=None,
+        )
+        await repository.delete_annotation(session, annotation_id)
+        await session.commit()
 
 
 def build_document_summary(document: Document) -> DocumentSummary:
@@ -300,8 +557,11 @@ def build_document_summary(document: Document) -> DocumentSummary:
     if document.annotations:
         latest_annotation = max(document.annotations, key=lambda ann: ann.updated_at)
 
-    db_status = latest_annotation.status.value if latest_annotation else AnnotationStatus.pending.value
-    api_status = STATUS_MAP.get(db_status, db_status)  # Fallback to original value if not in map
+    api_status = (
+        latest_annotation.status.value
+        if latest_annotation
+        else AnnotationStatus.pending.value
+    )
     return DocumentSummary(
         id=document.id,
         filename=document.filename,
@@ -328,34 +588,28 @@ def build_document_detail(document: Document) -> DocumentDetail:
         for version in sorted(document.versions, key=lambda v: v.ordinal)
     ]
     annotations = [
-        AnnotationDetail(
-            id=annotation.id,
-            status=annotation.status.value,
-            reviewer=annotation.reviewer,
-            notes=annotation.notes,
-            updated_at=annotation.updated_at,
-        )
+        build_annotation_detail_from_model(annotation)
         for annotation in sorted(document.annotations, key=lambda ann: ann.updated_at, reverse=True)
     ]
     return DocumentDetail(document=summary, versions=versions, annotations=annotations)
 
 
 async def start_analysis(document_id: str) -> JobResponse:
-    async def task(job_id: str) -> Dict[str, Any]:
-        async with async_session() as session:
-            document = await repository.get_document(session, document_id)
-            if not document:
-                raise ValueError("Document not found")
-            if not document.versions:
-                raise ValueError("Document has no versions to analyse")
-            latest_version = max(document.versions, key=lambda v: v.ordinal)
-            annotation = document.annotations[0] if document.annotations else None
-            if not annotation:
-                raise ValueError("Annotation record not found for document")
-            document_path = Path(latest_version.source_storage_path)
-            annotation_id = annotation.id
-            latest_version_id = latest_version.id
+    async with async_session() as session:
+        document = await repository.get_document(session, document_id)
+        if not document:
+            raise ValueError("Document not found")
+        if not document.versions:
+            raise ValueError("Document has no versions to analyse")
+        latest_version = max(document.versions, key=lambda v: v.ordinal)
+        annotation = document.annotations[0] if document.annotations else None
+        if not annotation:
+            raise ValueError("Annotation record not found for document")
+        document_path = Path(latest_version.source_storage_path)
+        annotation_id = annotation.id
+        latest_version_id = latest_version.id
 
+    async def task(job_id: str) -> Dict[str, Any]:
         project_info = await asyncio.to_thread(
             _prepare_analysis_assets,
             document_path,
@@ -433,13 +687,7 @@ async def ingest_annotation_export(document_id: str, export_file: UploadFile) ->
         await session.commit()
         await session.refresh(annotation)
 
-    return AnnotationDetail(
-        id=annotation.id,
-        status=annotation.status.value,
-        reviewer=annotation.reviewer,
-        notes=annotation.notes,
-        updated_at=annotation.updated_at,
-    )
+    return build_annotation_detail_from_model(annotation)
 
 
 async def list_jobs() -> List[JobDetail]:
@@ -459,8 +707,14 @@ async def get_job(job_id: str) -> JobDetail:
     return job
 
 
-async def create_training_run(document_ids: Optional[Iterable[str]], triggered_by: Optional[str]) -> JobResponse:
-    doc_ids = list(document_ids or [])
+async def create_training_run(
+    document_ids: Optional[Iterable[str]],
+    triggered_by: Optional[str],
+    *,
+    annotation_ids: Optional[Iterable[str]] = None,
+) -> JobResponse:
+    doc_ids = [doc_id for doc_id in (document_ids or []) if doc_id]
+    annotation_filter = {ann_id for ann_id in (annotation_ids or []) if ann_id}
 
     async def task(job_id: str) -> Dict[str, Any]:
         async with async_session() as session:
@@ -468,7 +722,10 @@ async def create_training_run(document_ids: Optional[Iterable[str]], triggered_b
                 session,
                 training_run_id=job_id,
                 triggered_by=triggered_by,
-                parameters={"document_ids": doc_ids},
+                parameters={
+                    "document_ids": doc_ids,
+                    "annotation_ids": list(annotation_filter) if annotation_filter else None,
+                },
             )
             if doc_ids:
                 await repository.attach_training_documents(
@@ -491,24 +748,44 @@ async def create_training_run(document_ids: Optional[Iterable[str]], triggered_b
             )
             await session.commit()
 
-        # Placeholder training logic – to be replaced in Plan 41
-        artifact_path = model_blob_path(job_id)
-        artifact_path.write_text("Placeholder model artifact\n", encoding="utf-8")
+        annotations = await _load_annotations_for_training(doc_ids, annotation_filter)
+        training_records = [_annotation_to_training_record(ann) for ann in annotations]
+        dataset_path = training_run_blob_path(job_id, "dataset.json")
+        dataset_payload = [asdict(record) for record in training_records]
+        dataset_path.write_text(
+            json.dumps(dataset_payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+        model_path, trainer_metrics = await asyncio.to_thread(
+            fine_tune_model,
+            training_records,
+            dataset_path.parent,
+        )
+
+        type_counter = Counter(record.type or "UNKNOWN" for record in training_records)
+        summary_metrics = {
+            "annotation_count": len(training_records),
+            "documents": sorted({record.document_id for record in training_records}),
+            "entity_types": dict(type_counter),
+        }
+        if trainer_metrics:
+            summary_metrics.update(trainer_metrics)
 
         async with async_session() as session:
             await repository.create_model_version(
                 session,
                 training_run_id=job_id,
-                artifact_path=str(artifact_path),
-                model_name="placeholder",
-                version_tag="v0",
+                artifact_path=str(model_path),
+                model_name="embeddinggemma-feedback",
+                version_tag=f"run-{job_id[:8]}",
             )
             await repository.create_metric(
                 session,
                 training_run_id=job_id,
-                name="status",
-                value=None,
-                payload={"message": "Training pipeline pending implementation"},
+                name="training_summary",
+                value=len(training_records),
+                payload=summary_metrics,
             )
             await repository.set_training_run_status(
                 session,
@@ -519,8 +796,9 @@ async def create_training_run(document_ids: Optional[Iterable[str]], triggered_b
             await session.commit()
         return {
             "training_run_id": job_id,
-            "model_artifact_path": str(artifact_path),
-            "metrics": {"message": "Training pipeline pending implementation"},
+            "model_artifact_path": str(model_path),
+            "dataset_path": str(dataset_path),
+            "metrics": summary_metrics,
         }
 
     job_id = await job_manager.submit(
@@ -530,6 +808,24 @@ async def create_training_run(document_ids: Optional[Iterable[str]], triggered_b
         resource_id=None,
     )
     return JobResponse(job_id=job_id, job_type=ApiJobType.training, status=ApiJobStatus.pending)
+
+
+async def trigger_model_feedback(
+    document_id: str,
+    payload: Optional[FeedbackRequest],
+) -> JobResponse:
+    request = payload or FeedbackRequest()
+
+    async with async_session() as session:
+        document = await repository.get_document(session, document_id)
+        if not document:
+            raise ValueError("Document not found")
+
+    return await create_training_run(
+        [document_id],
+        triggered_by=request.triggered_by or "feedback-endpoint",
+        annotation_ids=request.annotation_ids,
+    )
 
 
 async def build_training_datasets(training_run_id: str):

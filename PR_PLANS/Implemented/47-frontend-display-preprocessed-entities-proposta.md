@@ -1,14 +1,14 @@
 # PR 47 — Frontend - Exibir Entidades Pré-processadas no PDF (frontend-display-preprocessed-entities)
 
-- Status: draft
-- Implementação: pending
+- Status: implemented
+- Implementação: concluída
 - Data: 2025-09-23
 - Responsáveis: Gemini
 - Observações: Este PR depende do PR 45 (Frontend - Visualizador Básico de PDF) e do PR 46 (Backend - Servir Entidades Pré-processadas).
 
 ## Estado da revisão (2025-09-25)
 
-- [ ] Implementado no código-base. O componente `src/spa/src/components/PdfViewer.tsx` apenas renderiza páginas via `react-pdf` e não busca entidades ou desenha sobreposições, indicando que a funcionalidade ainda não existe.
+- [x] Implementado no código-base. O `PdfViewer` agora busca entidades via `fetchEntities` e renderiza overlays conforme previsto em `src/spa/src/components/PdfViewer.tsx`, com modelos e client atualizados em `src/spa/src/models.ts` e `src/spa/src/api/pdfTraining.ts`.
 
 ## Objetivo
 

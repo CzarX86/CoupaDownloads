@@ -8,3 +8,18 @@ export interface Entity {
   value: string;
   location?: EntityLocation;
 }
+
+export type AnnotationStatus = 'PENDING' | 'IN_REVIEW' | 'COMPLETED';
+
+export interface Annotation {
+  id: string;
+  document_id: string;
+  type?: string | null;
+  value?: string | null;
+  location?: EntityLocation;
+  reviewer?: string | null;
+  notes?: string | null;
+  status: AnnotationStatus;
+  created_at: string;
+  updated_at: string;
+}

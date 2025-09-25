@@ -1,14 +1,14 @@
 # PR 50 — Backend - Gatilho de Feedback Imediato do Modelo (backend-immediate-model-feedback-trigger)
 
-- Status: draft
-- Implementação: pending
+- Status: implemented
+- Implementação: concluída
 - Data: 2025-09-23
 - Responsáveis: Gemini
 - Observações: Este PR é fundamental para fechar o ciclo de feedback humano-no-loop, permitindo que as correções do usuário melhorem diretamente a inteligência do sistema. Depende do PR 48 (Backend - Endpoints de Anotação Interativa).
 
 ## Estado da revisão (2025-09-25)
 
-- [ ] Implementado no código-base. A função `create_training_run` em `src/server/pdf_training_app/services.py` permanece com lógica placeholder que apenas escreve um arquivo dummy e registra uma métrica “pending implementation”, portanto não há gatilho de feedback imediato.
+- [x] Implementado no código-base. O endpoint `/documents/{document_id}/feedback` foi criado em `src/server/pdf_training_app/api.py`, a orquestração de `create_training_run` gera dataset real e dispara `fine_tune_model`, salvando artefatos e métricas, conforme detalhado em `services.py` e `embeddinggemma_feasibility/contract_data_trainer.py`.
 
 ## Objetivo
 

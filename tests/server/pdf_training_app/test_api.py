@@ -214,10 +214,6 @@ class TestDocumentEndpoints:
         assert data["document"]["id"] == document_id
         assert data["document"]["filename"] == "test.pdf"
 
-<<<<<<< ours
-<<<<<<< ours
-<<<<<<< ours
-<<<<<<< ours
     def test_get_document_entities_not_found(self, client: TestClient):
         """Document entities endpoint returns 404 for unknown documents."""
         response = client.get("/api/pdf-training/documents/unknown/entities")
@@ -284,9 +280,6 @@ class TestDocumentEndpoints:
         assert amount_entity["value"] == "$250.00"
         assert amount_entity["location"]["page_num"] == 2
         assert amount_entity["location"]["bbox"] == [15.0, 25.0, 35.0, 45.0]
-=======
-=======
->>>>>>> theirs
     def test_get_document_content_success(self, client: TestClient):
         """Document content endpoint returns the stored PDF bytes."""
         pdf_content = _create_test_pdf()
@@ -306,16 +299,6 @@ class TestDocumentEndpoints:
         response = client.get("/api/pdf-training/documents/missing-id/content")
         assert response.status_code == 404
         assert "Document not found" in response.json()["detail"]
-<<<<<<< ours
->>>>>>> theirs
-
-=======
->>>>>>> theirs
-=======
-
->>>>>>> theirs
-=======
->>>>>>> theirs
 
 class TestAnalysisEndpoints:
     """Test analysis-related endpoints."""
@@ -347,7 +330,7 @@ class TestAnalysisEndpoints:
 
 class TestAnnotationEndpoints:
     """Test annotation-related endpoints."""
-    
+
     def test_ingest_annotation_document_not_found(self, client: TestClient):
         """Test ingesting annotations for a non-existent document."""
         export_content = _create_label_studio_export()
@@ -380,6 +363,78 @@ class TestAnnotationEndpoints:
         data = response.json()
         assert "Invalid Label Studio export JSON" in data["detail"]
 
+    def test_create_annotation_success(self, client: TestClient):
+        """Creating an annotation for a document returns the new record."""
+        pdf_content = _create_test_pdf()
+        upload_response = client.post(
+            "/api/pdf-training/documents",
+            files={"file": ("test.pdf", pdf_content, "application/pdf")},
+        )
+        document_id = upload_response.json()["document"]["id"]
+
+        payload = {
+            "type": "Amount",
+            "value": "$250.00",
+            "notes": "Captured from entity overlay",
+            "location": {"page_num": 1, "bbox": [10, 20, 30, 40]},
+        }
+        response = client.post(
+            f"/api/pdf-training/documents/{document_id}/annotations",
+            json=payload,
+        )
+        assert response.status_code == 201
+        data = response.json()
+        assert data["document_id"] == document_id
+        assert data["type"] == "Amount"
+        assert data["value"] == "$250.00"
+        assert data["location"]["page_num"] == 1
+        assert data["status"] == "IN_REVIEW"
+
+    def test_update_annotation_success(self, client: TestClient):
+        """Updating an annotation returns the updated payload."""
+        pdf_content = _create_test_pdf()
+        upload_response = client.post(
+            "/api/pdf-training/documents",
+            files={"file": ("test.pdf", pdf_content, "application/pdf")},
+        )
+        document_id = upload_response.json()["document"]["id"]
+
+        create_response = client.post(
+            f"/api/pdf-training/documents/{document_id}/annotations",
+            json={"type": "PO Number", "value": "PO-123"},
+        )
+        annotation_id = create_response.json()["id"]
+
+        update_response = client.put(
+            f"/api/pdf-training/annotations/{annotation_id}",
+            json={"value": "PO-999", "status": "COMPLETED"},
+        )
+        assert update_response.status_code == 200
+        updated = update_response.json()
+        assert updated["value"] == "PO-999"
+        assert updated["status"] == "COMPLETED"
+
+    def test_delete_annotation_success(self, client: TestClient):
+        """Deleting an annotation removes it from the system."""
+        pdf_content = _create_test_pdf()
+        upload_response = client.post(
+            "/api/pdf-training/documents",
+            files={"file": ("test.pdf", pdf_content, "application/pdf")},
+        )
+        document_id = upload_response.json()["document"]["id"]
+
+        create_response = client.post(
+            f"/api/pdf-training/documents/{document_id}/annotations",
+            json={"type": "Currency", "value": "USD"},
+        )
+        annotation_id = create_response.json()["id"]
+
+        delete_response = client.delete(f"/api/pdf-training/annotations/{annotation_id}")
+        assert delete_response.status_code == 204
+
+        not_found = client.delete(f"/api/pdf-training/annotations/{annotation_id}")
+        assert not_found.status_code == 404
+
 
 class TestTrainingEndpoints:
     """Test training-related endpoints."""
@@ -407,18 +462,36 @@ class TestTrainingEndpoints:
             files={"file": ("test.pdf", pdf_content, "application/pdf")}
         )
         document_id = upload_response.json()["document"]["id"]
-        
+
         payload = {
             "document_ids": [document_id],
             "triggered_by": "test"
         }
-        
+
         response = client.post("/api/pdf-training/training-runs", json=payload)
         assert response.status_code == 200
         data = response.json()
         assert "job_id" in data
         assert data["job_type"] == "TRAINING"
         assert data["status"] == "PENDING"
+
+    def test_trigger_feedback_endpoint(self, client: TestClient):
+        """Triggering model feedback returns an async job."""
+        pdf_content = _create_test_pdf()
+        upload_response = client.post(
+            "/api/pdf-training/documents",
+            files={"file": ("feedback.pdf", pdf_content, "application/pdf")},
+        )
+        document_id = upload_response.json()["document"]["id"]
+
+        response = client.post(
+            f"/api/pdf-training/documents/{document_id}/feedback",
+            json={"triggered_by": "unit-test"},
+        )
+        assert response.status_code == 202
+        job = response.json()
+        assert job["job_type"] == "TRAINING"
+        assert job["status"] == "PENDING"
 
 
 class TestJobEndpoints:

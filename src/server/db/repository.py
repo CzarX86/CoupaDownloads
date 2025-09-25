@@ -2,9 +2,9 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Iterable, Optional, Sequence
+from typing import Any, Iterable, Optional, Sequence
 
-from sqlalchemy import select, update, func
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -146,6 +146,16 @@ async def append_annotation_event(
     return event
 
 
+async def get_annotation(session: AsyncSession, annotation_id: str) -> Optional[Annotation]:
+    stmt = (
+        select(Annotation)
+        .where(Annotation.id == annotation_id)
+        .options(selectinload(Annotation.events))
+    )
+    result = await session.execute(stmt)
+    return result.scalars().first()
+
+
 async def get_annotation_by_document(
     session: AsyncSession, document_id: str
 ) -> Optional[Annotation]:
@@ -156,6 +166,65 @@ async def get_annotation_by_document(
     )
     result = await session.execute(stmt)
     return result.scalars().first()
+
+
+async def list_annotations(
+    session: AsyncSession, document_id: Optional[str] = None
+) -> Sequence[Annotation]:
+    stmt = select(Annotation)
+    if document_id:
+        stmt = stmt.where(Annotation.document_id == document_id)
+    stmt = stmt.order_by(Annotation.created_at.asc())
+    result = await session.execute(stmt)
+    return result.scalars().unique().all()
+
+
+async def create_annotation(
+    session: AsyncSession,
+    *,
+    document_id: str,
+    status: AnnotationStatus,
+    reviewer: Optional[str],
+    notes: Optional[str],
+    latest_payload: Optional[dict],
+) -> Annotation:
+    annotation = Annotation(
+        document_id=document_id,
+        status=status,
+        reviewer=reviewer,
+        notes=notes,
+        latest_payload=latest_payload,
+    )
+    session.add(annotation)
+    await session.flush()
+    return annotation
+
+
+async def update_annotation(
+    session: AsyncSession,
+    *,
+    annotation_id: str,
+    status: Optional[AnnotationStatus] = None,
+    reviewer: Optional[str] = None,
+    notes: Optional[str] = None,
+    latest_payload: Optional[dict] = None,
+) -> None:
+    values: dict[str, Any] = {"updated_at": datetime.now(timezone.utc)}
+    if status is not None:
+        values["status"] = status
+    if reviewer is not None:
+        values["reviewer"] = reviewer
+    if notes is not None:
+        values["notes"] = notes
+    if latest_payload is not None:
+        values["latest_payload"] = latest_payload
+    await session.execute(
+        update(Annotation).where(Annotation.id == annotation_id).values(**values)
+    )
+
+
+async def delete_annotation(session: AsyncSession, annotation_id: str) -> None:
+    await session.execute(delete(Annotation).where(Annotation.id == annotation_id))
 
 
 async def get_completed_annotations(session: AsyncSession) -> Sequence[Annotation]:

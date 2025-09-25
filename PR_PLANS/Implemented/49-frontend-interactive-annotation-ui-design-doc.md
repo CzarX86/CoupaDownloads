@@ -1,13 +1,13 @@
 # Arquitetura 49 — Frontend - UI de Anotação Interativa (frontend-interactive-annotation-ui)
 
-- Status: draft
+- Status: implementado
 - Data: 2025-09-23
 - Responsáveis: Gemini
 - Observações: Este documento detalha o design para o PR 49, que implementa a UI de anotação interativa. Depende do PR 47 e PR 48.
 
 ## Estado da revisão (2025-09-25)
 
-- [ ] Implementado no código-base. Os componentes existentes não oferecem seleção de texto, formulários de anotação ou chamadas CRUD para o backend, demonstrando que o design ainda aguarda execução.
+- [x] Implementado no código-base. `PdfViewer` captura seleções e dispara fluxos no `PdfTrainingWizard`, o `AnnotationForm` foi construído como modal reutilizável e `AnnotationCard` integra edição e exclusão usando o cliente CRUD conforme planejado.
 
 ## Resumo executivo
 

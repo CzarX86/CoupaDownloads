@@ -1,13 +1,13 @@
 # Arquitetura 51 — Frontend - Integrar Feedback do Modelo (frontend-integrate-model-feedback)
 
-- Status: draft
+- Status: implementado
 - Data: 2025-09-23
 - Responsáveis: Gemini
 - Observações: Este documento detalha o design para o PR 51, que implementa a integração do feedback do modelo no frontend. Depende do PR 49 e PR 50.
 
 ## Estado da revisão (2025-09-25)
 
-- [ ] Implementado no código-base. Não há componentes de UI enviando feedback ao backend nem funções em `pdfTraining.ts` para este endpoint, logo a integração permanece pendente.
+- [x] Implementado no código-base. O botão "Send feedback" foi incorporado ao `AnnotationCard`, `pdfTraining.ts` expõe a chamada correspondente e o fluxo apresenta toasts de sucesso/erro conforme descrito.
 
 ## Resumo executivo
 

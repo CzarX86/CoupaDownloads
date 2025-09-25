@@ -1,14 +1,14 @@
 # PR 48 — Backend - Endpoints de Anotação Interativa (backend-interactive-annotation-endpoints)
 
-- Status: draft
-- Implementação: pending
+- Status: implemented
+- Implementação: concluída
 - Data: 2025-09-23
 - Responsáveis: Gemini
 - Observações: Este PR é crucial para permitir a interação do usuário com as anotações. Depende do PR 46 (Backend - Servir Entidades Pré-processadas).
 
 ## Estado da revisão (2025-09-25)
 
-- [ ] Implementado no código-base. `src/server/pdf_training_app/api.py` expõe apenas o endpoint de ingestão em lote (`/annotations/ingest`) e não possui rotas CRUD granulares, logo o backend interativo ainda não foi desenvolvido.
+- [x] Implementado no código-base. Os endpoints `POST /documents/{document_id}/annotations`, `PUT /annotations/{annotation_id}` e `DELETE /annotations/{annotation_id}` foram adicionados em `src/server/pdf_training_app/api.py`, com serviços e repositório cobrindo CRUD completo e esquemas Pydantic atualizados.
 
 ## Objetivo
 
