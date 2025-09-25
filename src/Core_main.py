@@ -6,7 +6,11 @@ import time
 import threading
 import multiprocessing as mp
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
-from selenium.common.exceptions import InvalidSessionIdException, NoSuchWindowException
+from selenium.common.exceptions import (
+    InvalidSessionIdException,
+    NoSuchWindowException,
+    TimeoutException,
+)
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
@@ -59,15 +63,42 @@ def _parse_counts_from_message(message: str) -> tuple[int | None, int | None]:
         return None, None
 
 
-def _derive_status_label(success: bool, message: str) -> str:
-    msg = (message or '').lower()
-    dl, total = _parse_counts_from_message(message or '')
+def _humanize_exception(exc: Exception) -> str:
+    mapping: dict[type[Exception], str] = {
+        InvalidSessionIdException: 'Browser session expired while processing the PO.',
+        NoSuchWindowException: 'Browser window closed unexpectedly.',
+        TimeoutException: 'Timed out waiting for the page to finish loading.',
+    }
+    for exc_type, friendly in mapping.items():
+        if isinstance(exc, exc_type):
+            return friendly
+
+    text = str(exc).strip()
+    if not text:
+        text = exc.__class__.__name__
+    if len(text) > 150:
+        text = text[:147] + '...'
+    return f"{exc.__class__.__name__}: {text}"
+
+
+def _derive_status_label(result: dict | None) -> str:
+    if not result:
+        return 'FAILED'
+    if 'status_code' in result and result['status_code']:
+        return result['status_code']
+
+    success = result.get('success', False)
+    message = result.get('message', '') or ''
+    msg_lower = message.lower()
+    dl, total = _parse_counts_from_message(message)
     if success:
-        if total == 0 or 'no attachments' in msg:
+        if total == 0 or 'no attachments' in msg_lower:
             return 'NO_ATTACHMENTS'
         if dl is not None and total is not None and dl < total:
             return 'PARTIAL'
         return 'COMPLETED'
+    if 'oops' in msg_lower or 'not found' in msg_lower:
+        return 'PO_NOT_FOUND'
     return 'FAILED'
 
 
@@ -80,6 +111,8 @@ def _suffix_for_status(status_code: str) -> str:
         return '_NO_ATTACHMENTS'
     if status_code == 'PARTIAL':
         return '_PARTIAL'
+    if status_code == 'PO_NOT_FOUND':
+        return '_PO_NOT_FOUND'
     return f'_{status_code}'
 
 
@@ -142,27 +175,29 @@ def process_po_worker(args):
         downloader = Downloader(driver, browser_manager)
         po_number = po_data['po_number']
         print(f"[worker] 🌐 Starting download for {po_number}", flush=True)
-        result = downloader.download_attachments_for_po(po_number)
-        success = result.get('success', False)
-        message = result.get('message', '')
+        result_payload = downloader.download_attachments_for_po(po_number)
+        message = result_payload.get('message', '')
         print(f"[worker] ✅ Download routine finished for {po_number}", flush=True)
 
         # Wait for downloads to finish
         _wait_for_downloads_complete(folder_path)
         print("[worker] ⏳ Downloads settled", flush=True)
 
-        status_code = _derive_status_label(success, message)
+        status_code = _derive_status_label(result_payload)
         final_folder = _rename_folder_with_status(folder_path, status_code)
         result = {
             'po_number_display': display_po,
             'status_code': status_code,
             'message': message,
             'final_folder': final_folder,
-            'supplier_name': result.get('supplier_name', ''),
-            'attachments_found': result.get('attachments_found', 0),
-            'attachments_downloaded': result.get('attachments_downloaded', 0),
-            'coupa_url': result.get('coupa_url', ''),
-            'attachment_names': result.get('attachment_names', []),
+            'supplier_name': result_payload.get('supplier_name', ''),
+            'attachments_found': result_payload.get('attachments_found', 0),
+            'attachments_downloaded': result_payload.get('attachments_downloaded', 0),
+            'coupa_url': result_payload.get('coupa_url', ''),
+            'attachment_names': result_payload.get('attachment_names', []),
+            'status_reason': result_payload.get('status_reason', ''),
+            'errors': result_payload.get('errors', []),
+            'success': result_payload.get('success', False),
         }
         print(f"[worker] 🏁 Done {display_po} → {status_code}", flush=True)
         return result
@@ -175,11 +210,15 @@ def process_po_worker(args):
                 final_folder = ''
         except Exception:
             final_folder = folder_path or ''
+        friendly = _humanize_exception(e)
         return {
             'po_number_display': display_po,
             'status_code': 'FAILED',
-            'message': str(e),
+            'message': friendly,
             'final_folder': final_folder,
+            'status_reason': 'UNEXPECTED_EXCEPTION',
+            'errors': [{'filename': '', 'reason': friendly}],
+            'success': False,
         }
     finally:
         try:
@@ -387,9 +426,7 @@ class MainApp:
                 # Create downloader and attempt processing
                 downloader = Downloader(self.driver, self.browser_manager)
                 try:
-                    result = downloader.download_attachments_for_po(po_number)
-                    success = result.get('success', False)
-                    message = result.get('message', '')
+                    result_payload = downloader.download_attachments_for_po(po_number)
                 except (InvalidSessionIdException, NoSuchWindowException) as e:
                     # Session/tab was lost. Try to recover once.
                     print(f"   ⚠️ Session issue detected ({type(e).__name__}). Recovering driver and retrying once...")
@@ -397,41 +434,59 @@ class MainApp:
                     self.browser_manager.initialize_driver()
                     self.driver = self.browser_manager.driver
                     downloader = Downloader(self.driver, self.browser_manager)
-                    result = downloader.download_attachments_for_po(po_number)
-                    success = result.get('success', False)
-                    message = result.get('message', '')
+                    result_payload = downloader.download_attachments_for_po(po_number)
+
+                message = result_payload.get('message', '')
 
                 # Wait for downloads to complete before finalizing folder name
                 self._wait_for_downloads_complete(folder_path)
 
                 # Derive unified status and rename folder with standardized suffix
-                status_code = _derive_status_label(success, message)
+                status_code = _derive_status_label(result_payload)
                 final_folder = _rename_folder_with_status(folder_path, status_code)
+                status_reason = result_payload.get('status_reason', '')
+                errors = result_payload.get('errors', [])
 
                 # Update status with the final folder path and enriched fields
                 formatted_names = self.folder_hierarchy.format_attachment_names(
-                    result.get('attachment_names', [])
+                    result_payload.get('attachment_names', [])
                 )
+                csv_message = message
+                if status_code == 'COMPLETED':
+                    csv_message = ''
+                elif status_code == 'NO_ATTACHMENTS':
+                    csv_message = message or 'No attachments found.'
+                elif not csv_message and status_reason:
+                    csv_message = status_reason.replace('_', ' ').title()
                 self.excel_processor.update_po_status(
                     display_po,
                     status_code,
-                    supplier=result.get('supplier_name', ''),
-                    attachments_found=result.get('attachments_found', 0),
-                    attachments_downloaded=result.get('attachments_downloaded', 0),
-                    error_message=message,
+                    supplier=result_payload.get('supplier_name', ''),
+                    attachments_found=result_payload.get('attachments_found', 0),
+                    attachments_downloaded=result_payload.get('attachments_downloaded', 0),
+                    error_message=csv_message,
                     download_folder=final_folder,
-                    coupa_url=result.get('coupa_url', ''),
+                    coupa_url=result_payload.get('coupa_url', ''),
                     attachment_names=formatted_names,
                 )
-            
-            print(f"   ✅ {display_po}: {message}")
-            return True
-            
+
+            emoji = {
+                'COMPLETED': '✅',
+                'NO_ATTACHMENTS': '📭',
+                'PARTIAL': '⚠️',
+                'FAILED': '❌',
+                'PO_NOT_FOUND': '🚫',
+            }.get(status_code, 'ℹ️')
+            log_message = message or status_reason or status_code
+            print(f"   {emoji} {display_po}: {log_message}")
+            return status_code in {'COMPLETED', 'NO_ATTACHMENTS'}
+
         except Exception as e:
-            print(f"   ❌ Error processing {display_po}: {e}")
+            friendly = _humanize_exception(e)
+            print(f"   ❌ Error processing {display_po}: {friendly}")
             # Use unified FAILED status on exceptions in sequential mode
-            self.excel_processor.update_po_status(display_po, "FAILED", error_message=str(e))
-            
+            self.excel_processor.update_po_status(display_po, "FAILED", error_message=friendly)
+
             # Clean up browser state: close any extra tabs and return to main tab
             try:
                 with self.lock:
@@ -531,28 +586,44 @@ class MainApp:
                     status_code = result['status_code']
                     message = result['message']
                     final_folder = result['final_folder']
+                    status_reason = result.get('status_reason', '')
 
                     # Update Excel in parent (avoids CSV write contention)
                     formatted_names = self.folder_hierarchy.format_attachment_names(
                         result.get('attachment_names', [])
                     )
+                    csv_message = message
+                    if status_code == 'COMPLETED':
+                        csv_message = ''
+                    elif status_code == 'NO_ATTACHMENTS':
+                        csv_message = message or 'No attachments found.'
+                    elif not csv_message and status_reason:
+                        csv_message = status_reason.replace('_', ' ').title()
                     self.excel_processor.update_po_status(
                         display_po,
                         status_code,
                         supplier=result.get('supplier_name', ''),
                         attachments_found=result.get('attachments_found', 0),
                         attachments_downloaded=result.get('attachments_downloaded', 0),
-                        error_message=message,
+                        error_message=csv_message,
                         download_folder=final_folder,
                         coupa_url=result.get('coupa_url', ''),
                         attachment_names=formatted_names,
                     )
                     print("-" * 60)
-                    print(f"   ✅ {display_po}: {message}")
-                    if status_code == 'FAILED':
-                        failed += 1
-                    else:
+                    emoji = {
+                        'COMPLETED': '✅',
+                        'NO_ATTACHMENTS': '📭',
+                        'PARTIAL': '⚠️',
+                        'FAILED': '❌',
+                        'PO_NOT_FOUND': '🚫',
+                    }.get(status_code, 'ℹ️')
+                    log_text = message or status_reason or status_code
+                    print(f"   {emoji} {display_po}: {log_text}")
+                    if status_code in {'COMPLETED', 'NO_ATTACHMENTS'}:
                         successful += 1
+                    else:
+                        failed += 1
         else:
             # Legacy in-process mode (single WebDriver, sequential)
             print("📊 Using in-process mode (single WebDriver, sequential)")

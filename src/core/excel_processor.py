@@ -361,7 +361,8 @@ class ExcelProcessor:
                 'PARTIAL': '⚠️',
                 'PENDING': '⏳',
                 'SKIPPED': '⏭️',
-                'NO_ATTACHMENTS': '📭'
+                'NO_ATTACHMENTS': '📭',
+                'PO_NOT_FOUND': '🚫'
             }.get(status, '📋')
             
             print(f"  {status_emoji} Updated {po_number}: {status}")
@@ -519,7 +520,8 @@ class ExcelProcessor:
         for status, count in report['status_counts'].items():
             emoji = {
                 'COMPLETED': '✅', 'FAILED': '❌', 'PARTIAL': '⚠️',
-                'PENDING': '⏳', 'SKIPPED': '⏭️', 'NO_ATTACHMENTS': '📭'
+                'PENDING': '⏳', 'SKIPPED': '⏭️', 'NO_ATTACHMENTS': '📭',
+                'PO_NOT_FOUND': '🚫'
             }.get(status, '📋')
             print(f"  {emoji} {status}: {count}")
         

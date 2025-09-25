@@ -76,34 +76,37 @@ class Downloader:
             return cleaned[:150]
 
         el = to_anchor(attachment)
-        allowed = tuple(ext.lower() for ext in Config.ALLOWED_EXTENSIONS)
-
         # 1) download/title/aria-label attributes
         for source in ('download', 'title', 'aria-label'):
             try:
                 val = (el.get_attribute(source) or '').strip()
             except Exception:
                 val = ''
-            if val and any(val.lower().endswith(allowed_ext) for allowed_ext in allowed):
-                return sanitize(val)
+            if val:
+                name = sanitize(val)
+                if name:
+                    return name
 
         # 2) visible text
         try:
             txt = (el.text or '').strip()
         except Exception:
             txt = ''
-        if txt and any(txt.lower().endswith(allowed_ext) for allowed_ext in allowed):
-            return sanitize(txt)
+        if txt:
+            name = sanitize(txt)
+            if name:
+                return name
 
-        # 3) href basename
+        # 3) href basename (without filtering extensions)
         try:
             href = (el.get_attribute('href') or '').strip()
         except Exception:
             href = ''
         if href and href not in ('#', ''):
             base = os.path.basename(href)
-            if any(base.lower().endswith(allowed_ext) for allowed_ext in allowed):
-                return sanitize(base)
+            name = sanitize(base)
+            if name:
+                return name
         return None
 
     def _find_attachments(self) -> List[WebElement]:
@@ -171,85 +174,217 @@ class Downloader:
             print(f"   ⚠ Attachment discovery fallback failed: {e}")
             return []
 
-    def _download_attachment(self, attachment: WebElement, filename: str) -> bool:
-        """
-        Performs a click on the attachment element with multiple fallback strategies
-        to handle element click interception issues.
-        """
+    def _short_exception(self, exc: Exception) -> str:
+        """Return a brief, human-friendly description of an exception."""
         try:
-            print(f"      ⬇ Clicking to download '{filename}'...")
-            
-            # Strategy 1: Try direct click first
+            message = str(exc).strip()
+        except Exception:
+            message = ''
+        if not message:
+            message = exc.__class__.__name__
+        if len(message) > 150:
+            message = message[:147] + '...'
+        return message
+
+    @staticmethod
+    def _summarize_download_errors(errors: List[dict], limit: int = 3) -> str:
+        if not errors:
+            return ''
+        fragments = []
+        for entry in errors[:limit]:
+            name = entry.get('filename') or 'attachment'
+            reason = entry.get('reason') or 'unknown issue'
+            fragments.append(f"{name}: {reason}")
+        remaining = len(errors) - limit
+        if remaining > 0:
+            fragments.append(f"+{remaining} more")
+        summary = '; '.join(fragments)
+        if len(summary) > 200:
+            summary = summary[:197] + '...'
+        return summary
+
+    @staticmethod
+    def _truncate_text(text: str, limit: int = 220) -> str:
+        if not text:
+            return ''
+        if len(text) <= limit:
+            return text
+        return text[: limit - 3].rstrip() + '...'
+
+    def _download_attachment(self, attachment: WebElement, filename: str) -> Tuple[bool, Optional[str]]:
+        """Trigger a download using several fallback strategies.
+
+        Returns:
+            Tuple (success, error_message). On success the error_message is None.
+        """
+
+        def attempt(label: str, action) -> bool:
             try:
-                attachment.click()
+                action()
                 time.sleep(Config.PAGE_DELAY)
                 return True
-            except ElementClickInterceptedException:
-                print(f"         ⚠ Element click intercepted, trying fallback strategies...")
-                
-                # Strategy 2: Scroll element into view and try again
-                try:
-                    self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", attachment)
-                    time.sleep(0.5)  # Brief pause for scroll to complete
-                    attachment.click()
-                    time.sleep(Config.PAGE_DELAY)
-                    return True
-                except ElementClickInterceptedException:
-                    print(f"         ⚠ Still intercepted after scroll, trying JavaScript click...")
-                    
-                    # Strategy 3: Use JavaScript click
-                    try:
-                        self.driver.execute_script("arguments[0].click();", attachment)
-                        time.sleep(Config.PAGE_DELAY)
-                        return True
-                    except Exception as js_error:
-                        print(f"         ⚠ JavaScript click failed: {js_error}")
-                        
-                        # Strategy 4: Try to hide the floating element temporarily
-                        try:
-                            # Hide the floating buttons that might be intercepting
-                            floating_elements = self.driver.find_elements(
-                                By.CSS_SELECTOR, 
-                                ".page_buttons_right.orderHeaderShowFloatingSection.floatingSectionOnTop"
-                            )
-                            if floating_elements:
-                                self.driver.execute_script(
-                                    "arguments[0].style.display = 'none';", 
-                                    floating_elements[0]
-                                )
-                                time.sleep(0.3)
-                                attachment.click()
-                                time.sleep(Config.PAGE_DELAY)
-                                # Restore the floating element
-                                self.driver.execute_script(
-                                    "arguments[0].style.display = 'block';", 
-                                    floating_elements[0]
-                                )
-                                return True
-                        except Exception as hide_error:
-                            print(f"         ⚠ Hide strategy failed: {hide_error}")
-                            
-                            # Strategy 5: Final attempt with coordinates
-                            try:
-                                # Get element location and click at a specific point
-                                location = attachment.location
-                                size = attachment.size
-                                # Click in the center of the element
-                                x = location['x'] + size['width'] // 2
-                                y = location['y'] + size['height'] // 2
-                                
-                                from selenium.webdriver.common.action_chains import ActionChains
-                                actions = ActionChains(self.driver)
-                                actions.move_to_element(attachment).click().perform()
-                                time.sleep(Config.PAGE_DELAY)
-                                return True
-                            except Exception as coord_error:
-                                print(f"         ⚠ Coordinate click failed: {coord_error}")
-                                return False
-                                
-        except Exception as e:
-            print(f"      ❌ Failed to click on attachment '{filename}'. Reason: {e}")
+            except ElementClickInterceptedException as exc:
+                msg = self._short_exception(exc)
+                print(f"         ⚠ {label} intercepted: {msg}")
+                errors.append(f"{label}: click intercepted")
+            except Exception as exc:
+                msg = self._short_exception(exc)
+                print(f"         ⚠ {label} failed: {msg}")
+                errors.append(f"{label}: {msg}")
             return False
+
+        errors: List[str] = []
+        print(f"      ⬇ Attempting download for '{filename}'...")
+
+        if attempt('Direct click', lambda: attachment.click()):
+            return True, None
+
+        # Strategy 2: Scroll into view and retry
+        def scroll_and_click() -> None:
+            self.driver.execute_script(
+                "arguments[0].scrollIntoView({block: 'center'});",
+                attachment,
+            )
+            time.sleep(0.4)
+            attachment.click()
+
+        if attempt('Scroll + click', scroll_and_click):
+            return True, None
+
+        # Strategy 3: JavaScript click
+        if attempt('JavaScript click', lambda: self.driver.execute_script("arguments[0].click();", attachment)):
+            return True, None
+
+        # Strategy 4: Temporarily hide floating toolbar that blocks clicks
+        def hide_and_click() -> None:
+            floating_elements = self.driver.find_elements(
+                By.CSS_SELECTOR,
+                ".page_buttons_right.orderHeaderShowFloatingSection.floatingSectionOnTop",
+            )
+            if not floating_elements:
+                raise Exception('floating toolbar not found')
+            target = floating_elements[0]
+            self.driver.execute_script("arguments[0].style.display = 'none';", target)
+            try:
+                time.sleep(0.3)
+                attachment.click()
+            finally:
+                self.driver.execute_script("arguments[0].style.display = 'block';", target)
+
+        if attempt('Hide floating toolbar + click', hide_and_click):
+            return True, None
+
+        # Strategy 5: ActionChains fallback
+        def action_chain_click() -> None:
+            from selenium.webdriver.common.action_chains import ActionChains
+
+            actions = ActionChains(self.driver)
+            actions.move_to_element(attachment).click().perform()
+
+        if attempt('ActionChains click', action_chain_click):
+            return True, None
+
+        summary = '; '.join(errors) or 'All click strategies exhausted'
+        if len(summary) > 180:
+            summary = summary[:177] + '...'
+        print(f"      ❌ Failed to trigger download for '{filename}'. Reason: {summary}")
+        return False, summary
+
+    def _wait_for_dom_ready(self, timeout: Optional[float] = None) -> bool:
+        """Wait until the document reports readyState == 'complete'."""
+        wait_timeout = timeout or Config.PAGE_LOAD_TIMEOUT
+        try:
+            WebDriverWait(self.driver, wait_timeout).until(
+                lambda drv: drv.execute_script("return document.readyState") == "complete"
+            )
+            return True
+        except TimeoutException:
+            print("   ⚠ Page did not reach readyState='complete' within timeout.")
+            return False
+        except Exception as exc:
+            print(f"   ⚠ Error while waiting for DOM ready: {self._short_exception(exc)}")
+            return False
+
+    @staticmethod
+    def _find_marker_in_text(text: str, markers: List[str]) -> Optional[str]:
+        payload = (text or '').lower()
+        if not payload:
+            return None
+        for marker in markers:
+            if not marker:
+                continue
+            if marker.lower() in payload:
+                return marker
+        return None
+
+    def _locate_error_marker(self, driver, markers: List[str]) -> Optional[dict]:
+        try:
+            page_marker = self._find_marker_in_text(driver.page_source, markers)
+            if page_marker:
+                return {'marker': page_marker, 'source': 'page_source'}
+        except Exception:
+            pass
+
+        try:
+            title_marker = self._find_marker_in_text(driver.title, markers)
+            if title_marker:
+                return {'marker': title_marker, 'source': 'title'}
+        except Exception:
+            pass
+
+        selectors_css = getattr(Config, 'ERROR_PAGE_CSS_SELECTORS', []) or []
+        for sel in selectors_css:
+            try:
+                elements = driver.find_elements(By.CSS_SELECTOR, sel)
+            except Exception:
+                elements = []
+            for el in elements:
+                marker = self._find_marker_in_text(getattr(el, 'text', ''), markers)
+                if marker:
+                    return {'marker': marker, 'source': f'css::{sel}'}
+                if getattr(el, 'text', '').strip():
+                    # Even when the full marker is not present, presence of element hints error layout
+                    return {'marker': getattr(el, 'text', '').strip(), 'source': f'css::{sel}'}
+
+        selectors_xpath = getattr(Config, 'ERROR_PAGE_XPATH_SELECTORS', []) or []
+        for xp in selectors_xpath:
+            try:
+                elements = driver.find_elements(By.XPATH, xp)
+            except Exception:
+                elements = []
+            for el in elements:
+                marker = self._find_marker_in_text(getattr(el, 'text', ''), markers)
+                if marker:
+                    return {'marker': marker, 'source': f'xpath::{xp}'}
+                if getattr(el, 'text', '').strip():
+                    return {'marker': getattr(el, 'text', '').strip(), 'source': f'xpath::{xp}'}
+
+        return None
+
+    def _detect_error_page(self, phase: str, timeout: Optional[float] = None) -> Optional[dict]:
+        markers = getattr(Config, 'ERROR_PAGE_MARKERS', []) or []
+        poll = getattr(Config, 'ERROR_PAGE_WAIT_POLL', 0.2)
+        wait_timeout = timeout or getattr(Config, 'ERROR_PAGE_CHECK_TIMEOUT', 2.0)
+        start = time.perf_counter()
+
+        try:
+            info = WebDriverWait(
+                self.driver,
+                wait_timeout,
+                poll_frequency=poll,
+            ).until(lambda drv: self._locate_error_marker(drv, markers))
+        except TimeoutException:
+            return None
+        except Exception as exc:
+            print(f"   ⚠ Error during error-page detection ({phase}): {self._short_exception(exc)}")
+            return None
+
+        if not info:
+            return None
+
+        info['phase'] = phase
+        info['elapsed'] = round(time.perf_counter() - start, 3)
+        return info
 
     def download_attachments_for_po(self, po_number: str) -> dict:
         """
@@ -264,83 +399,114 @@ class Downloader:
         print(f"   Navigating to: {url}")
         self.driver.get(url)
 
-        # Early error page detection (fast‑fail)
-        page = (self.driver.page_source or '').lower()
-        try:
-            markers = getattr(Config, 'ERROR_PAGE_MARKERS', []) or []
-        except Exception:
-            markers = ["Oops! We couldn't find what you wanted"]
-        if any((m or '').lower() in page for m in markers):
-            msg = "PO not found or page error detected."
-            print(f"   ❌ {msg}")
+        early_error = self._detect_error_page('early')
+        error_info = early_error
+        if not error_info:
+            self._wait_for_dom_ready()
+            ready_timeout = getattr(Config, 'ERROR_PAGE_READY_CHECK_TIMEOUT', 1.0)
+            error_info = self._detect_error_page('post_ready', timeout=ready_timeout)
+
+        if error_info:
+            marker_raw = (error_info.get('marker') or 'Coupa error page').strip()
+            marker_text = self._truncate_text(marker_raw, 150)
+            msg = self._truncate_text(f"Coupa displayed an error page: {marker_text}")
+            print(
+                "   ❌ "
+                f"{msg} (phase={error_info.get('phase')}, source={error_info.get('source')}, "
+                f"{error_info.get('elapsed', 0)}s)"
+            )
             return {
                 'success': False,
+                'status_code': 'PO_NOT_FOUND',
+                'status_reason': 'COUPA_ERROR_PAGE',
                 'message': msg,
                 'supplier_name': '',
                 'attachments_found': 0,
                 'attachments_downloaded': 0,
                 'coupa_url': url,
                 'attachment_names': [],
+                'errors': [{'filename': '', 'reason': marker_text}],
+                'error_info': error_info,
             }
 
         attachments = self._find_attachments()
         supplier = self._extract_supplier_name()
         if not attachments:
-            msg = "No attachments found."
-            print(f"   ✅ {msg}")
+            msg = "No attachments found on PO page."
+            print(f"   📭 {msg}")
             return {
                 'success': True,
+                'status_code': 'NO_ATTACHMENTS',
+                'status_reason': 'PO_WITHOUT_ATTACHMENTS',
                 'message': msg,
                 'supplier_name': supplier or '',
                 'attachments_found': 0,
                 'attachments_downloaded': 0,
                 'coupa_url': url,
                 'attachment_names': [],
+                'errors': [],
             }
 
         total_attachments = len(attachments)
         print(f"   Processing {total_attachments} attachments...")
         downloaded_count = 0
         names_list: List[str] = []
+        download_errors: List[dict] = []
 
         for i, attachment in enumerate(attachments):
             filename = self._extract_filename_from_element(attachment)
             if not filename:
-                print(
-                    f"      ⚠ Could not determine filename for attachment {i+1}, skipping."
-                )
+                placeholder = f"attachment_{i + 1}"
+                print(f"      ⚠ Could not determine filename for attachment {i+1}, skipping.")
+                download_errors.append({
+                    'filename': placeholder,
+                    'reason': 'filename not available',
+                })
                 continue
             names_list.append(filename)
 
-            # The browser will handle duplicate downloads automatically
-            # (e.g., file.pdf, file (1).pdf). The old complex logic is removed.
-            if self._download_attachment(attachment, filename):
+            success, error_reason = self._download_attachment(attachment, filename)
+            if success:
                 downloaded_count += 1
+            else:
+                download_errors.append({
+                    'filename': filename,
+                    'reason': self._truncate_text(error_reason or 'unknown error', 160),
+                })
 
-        if downloaded_count > 0:
-            msg = (
-                f"Initiated download for {downloaded_count}/{total_attachments} "
-                "attachments."
-            )
+        if downloaded_count == total_attachments:
+            msg = self._truncate_text(f"Downloaded {downloaded_count} attachment(s).")
             print(f"   ✅ {msg}")
-            return {
-                'success': True,
-                'message': msg,
-                'supplier_name': supplier or '',
-                'attachments_found': total_attachments,
-                'attachments_downloaded': downloaded_count,
-                'coupa_url': url,
-                'attachment_names': names_list,
-            }
+            status_code = 'COMPLETED'
+            status_reason = 'ALL_ATTACHMENTS_DOWNLOADED'
+        elif downloaded_count > 0:
+            summary = self._summarize_download_errors(download_errors)
+            msg = self._truncate_text(
+                f"Partial download: {downloaded_count} of {total_attachments} attachment(s)."
+                + (f" Issues: {summary}" if summary else '')
+            )
+            print(f"   ⚠ {msg}")
+            status_code = 'PARTIAL'
+            status_reason = 'PARTIAL_DOWNLOAD'
         else:
-            msg = f"Failed to download any of the {total_attachments} attachments."
+            summary = self._summarize_download_errors(download_errors)
+            msg = self._truncate_text(
+                f"Failed to download {total_attachments} attachment(s)."
+                + (f" Issues: {summary}" if summary else '')
+            )
             print(f"   ❌ {msg}")
-            return {
-                'success': False,
-                'message': msg,
-                'supplier_name': supplier or '',
-                'attachments_found': total_attachments,
-                'attachments_downloaded': 0,
-                'coupa_url': url,
-                'attachment_names': names_list,
-            }
+            status_code = 'FAILED'
+            status_reason = 'DOWNLOADS_FAILED'
+
+        return {
+            'success': downloaded_count == total_attachments,
+            'status_code': status_code,
+            'status_reason': status_reason,
+            'message': msg,
+            'supplier_name': supplier or '',
+            'attachments_found': total_attachments,
+            'attachments_downloaded': downloaded_count,
+            'coupa_url': url,
+            'attachment_names': names_list,
+            'errors': download_errors,
+        }

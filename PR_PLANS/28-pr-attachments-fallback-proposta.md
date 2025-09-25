@@ -1,188 +1,67 @@
-# PR 28 — Fallback to PR (Requisition) Attachments When PO Has None
-- Status: draft
-- Implementação: pending
-- Data: 2025-09-23
-- Responsáveis: TBD
-- Observações: 
+# PR 28 — Fallback de anexos via PR (requisition)
 
+- Status: bloqueada (aguardando PR 53)
+- Implementação: pendente
+- Data: 2025-09-24
+- Responsáveis: Equipe CoupaDownloads (dev a designar)
+- Observações: atualização alinhada ao estado atual do `Downloader` baseado em Selenium. Número atualizado para versão 2 do plano.
+- Revisão: 2
 
-## Objective
-When a PO page has zero attachments, automatically navigate to the originating PR (Requisition) page and attempt to find/download attachments there, saving files into the same PO folder. Keep existing behavior unchanged when PO has attachments.
+## Objetivo
 
-## Scope
-- Add a conditional fallback path in the downloader flow: if no attachments on the PO page, try the PR page.
-- Detect and navigate to the PR page from the PO header (typical Coupa link labeled “Requisition” with anchor text like “PR123456”).
-- Reuse the current attachment discovery and download logic on the PR page.
-- Preserve all existing folder hierarchy and CSV updates; downloads must land in the same PO folder.
+Permitir que o fluxo de download continue obtendo anexos quando uma página de Purchase Order (PO) não possui arquivos, reutilizando a página de Purchase Requisition (PR) de origem como fonte secundária. O comportamento atual simplesmente encerra o processamento com mensagem de "No attachments found", mesmo quando a requisição possui anexos úteis para o time de compras.
 
-Out of scope:
-- No changes to how we compute folder names or status suffixes.
-- No concurrency model changes and no driver/profile defaults changes.
+## Escopo
 
-## Affected Files
-- Update: `src/core/downloader.py` (fallback flow + navigation to PR)
-- Update: `src/core/config.py` (add PR link selectors + optional toggle)
+- Introduzir uma verificação condicional no `Downloader.download_attachments_for_po` para detectar ausência de anexos na PO e navegar até a PR correspondente.
+- Reaproveitar o mecanismo existente de descoberta e clique em anexos também na tela de PR, mantendo contadores e mensagens consistentes.
+- Garantir que os arquivos baixados pela PR sejam gravados na mesma pasta gerenciada pelo `FolderHierarchyManager`, sem alterar convenções de nomenclatura ou sufixos de status já adotados no `Core_main`.
+- Expor no `Config` os seletores e a flag de ativação (`PR_FALLBACK_ENABLED`) para permitir ajustes rápidos sem alterar código.
 
-## Pseudodiff (representative)
-```diff
---- src/core/config.py
-+++ src/core/config.py
-@@ class Config:
-     # MSG processing controls
-     FILTER_MSG_ARTIFACTS = os.environ.get("FILTER_MSG_ARTIFACTS", "true").lower() == "true"
-     MSG_ARTIFACT_MIN_SIZE = int(os.environ.get("MSG_ARTIFACT_MIN_SIZE", "1024"))
-     MSG_IMAGE_MIN_SIZE = int(os.environ.get("MSG_IMAGE_MIN_SIZE", "5120"))
- 
-     # Folder naming controls
-     ADD_STATUS_SUFFIX = os.environ.get("ADD_STATUS_SUFFIX", "false").lower() == "true"
- 
-     # Profile usage and startup behavior
-     USE_PROFILE = os.environ.get("USE_EDGE_PROFILE", "true").lower() == "true"
-     CLOSE_EDGE_PROCESSES = os.environ.get("CLOSE_EDGE_PROCESSES", "true").lower() == "true"
- 
-+    # Fallback behavior (enabled by default)
-+    PR_FALLBACK_ENABLED = os.environ.get("PR_FALLBACK_ENABLED", "true").lower() == "true"
-+
-+    # PR (Requisition) link detection from PO page
-+    PR_LINK_CSS_SELECTORS = [
-+        "#order_header_requisition a",
-+        "a[href*='requisition_headers']",
-+        "a[href*='/requisitions/']",
-+        "a[href*='requisition']",
-+    ]
-+    PR_LINK_XPATH_CANDIDATES = [
-+        "//*[@id='order_header_requisition_header']//a[contains(@href,'requisition')]",
-+        "//label[contains(.,'Requisition')]/following::a[contains(@href,'requisition')][1]",
-+        "//a[starts-with(normalize-space(), 'PR') and contains(@href,'requisition')]",
-+    ]
-```
-```diff
---- src/core/downloader.py
-+++ src/core/downloader.py
-@@ class Downloader:
-     def download_attachments_for_po(self, po_number: str) -> dict:
-@@
--        attachments = self._find_attachments()
--        supplier = self._extract_supplier_name()
--        if not attachments:
--            msg = "No attachments found."
--            print(f"   ✅ {msg}")
--            return {
--                'success': True,
--                'message': msg,
--                'supplier_name': supplier or '',
--                'attachments_found': 0,
--                'attachments_downloaded': 0,
--                'coupa_url': url,
--                'attachment_names': [],
--            }
-+        attachments = self._find_attachments()
-+        supplier = self._extract_supplier_name()
-+        if not attachments and Config.PR_FALLBACK_ENABLED:
-+            print("   📭 No attachments on PO; trying PR (Requisition) page…")
-+            pr_url = self._navigate_to_pr_from_po()
-+            if pr_url:
-+                print(f"   🔗 Navigated to PR: {pr_url}")
-+                attachments = self._find_attachments()
-+                if attachments:
-+                    url = pr_url  # report actual page where attachments were found
-+                else:
-+                    print("   ℹ️ No attachments on PR page either.")
-+            else:
-+                print("   ℹ️ Could not locate PR link from PO page.")
-+
-+        if not attachments:
-+            msg = "No attachments found."
-+            print(f"   ✅ {msg}")
-+            return {
-+                'success': True,
-+                'message': msg,
-+                'supplier_name': supplier or '',
-+                'attachments_found': 0,
-+                'attachments_downloaded': 0,
-+                'coupa_url': url,
-+                'attachment_names': [],
-+            }
-@@
-         else:
-             msg = f"Failed to download any of the {total_attachments} attachments."
-             print(f"   ❌ {msg}")
-             return {
-                 'success': False,
-                 'message': msg,
-                 'supplier_name': supplier or '',
-                 'attachments_found': total_attachments,
-                 'attachments_downloaded': 0,
-                 'coupa_url': url,
-                 'attachment_names': names_list,
-             }
-+
-+    def _navigate_to_pr_from_po(self) -> Optional[str]:
-+        """Try to find and navigate to the PR (Requisition) page from a PO.
-+
-+        Returns the PR URL if navigation succeeded (or href discovered), otherwise None.
-+        """
-+        try:
-+            # 1) Try CSS selectors
-+            for sel in getattr(Config, 'PR_LINK_CSS_SELECTORS', []) or []:
-+                try:
-+                    links = self.driver.find_elements(By.CSS_SELECTOR, sel)
-+                except Exception:
-+                    links = []
-+                for a in links:
-+                    href = (a.get_attribute('href') or '').strip()
-+                    if href:
-+                        self.driver.get(href)
-+                        return href
-+
-+            # 2) Try XPath candidates
-+            for xp in getattr(Config, 'PR_LINK_XPATH_CANDIDATES', []) or []:
-+                try:
-+                    as_ = self.driver.find_elements(By.XPATH, xp)
-+                except Exception:
-+                    as_ = []
-+                for a in as_:
-+                    href = (a.get_attribute('href') or '').strip()
-+                    if href:
-+                        self.driver.get(href)
-+                        return href
-+        except Exception:
-+            pass
-+        return None
-```
+Fora de escopo:
+- Refatorações amplas do `BrowserManager` ou do gerenciamento paralelo de abas/processos.
+- Mudanças em fluxos de CSV, feedback loop ou pipeline Playwright.
+- Revisão de nomenclatura de pastas ou reorganização do diretório `Downloads`.
 
-## Acceptance Criteria
-- If PO has attachments: existing behavior remains unchanged (no PR navigation).
-- If PO has zero attachments and PR fallback is enabled:
-  - Downloader attempts to navigate to the PR page via the “Requisition” link.
-  - If PR contains attachments, they are discovered and download clicks are issued using the same logic.
-  - Files save into the same PO folder (unchanged download directory).
-  - Result counters reflect the PR attachments (`attachments_found`/`attachments_downloaded` > 0) and `coupa_url` reports the page where attachments were found (PR URL when applicable).
-- If neither PO nor PR has attachments, status remains “NO_ATTACHMENTS” with message “No attachments found.”
-- If the PR link is not present or navigation fails, the tool gracefully returns “No attachments found.” without crashing.
+## Arquivos afetados
 
-## Minimal Manual Tests
-1) PO with attachments
-   - Input a PO known to have attachments in the PO page.
-   - Expect: No fallback; counts > 0; folder contains downloaded files.
-2) PO without attachments, PR with attachments
-   - Input a PO with zero attachments but corresponding PR has files.
-   - Expect: Log shows fallback to PR; counts > 0; files downloaded to the PO folder; `coupa_url` matches the PR URL.
-3) PO and PR without attachments
-   - Input a PO where neither PO nor PR has files.
-   - Expect: “No attachments found.”, status “NO_ATTACHMENTS”, no files.
-4) Missing PR link
-   - Use a test PO page variant lacking the “Requisition” link.
-   - Expect: Graceful message, no crash, still “No attachments found.”
+- `src/core/downloader.py`: adicionar lógica de fallback, logs e coleta da URL final.
+- `src/core/config.py`: incluir flag `PR_FALLBACK_ENABLED` e listas de seletores CSS/XPath para localizar o link de requisição.
+- `src/core/browser.py` (se necessário): apenas caso surjam ajustes de utilitários de navegação ou waits reaproveitados pela nova rotina.
+- `docs/ADR` (avaliar): somente se a estratégia de fallback alterar decisões arquiteturais prévias.
 
-## Suggested Commit Message and Branch
-- Plan branch: `plan/28-pr-attachments-fallback`
-- Impl branch: `feat/28-pr-attachments-fallback`
-- Plan commit: `docs(pr-plan): PR 28 — fallback to PR attachments when PO has none`
+## Critérios de aceitação
 
-## Checklist
-- [x] Objective and Scope are clear and limited.
-- [x] Affected files listed.
-- [x] Pseudodiff (small, readable, representative of the approach).
-- [x] Acceptance criteria and minimal manual tests.
-- [x] Suggested commit message and branch name.
+- Quando a PO possuir anexos, o fluxo permanece idêntico ao atual: não deve haver navegação extra nem regressão em contadores ou mensagens.
+- Para uma PO sem anexos, com fallback habilitado e link de PR disponível:
+  - O sistema deve abrir a página de PR, reutilizar o método `_find_attachments` e acionar o download com a mesma robustez (cliques, JavaScript fallback, etc.).
+  - `attachments_found` e `attachments_downloaded` refletem a quantidade obtida na PR, e `coupa_url` retorna a URL da página onde os anexos foram encontrados.
+  - A pasta final permanece a mesma criada antes do fallback, incluindo eventuais sufixos aplicados no encerramento (`_COMPLETED`, `_NO_ATTACHMENTS`, etc.).
+- Caso a PR também não tenha anexos ou o link não seja localizado, o fluxo retorna "No attachments found" com `success=True`, sem lançar exceções e com mensageria clara no log.
+- O fallback pode ser desativado via variável de ambiente `PR_FALLBACK_ENABLED=false`, restabelecendo o comportamento anterior.
+
+## Testes manuais
+
+- Executar `poetry run python -m src.Core_main` com uma planilha que contenha:
+  - PO com anexos próprios (verificar ausência de fallback e contadores).
+  - PO sem anexos, mas com PR contendo arquivos (validar downloads, renomeação da pasta e contadores > 0).
+  - PO sem anexos e PR inexistente ou também vazia (confirmar retorno "No attachments found").
+- Repetir o cenário principal com `PR_FALLBACK_ENABLED=false` para garantir que o recurso é opcional e que não há navegação extra.
+- Monitorar o CSV de controle em `data/control` e os logs gerados para certificar que não houve duplicidade de registros ou travamentos entre processos.
+
+## Riscos e mitigação
+
+- **Seletores frágeis para localizar a PR**: mitigar utilizando múltiplos seletores configuráveis e validando em ambientes diferentes antes do rollout.
+- **Latência extra na troca de página**: incorporar logs claros e considerar um timeout curto para evitar travar workers quando o link não existe.
+- **Downloads duplicados**: garantir que, ao retornar para a PO ou reutilizar `_find_attachments`, não haja reprocessamento quando a PO já tinha anexos.
+- **Impacto em execuções paralelas**: validar que a navegação adicional não interfere na limpeza do `BrowserManager` nem em bloqueios do EdgeProfile (workers já desabilitam perfil compartilhado por padrão).
+
+## Notas adicionais
+
+- A implementação deve respeitar o padrão de logs em inglês presente no `Downloader` (ex.: `print("No attachments found")`), apenas acrescentando mensagens focadas no fallback com ícones já utilizados.
+- Caso a busca de PR exija novas dependências (p.ex. BeautifulSoup), será necessária reavaliação, mas a intenção é permanecer apenas com Selenium.
+- O design detalhado desta proposta está documentado em `PR_PLANS/28-pr-attachments-fallback-design-doc.md` e deve ser lido antes da execução.
+
+## Dependências
+
+- Bloqueada pela PR 53 — endurecimento da detecção de página de erro de PO.

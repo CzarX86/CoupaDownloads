@@ -65,8 +65,21 @@ class Config:
         "You are not authorized",
         "Access denied",
         "The page you were looking for doesn't exist",
+        "Desculpe, não encontramos o que você procurava",
     ]
-    ERROR_PAGE_CHECK_TIMEOUT = int(os.environ.get("ERROR_PAGE_CHECK_TIMEOUT", "4"))
+    ERROR_PAGE_CSS_SELECTORS = [
+        "div.flash_error",
+        "div.flash-error",
+        "div.notice",
+        "div#error_explanation",
+    ]
+    ERROR_PAGE_XPATH_SELECTORS = [
+        "//div[contains(@class,'flash') and contains(.,'Oops')]",
+        "//h1[contains(.,'Oops') or contains(.,'Sorry')]",
+    ]
+    ERROR_PAGE_CHECK_TIMEOUT = float(os.environ.get("ERROR_PAGE_CHECK_TIMEOUT", "2"))
+    ERROR_PAGE_READY_CHECK_TIMEOUT = float(os.environ.get("ERROR_PAGE_READY_CHECK_TIMEOUT", "1"))
+    ERROR_PAGE_WAIT_POLL = float(os.environ.get("ERROR_PAGE_WAIT_POLL", "0.2"))
     EARLY_ERROR_CHECK_BEFORE_READY = os.environ.get("EARLY_ERROR_CHECK_BEFORE_READY", "true").lower() == "true"
 
     # Output verbosity controls
