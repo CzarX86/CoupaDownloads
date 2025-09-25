@@ -45,10 +45,9 @@ poetry run python -m src.Core_main
 ```
 
 ### Feedback and training loop
-- 🪄 **Guided wizard** — `poetry run python tools/feedback_cli.py wizard`
-  - Launches an interactive, English-only walkthrough for preparing review CSVs, ingesting annotations, evaluating metrics, training Sentence Transformers, and exporting Label Studio tasks.
-- ⚙️ **Classic CLI** — `poetry run python tools/feedback_cli.py --help`
-  - Ideal for automation; uses the same handlers that the wizard calls behind the scenes.
+- 🧭 **PDF Training Wizard** — start the FastAPI backend (`PYTHONPATH=src poetry run python -m server.pdf_training_app.main`) and the SPA (`cd src/spa && npm run dev`) to upload PDFs, acompanhar o pré-processamento, anotar direto no viewer e gerar datasets/treinamentos.
+- 📡 **API endpoints** — `curl http://localhost:8008/api/pdf-training/jobs?resource_type=document&resource_id=<id>` monitora jobs de análise; use `/api/pdf-training/documents` para gerenciar uploads e `/api/pdf-training/training-runs` para disparar treinamentos.
+- 🪦 **Legacy CLI** — `tools/legacy/feedback_cli.py` permanece apenas como stub informativo. Todo o fluxo de treinamento/feedback ocorre pelo backend + SPA ou chamadas REST.
 
 ## 📚 User Guide
 For a complete end-to-end manual (installation, configuration, running, outputs, troubleshooting), see:
@@ -153,4 +152,4 @@ Notes:
 - Implementation reports: `docs/reports/IMPLEMENTATION_REPORT.md`, `docs/reports/THREAD_IMPLEMENTATION_REPORT.md`
 - Guia GitHub MCP (Codex VS Code): `docs/howto/github_mcp_codex_vscode.md`
 - Blueprint de refatoração e SPA: `docs/refactor/pr32-refactor-spa-blueprint.md`
-- Wizard de treinamento guiado: `docs/cli/training_wizard.md`
+- Fluxo PDF-first (passo a passo): `docs/HITL_FEEDBACK_WORKFLOW.md`

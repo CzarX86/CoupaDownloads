@@ -188,25 +188,25 @@ def action_review_tools() -> None:
         out_csv = _ask("Arquivo de saída (review.csv)", str(SUBPROJECT_ROOT / "reports" / "feedback" / "review.csv"))
         fields = _ask("Campos (normalizados, separados por vírgula)", "contract_name,contract_type,sow_value_eur,pwo_number,managed_by")
         sample = _ask_int("Amostra (linhas)", 30)
-        os.system(f"python tools/feedback_cli.py prepare --pred-csv '{pred_glob}' --out '{out_csv}' --fields '{fields}' --sample {sample}")
+        os.system(f"python tools/legacy/feedback_cli.py prepare --pred-csv '{pred_glob}' --out '{out_csv}' --fields '{fields}' --sample {sample}")
     elif choice == "2":
         review_csv = _ask("CSV revisado (review.csv)", str(SUBPROJECT_ROOT / "reports" / "feedback" / "review.csv"))
         out_dir = _ask("Diretório de saída (datasets)", str(SUBPROJECT_ROOT / "datasets"))
-        os.system(f"python tools/feedback_cli.py ingest --review-csv '{review_csv}' --out-dir '{out_dir}'")
+        os.system(f"python tools/legacy/feedback_cli.py ingest --review-csv '{review_csv}' --out-dir '{out_dir}'")
     elif choice == "3":
         review_csv = _ask("CSV revisado (review.csv)", str(SUBPROJECT_ROOT / "reports" / "feedback" / "review.csv"))
         report_dir = _ask("Diretório de relatórios", str(SUBPROJECT_ROOT / "reports" / "feedback"))
-        os.system(f"python tools/feedback_cli.py eval --review-csv '{review_csv}' --report-dir '{report_dir}'")
+        os.system(f"python tools/legacy/feedback_cli.py eval --review-csv '{review_csv}' --report-dir '{report_dir}'")
     elif choice == "4":
         dataset = _ask("Dataset de pares (st_pairs.jsonl)", str(SUBPROJECT_ROOT / "datasets" / "st_pairs.jsonl"))
         output = _ask("Saída do modelo ST", str(SUBPROJECT_ROOT / "models" / "st_custom_v1"))
         epochs = _ask_int("Épocas", 2)
         bs = _ask_int("Batch size", 16)
-        os.system(f"python tools/feedback_cli.py train-st --dataset '{dataset}' --output '{output}' --epochs {epochs} --batch-size {bs}")
+        os.system(f"python tools/legacy/feedback_cli.py train-st --dataset '{dataset}' --output '{output}' --epochs {epochs} --batch-size {bs}")
     elif choice == "5":
         review_csv = _ask("CSV revisado (review.csv)", str(SUBPROJECT_ROOT / "reports" / "feedback" / "review.csv"))
         out_json = _ask("Saída (tasks.json)", str(SUBPROJECT_ROOT / "reports" / "feedback" / "tasks.json"))
-        os.system(f"python tools/feedback_cli.py export-labelstudio --review-csv '{review_csv}' --out '{out_json}'")
+        os.system(f"python tools/legacy/feedback_cli.py export-labelstudio --review-csv '{review_csv}' --out '{out_json}'")
     input("\nPressione Enter para voltar ao menu...")
 
 

@@ -327,7 +327,7 @@ def prepare_pdf_annotation_project(
         "3. Create a project and import `config.xml` as the labeling interface.\n"
         "4. Import `tasks.json` and configure a local storage pointing to the `pdfs/` folder.\n"
         "5. Annotate the tasks, export as JSON, e.g. `export.json`.\n"
-        "6. Merge back using `poetry run python tools/feedback_cli.py annotate-pdf ingest --export-json export.json --review-csv <csv>`.\n"
+        "6. (Legacy) Este pacote era ingerido via `feedback_cli`. Hoje o fluxo oficial é o upload direto de PDFs no wizard; use os artefatos acima apenas para reproduzir históricos.\n"
     )
     readme_path.write_text(readme_content, encoding="utf-8")
 

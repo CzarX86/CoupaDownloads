@@ -5,7 +5,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class JobStatus(str, Enum):
@@ -65,10 +65,6 @@ class DocumentDetail(BaseModel):
     annotations: List[AnnotationDetail]
 
 
-class DocumentListResponse(BaseModel):
-    items: List[DocumentSummary]
-
-
 class JobDetail(BaseModel):
     id: str
     job_type: JobType
@@ -97,15 +93,52 @@ class TrainingRunCreateRequest(BaseModel):
     document_ids: Optional[List[str]] = Field(default=None, description="Subset of document IDs to include in the run")
     triggered_by: Optional[str] = Field(default=None, description="Identifier for the user/process triggering the run")
 
-    @validator('document_ids')
-    def validate_document_ids(cls, v):
-        if v is not None:
-            if len(v) == 0:
-                raise ValueError('document_ids cannot be empty list')
-            for doc_id in v:
-                if not isinstance(doc_id, str) or len(doc_id) != 32:
-                    raise ValueError(f'Invalid document ID format: {doc_id}')
-        return v
+    @field_validator("document_ids")
+    @classmethod
+    def _validate_document_ids(cls, value: Optional[List[str]]) -> Optional[List[str]]:
+        if value is None:
+            return None
+        cleaned: List[str] = []
+        for doc_id in value:
+            if not isinstance(doc_id, str):
+                raise TypeError("document_ids must contain string identifiers")
+            stripped = doc_id.strip()
+            if not stripped:
+                raise ValueError("document_ids cannot include empty identifiers")
+            cleaned.append(stripped)
+        return cleaned
+
+
+class LLMSupportRequest(BaseModel):
+    fields: Optional[List[str]] = Field(default=None, description="Optional subset of normalized field names to critique")
+    provider: Optional[str] = Field(default=None, description="LLM provider identifier (e.g. deepseek, openai)")
+    model: Optional[str] = Field(default=None, description="Model name to use for the LLM helper")
+    dry_run: Optional[bool] = Field(default=None, description="Force dry-run mode regardless of environment settings")
+
+
+class LLMFieldSuggestion(BaseModel):
+    field: str
+    decision: str
+    suggested: Optional[str] = None
+    rationale: Optional[str] = None
+    confidence: Optional[float] = None
+
+
+class LLMSupportRow(BaseModel):
+    row_id: str
+    suggestions: List[LLMFieldSuggestion]
+    usage: Optional[Dict[str, Any]] = None
+    cost_usd: Optional[float] = None
+
+
+class LLMSupportResponse(BaseModel):
+    document_id: str
+    generated_at: datetime
+    provider: str
+    model: str
+    dry_run: bool
+    fields: List[str]
+    rows: List[LLMSupportRow]
 
 
 class HealthResponse(BaseModel):

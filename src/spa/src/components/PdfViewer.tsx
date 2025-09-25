@@ -4,17 +4,23 @@ import { Document, Page, pdfjs } from 'react-pdf';
 import 'react-pdf/dist/Page/AnnotationLayer.css';
 import 'react-pdf/dist/Page/TextLayer.css';
 import { fetchPdfContent } from '../api/pdfTraining';
+import { useDocumentJobs } from '../hooks/useJobPolling';
 
 // Set up PDF.js worker source
 pdfjs.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.js`;
 
 interface PdfViewerProps {
   documentId: string | null;
+  showJobStatus?: boolean;
 }
 
-const PdfViewer: React.FC<PdfViewerProps> = ({ documentId }) => {
+const PdfViewer: React.FC<PdfViewerProps> = ({ documentId, showJobStatus = false }) => {
   const [numPages, setNumPages] = useState<number | null>(null);
   const [pageNumber, setPageNumber] = useState<number>(1);
+
+  const { activeJob } = useDocumentJobs(documentId, {
+    enabled: showJobStatus && Boolean(documentId),
+  });
 
   const { data: pdfUrl, isLoading, isError, error } = useQuery({
     queryKey: ['pdfContent', documentId],
@@ -37,8 +43,23 @@ const PdfViewer: React.FC<PdfViewerProps> = ({ documentId }) => {
   }
 
   if (isLoading) {
-    return <div className="pdf-viewer-loading">Loading PDF...</div>;
-  };
+    if (showJobStatus && activeJob) {
+      return (
+        <div className="pdf-viewer-loading" aria-live="polite">
+          <span className="processing-status__spinner" aria-hidden="true" data-testid="pdf-loading-spinner" />
+          <div>
+            <strong>Analyzing document…</strong>
+            <div>{activeJob.detail || 'Preparing annotation assets before rendering the PDF.'}</div>
+          </div>
+        </div>
+      );
+    }
+    return (
+      <div className="pdf-viewer-loading" aria-live="polite" data-testid="pdf-loading-spinner">
+        Loading PDF...
+      </div>
+    );
+  }
 
   if (isError) {
     return <div className="pdf-viewer-error">Error loading PDF: {(error as Error).message}</div>;

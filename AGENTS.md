@@ -3,7 +3,7 @@
 ## Visão Geral do Projeto
 - **CoupaDownloads** automatiza o download de anexos e relatórios no Coupa, validando POs a partir de planilhas e gerando arquivos consolidados.
 - Código em **Python 3.12** gerenciado via **Poetry**, combinando Selenium, Playwright, processamento de CSV/Excel (pandas/polars) e pipelines de feedback com Sentence Transformers.
-- Entrypoints principais: `src/Core_main.py` (fluxo principal) e `tools/feedback_cli.py` (rotinas de treinamento e feedback).
+- Entrypoints principais: `src/Core_main.py` (fluxo principal) e a dupla backend FastAPI (`server/pdf_training_app`) + SPA (`src/spa`) para o fluxo de treinamento/feedback via UI.
 - A estrutura esperada: dados em `data/`, scripts auxiliares em `tools/`, recursos web em `drivers/` e documentação complementar em `docs/`.
 
 ## Setup Rápido
@@ -23,8 +23,8 @@ poetry run playwright install  # instala navegadores usados por Playwright, se n
 ### Execução rápida
 ```bash
 poetry run python -m src.Core_main         # fluxo principal de download
-poetry run python tools/feedback_cli.py wizard  # assistente guiado para ciclo de feedback
-poetry run python tools/feedback_cli.py --help   # CLI clássica com automações
+PYTHONPATH=src poetry run python -m server.pdf_training_app.main  # sobe o backend
+cd src/spa && npm run dev                                        # inicia o wizard de anotações PDF
 ```
 
 ## Workflow de Desenvolvimento (Proposal -> Design -> Report)
@@ -91,7 +91,7 @@ Para capturar a **memória de longo prazo do projeto**, utilizamos Architecture 
 ## Testes e QA
 - Suite principal: `poetry run pytest` (use `-k`, `-m` ou `--maxfail=1` para focar em subconjuntos quando necessário).
 - Para testes assíncronos, garanta que `pytest-asyncio` esteja configurado via marcadores; siga padrões existentes.
-- Ao alterar pipelines de feedback, valide com `poetry run python tools/feedback_cli.py wizard` e gere relatórios sob `reports/`.
+- Ao alterar pipelines de feedback, suba o backend (`PYTHONPATH=src poetry run python -m server.pdf_training_app.main`), inicie o SPA (`cd src/spa && npm run dev`) e valide o fluxo completo de upload/anotação diretamente na UI.
 - Se modificar integração Selenium/Playwright, execute um fluxo completo em ambiente controlado e capture evidências.
 
 ## Segurança e Dados

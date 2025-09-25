@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import asyncio
 import json
 import os
 import sys
@@ -12,6 +13,8 @@ from types import SimpleNamespace
 from typing import Dict, List
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 SRC_PATH = PROJECT_ROOT / "src"
 if str(SRC_PATH) not in sys.path:
     sys.path.insert(0, str(SRC_PATH))
@@ -56,6 +59,7 @@ def service_context() -> SimpleNamespace:
         db_path = base_path / "app.db"
         os.environ["PDF_TRAINING_STORAGE_ROOT"] = str(storage_root)
         os.environ["PDF_TRAINING_DB_URL"] = f"sqlite+aiosqlite:///{db_path}"
+        os.environ["PDF_TRAINING_FORCE_SYNC_JOBS"] = "1"
 
         ctx = _reload_modules()
         try:
@@ -135,6 +139,47 @@ async def test_dataset_builder(service_context: SimpleNamespace) -> None:
 
 
 @pytest.mark.asyncio
+async def test_get_document_content_path_success(service_context: SimpleNamespace) -> None:
+    services = service_context.services
+
+    upload = _make_upload_file(b"%PDF-1.4\n1 0 obj\n<<>>\nendobj\n", "sample.pdf", "application/pdf")
+    document_detail = await services.create_document(upload, {"ingested_by": "tests"})
+
+    content_path = await services.get_document_content_path(document_detail.document.id)
+    assert content_path.exists()
+    assert content_path.suffix == ".pdf"
+
+
+@pytest.mark.asyncio
+async def test_get_document_content_path_missing_document(service_context: SimpleNamespace) -> None:
+    services = service_context.services
+
+    with pytest.raises(ValueError, match="Document not found"):
+        await services.get_document_content_path("non-existent")
+
+
+@pytest.mark.asyncio
+async def test_get_document_content_path_missing_file(service_context: SimpleNamespace) -> None:
+    repository = service_context.repository
+
+    async with service_context.db_session.async_session() as session:
+        await repository.create_document(
+            session,
+            document_id="doc-missing",
+            filename="missing.pdf",
+            content_type="application/pdf",
+            storage_path=str(service_context.storage_root / "ghost.pdf"),
+            checksum="abc",
+            size_bytes=0,
+            extra_metadata={},
+        )
+        await session.commit()
+
+    with pytest.raises(ValueError, match="PDF file not found"):
+        await service_context.services.get_document_content_path("doc-missing")
+
+
+@pytest.mark.asyncio
 async def test_document_flow_end_to_end(service_context: SimpleNamespace) -> None:
     services = service_context.services
     job_manager = service_context.job_manager
@@ -156,8 +201,10 @@ async def test_document_flow_end_to_end(service_context: SimpleNamespace) -> Non
     analysis_info = analysis_payload.get("analysis") or {}
     tasks_path = Path(analysis_info.get("tasks_path"))
     assert tasks_path.exists()
-    config_path = Path(analysis_info.get("config"))
+    config_path = Path(analysis_info.get("config_path"))
     assert config_path.exists()
+    manifest_path = Path(analysis_info.get("manifest_path"))
+    assert manifest_path.exists()
 
     tasks = json.loads(tasks_path.read_text(encoding="utf-8"))
     export_payload = _build_export_payload(tasks)
@@ -200,3 +247,63 @@ async def test_document_flow_end_to_end(service_context: SimpleNamespace) -> Non
     jobs = await services.list_jobs()
     job_types = {job.job_type for job in jobs}
     assert {"ANALYSIS", "TRAINING"}.issubset(job_types)
+
+
+@pytest.mark.asyncio
+async def test_llm_support_generates_payload(service_context: SimpleNamespace) -> None:
+    services = service_context.services
+    job_manager = service_context.job_manager
+
+    upload = _make_upload_file(b"%PDF-1.4\n1 0 obj\n<<>>\nendobj\n", "llm.pdf", "application/pdf")
+    document_detail = await services.create_document(upload, {"ingested_by": "llm-test"})
+
+    analysis_job = await services.start_analysis(document_detail.document.id)
+    await job_manager.wait_until_complete(analysis_job.job_id, timeout=5)
+
+    llm_job = await services.start_llm_support(document_detail.document.id, dry_run=True)
+    completed_llm = await job_manager.wait_until_complete(llm_job.job_id, timeout=5)
+    assert completed_llm.status == "SUCCEEDED"
+
+    payload = completed_llm.payload or {}
+    support_path = payload.get("support_path")
+    assert support_path, "LLM support payload should expose the artifact path"
+    assert Path(support_path).exists()
+
+    support_payload = await services.get_llm_support_payload(document_detail.document.id)
+    assert support_payload["document_id"] == document_detail.document.id
+    assert isinstance(support_payload["rows"], list)
+
+
+@pytest.mark.asyncio
+async def test_llm_support_handles_empty_manifest(service_context: SimpleNamespace) -> None:
+    services = service_context.services
+    job_manager = service_context.job_manager
+    repository = service_context.repository
+    db_session = service_context.db_session
+
+    upload = _make_upload_file(b"%PDF-1.4\n1 0 obj\n<<>>\nendobj\n", "empty.pdf", "application/pdf")
+    document_detail = await services.create_document(upload, {"ingested_by": "llm-empty"})
+
+    analysis_job = await services.start_analysis(document_detail.document.id)
+    await job_manager.wait_until_complete(analysis_job.job_id, timeout=5)
+
+    async with db_session.async_session() as session:  # type: ignore[attr-defined]
+        document = await repository.get_document(session, document_detail.document.id)
+        annotation = document.annotations[0]
+
+    from server.db.storage import annotation_analysis_dir
+
+    manifest_path = annotation_analysis_dir(annotation.id) / "analysis.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["rows"] = []
+    manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+
+    llm_job = await services.start_llm_support(document_detail.document.id, dry_run=True)
+    completed_llm = await job_manager.wait_until_complete(llm_job.job_id, timeout=5)
+
+    assert completed_llm.status == "SUCCEEDED"
+    payload = completed_llm.payload or {}
+    assert payload.get("rows") == []
+
+    cached_payload = await services.get_llm_support_payload(document_detail.document.id)
+    assert cached_payload["rows"] == []

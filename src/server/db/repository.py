@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Iterable, Optional, Sequence
+from typing import Any, Iterable, Optional, Sequence
 
 from sqlalchemy import select, update, func
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -247,10 +247,36 @@ async def get_job(session: AsyncSession, job_id: str) -> Optional[AsyncJob]:
     return result.scalars().first()
 
 
-async def list_jobs(session: AsyncSession) -> Sequence[AsyncJob]:
+async def list_jobs(
+    session: AsyncSession,
+    *,
+    resource_type: Optional[str] = None,
+    resource_id: Optional[str] = None,
+) -> Sequence[AsyncJob]:
     stmt = select(AsyncJob).order_by(AsyncJob.created_at.desc())
+    if resource_type:
+        stmt = stmt.where(AsyncJob.resource_type == resource_type)
+    if resource_id:
+        stmt = stmt.where(AsyncJob.resource_id == resource_id)
     result = await session.execute(stmt)
     return result.scalars().all()
+
+
+async def update_job_detail(
+    session: AsyncSession,
+    job_id: str,
+    *,
+    detail: Optional[str] = None,
+    payload: Optional[dict] = None,
+) -> None:
+    values: dict[str, Any] = {"updated_at": datetime.now(timezone.utc)}
+    if detail is not None:
+        values["detail"] = detail
+    if payload is not None:
+        values["payload"] = payload
+    await session.execute(
+        update(AsyncJob).where(AsyncJob.id == job_id).values(**values)
+    )
 
 
 async def get_training_run(session: AsyncSession, training_run_id: str) -> Optional[TrainingRun]:

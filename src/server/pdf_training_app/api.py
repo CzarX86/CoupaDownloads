@@ -5,7 +5,7 @@ import json
 from datetime import datetime, timezone
 from typing import List, Optional
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Body, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from sqlalchemy import select, func
 
@@ -17,20 +17,25 @@ from .models import (
     AnnotationDetail,
     DocumentDetail,
     DocumentSummary,
-    DocumentListResponse,
     DocumentUploadRequest,
+    Entity,
     ErrorResponse,
     HealthResponse,
     JobDetail,
     JobListResponse,
     JobResponse,
+    JobType,
+    LLMSupportRequest,
+    LLMSupportResponse,
     SystemStatusResponse,
     TrainingRunCreateRequest,
 )
 from .services import (
     create_document,
     create_training_run,
+    get_document_content_path,
     get_document_detail,
+    get_llm_support_payload,
     get_training_run_dataset,
     get_training_run_model_path,
     get_job,
@@ -39,6 +44,7 @@ from .services import (
     list_training_runs,
     list_jobs,
     start_analysis,
+    start_llm_support,
     get_document_entities,
 )
 
@@ -61,8 +67,7 @@ async def upload_document(
 
 @router.get("/documents", response_model=List[DocumentSummary])
 async def list_documents_endpoint() -> List[DocumentSummary]:
-    documents = await list_documents()
-    return documents
+    return await list_documents()
 
 
 @router.get("/documents/{document_id}", response_model=DocumentDetail)
@@ -96,6 +101,41 @@ async def analyze_document_endpoint(document_id: str) -> JobResponse:
         return await start_analysis(document_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post(
+    "/documents/{document_id}/support/llm",
+    response_model=JobResponse,
+)
+async def start_llm_support_endpoint(
+    document_id: str,
+    payload: Optional[LLMSupportRequest] = Body(None),
+) -> JobResponse:
+    try:
+        request = payload or LLMSupportRequest()
+        return await start_llm_support(
+            document_id,
+            fields=request.fields,
+            provider=request.provider,
+            model=request.model,
+            dry_run=request.dry_run,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get(
+    "/documents/{document_id}/support/llm",
+    response_model=LLMSupportResponse,
+)
+async def get_llm_support_endpoint(document_id: str) -> LLMSupportResponse:
+    try:
+        payload = await get_llm_support_payload(document_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return LLMSupportResponse(**payload)
 
 
 @router.post(
@@ -144,14 +184,22 @@ async def get_training_run_model_endpoint(run_id: str):
 
 
 @router.get("/jobs", response_model=JobListResponse)
-async def list_jobs_endpoint() -> JobListResponse:
-    jobs = await list_jobs()
+async def list_jobs_endpoint(
+    resource_type: Optional[str] = None,
+    resource_id: Optional[str] = None,
+) -> JobListResponse:
+    jobs = await list_jobs(resource_type=resource_type, resource_id=resource_id)
+    if resource_type is None and resource_id is None:
+        jobs = [job for job in jobs if job.job_type == JobType.training]
     return JobListResponse(jobs=jobs)
 
 
 @router.get("/jobs/{job_id}", response_model=JobDetail)
 async def get_job_endpoint(job_id: str) -> JobDetail:
-    job = await get_job(job_id)
+    try:
+        job = await get_job(job_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     return job

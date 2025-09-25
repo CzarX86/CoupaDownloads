@@ -37,7 +37,7 @@ flowchart LR
 - **Agendamento e monitoramento**: AgentOS oferece hooks REST para acionar execuções e acompanhar status, substituindo scripts ad-hoc ou crons externos.
 
 ### 4.2 Feedback loop e anotações
-- **Memória estruturada**: Agno persiste histórico de chamadas e mensagens; isso permitiria manter contexto de revisões entre `tools/feedback_cli.py` e novas interações.
+- **Memória estruturada**: Agno persiste histórico de chamadas e mensagens; isso permitiria manter contexto de revisões entre `tools/legacy/feedback_cli.py` e novas interações.
 - **Human-in-the-loop**: o runtime lida com checkpoints e confirmações humanas, combinando bem com Label Studio e pipelines de QA descritos em `docs/feedback/`.
 - **Experimentação guiada**: agentes podem aplicar heurísticas (ex.: selecionar subconjunto de POs problemáticos) antes de chamar o wizard ou Label Studio, elevando a precisão das correções.
 
