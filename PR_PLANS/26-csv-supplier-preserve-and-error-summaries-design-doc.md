@@ -5,6 +5,10 @@
 - Responsáveis: TBD
 - Observações: Baseado no plano `26-csv-supplier-preserve-and-error-summaries-PR.md`.
 
+## Estado da revisão (2025-09-25)
+
+- [ ] Implementado no código-base. CSV/Excel continuam sem coluna `L1 UU Supplier Name`, `Downloader` não atribui prefixos de sucesso/falha aos anexos e a sumarização de erros permanece baseada em mensagens longas, validando que o design segue pendente.
+
 ## Resumo executivo
 TODO detalhar objetivo.
 

@@ -3,7 +3,12 @@
 - Implementação: pending
 - Data: 2025-09-23
 - Responsáveis: TBD
-- Observações: 
+- Observações:
+
+
+## Estado da revisão (2025-09-25)
+
+- [ ] Implementado no código-base. O repositório ainda não possui `.github/workflows/ci.yml`, portanto não há automação de CI ativa no GitHub Actions.
 
 
 ## Objective

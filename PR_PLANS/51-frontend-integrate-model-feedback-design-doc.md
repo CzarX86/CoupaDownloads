@@ -5,6 +5,10 @@
 - Responsáveis: Gemini
 - Observações: Este documento detalha o design para o PR 51, que implementa a integração do feedback do modelo no frontend. Depende do PR 49 e PR 50.
 
+## Estado da revisão (2025-09-25)
+
+- [ ] Implementado no código-base. Não há componentes de UI enviando feedback ao backend nem funções em `pdfTraining.ts` para este endpoint, logo a integração permanece pendente.
+
 ## Resumo executivo
 
 Este documento descreve o design para integrar a funcionalidade de acionamento do feedback imediato do modelo na interface do usuário do frontend. Após realizar anotações interativas, o usuário poderá enviar essas informações para o backend, que acionará um processo de fine-tuning do modelo. O objetivo é fechar o ciclo de feedback humano-no-loop, permitindo que as correções do usuário melhorem diretamente as predições futuras do modelo.

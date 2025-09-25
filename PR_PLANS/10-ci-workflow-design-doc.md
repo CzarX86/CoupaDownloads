@@ -5,6 +5,10 @@
 - Responsáveis: TBD
 - Observações: Baseado no plano `10-ci-workflow-PR.md`.
 
+## Estado da revisão (2025-09-25)
+
+- [ ] Implementado no código-base. Ainda não existe diretório `.github/workflows/` com o pipeline de CI, logo este design segue pendente de execução.
+
 ## Resumo executivo
 TODO detalhar objetivo.
 

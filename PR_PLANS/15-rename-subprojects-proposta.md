@@ -3,7 +3,12 @@
 - Implementação: pending
 - Data: 2025-09-23
 - Responsáveis: TBD
-- Observações: 
+- Observações:
+
+
+## Estado da revisão (2025-09-25)
+
+- [ ] Implementado no código-base. A árvore do repositório ainda mantém os diretórios `MyScript/` e `embeddinggemma_feasibility/` na raiz, sem a estrutura `apps/` e sem shims de importação documentados, indicando que a renomeação não foi aplicada.
 
 
 ## Objective

@@ -5,6 +5,10 @@
 - Responsáveis: Gemini
 - Observações: Este documento detalha o design para o PR 47, que implementa a exibição de entidades pré-processadas sobre o PDF. Depende do PR 45 e PR 46.
 
+## Estado da revisão (2025-09-25)
+
+- [ ] Implementado no código-base. O `PdfViewer` atual não consulta o endpoint de entidades nem renderiza overlays, e `pdfTraining.ts` carece de chamadas para `/entities`, comprovando que o design ainda não saiu do papel.
+
 ## Resumo executivo
 
 Este documento descreve o design para aprimorar o `PdfViewer` no frontend, permitindo que ele busque e exiba entidades pré-processadas (predições do modelo) diretamente sobre o conteúdo do PDF. A funcionalidade incluirá a renderização visual dos destaques das entidades e a exibição de detalhes da entidade ao interagir com esses destaques. Este é um passo crucial para a experiência de anotação interativa.

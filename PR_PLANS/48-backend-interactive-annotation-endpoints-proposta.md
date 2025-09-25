@@ -6,6 +6,10 @@
 - Responsáveis: Gemini
 - Observações: Este PR é crucial para permitir a interação do usuário com as anotações. Depende do PR 46 (Backend - Servir Entidades Pré-processadas).
 
+## Estado da revisão (2025-09-25)
+
+- [ ] Implementado no código-base. `src/server/pdf_training_app/api.py` expõe apenas o endpoint de ingestão em lote (`/annotations/ingest`) e não possui rotas CRUD granulares, logo o backend interativo ainda não foi desenvolvido.
+
 ## Objetivo
 
 Implementar endpoints de API no backend que permitam ao frontend criar, atualizar e excluir anotações de forma granular e interativa, substituindo o fluxo atual de ingestão de exportações em lote.

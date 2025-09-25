@@ -5,6 +5,10 @@
 - Responsáveis: Gemini
 - Observações: Este documento detalha o design para o PR 48, que implementa endpoints de API para gerenciamento interativo de anotações. Depende do PR 46 e é um pré-requisito para o PR 49.
 
+## Estado da revisão (2025-09-25)
+
+- [ ] Implementado no código-base. Os módulos `api.py` e `services.py` não possuem métodos CRUD para anotações individuais e somente mantêm o fluxo de ingestão em lote, demonstrando que este design permanece sem execução.
+
 ## Resumo executivo
 
 Este documento descreve o design para novos endpoints FastAPI que permitirão o gerenciamento granular e interativo de anotações. Esses endpoints suportarão operações CRUD (Create, Read, Update, Delete) para anotações individuais, afastando-se da atual ingestão em lote de exportações de anotações. Este é um passo crítico para o fluxo de trabalho de anotação interativa no frontend.

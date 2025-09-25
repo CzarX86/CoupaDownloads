@@ -4,6 +4,10 @@
 - Data: 2025-09-23
 - Responsáveis: Gemini (Developer)
 
+## Estado da revisão (2025-09-25)
+
+- [ ] Implementado no código-base. As rotas da CLI e documentação ainda aceitam o fluxo CSV e o script de migração permanece incompleto, portanto esta decisão arquitetural não foi concretizada.
+
 ## Contexto
 Com a implementação do pipeline de treinamento baseado em banco de dados (Plano 41), o fluxo de trabalho legado que utiliza arquivos CSV tornou-se obsoleto. Ao lidar com código legado, temos duas opções principais:
 1.  **Deprecation (Descontinuação)**: Manter o código legado na base de código, mas marcá-lo como "deprecated" e emitir avisos quando for usado. O código seria removido em um futuro distante.

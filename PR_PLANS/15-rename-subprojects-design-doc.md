@@ -5,6 +5,10 @@
 - Responsáveis: TBD
 - Observações: Baseado no plano `15-rename-subprojects-PR.md`.
 
+## Estado da revisão (2025-09-25)
+
+- [ ] Implementado no código-base. A organização atual continua com `MyScript/` e `embeddinggemma_feasibility/` na raiz, sem o diretório `apps/` e sem arquivos de depreciação nos caminhos antigos, reforçando que o redesenho de estrutura ainda não ocorreu.
+
 ## Resumo executivo
 TODO detalhar objetivo.
 

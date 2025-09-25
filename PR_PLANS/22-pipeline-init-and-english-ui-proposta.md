@@ -3,7 +3,12 @@
 - Implementação: pending
 - Data: 2025-09-23
 - Responsáveis: TBD
-- Observações: 
+- Observações:
+
+
+## Estado da revisão (2025-09-25)
+
+- [ ] Implementado no código-base. O menu principal em `embeddinggemma_feasibility/interactive_cli.py` continua apresentando labels em pt-BR (ex.: “Executar Extrator Avançado (PDF → CSV)”), e `embeddinggemma_feasibility/rag_assisted_extraction.py` não possui singleton de embedder para reutilizar o modelo, confirmando que a proposta ainda não foi aplicada.
 
 
 ## Objective

@@ -6,6 +6,10 @@
 - Responsáveis: Gemini
 - Observações: Este PR depende do PR 45 (Frontend - Visualizador Básico de PDF) e do PR 46 (Backend - Servir Entidades Pré-processadas).
 
+## Estado da revisão (2025-09-25)
+
+- [ ] Implementado no código-base. O componente `src/spa/src/components/PdfViewer.tsx` apenas renderiza páginas via `react-pdf` e não busca entidades ou desenha sobreposições, indicando que a funcionalidade ainda não existe.
+
 ## Objetivo
 
 Implementar a funcionalidade no frontend para buscar e exibir as entidades pré-processadas (predições) diretamente sobre o PDF renderizado, permitindo que o usuário visualize as extrações do modelo.

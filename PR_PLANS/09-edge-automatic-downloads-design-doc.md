@@ -5,6 +5,10 @@
 - Responsáveis: TBD
 - Observações: Baseado no plano `09-edge-automatic-downloads-PR.md`.
 
+## Estado da revisão (2025-09-25)
+
+- [ ] Implementado no código-base. As funções `_create_browser_options` e `_create_browser_options_without_profile` em `src/core/browser.py` ainda não incluem a preferência `profile.default_content_setting_values.automatic_downloads`, mantendo o comportamento atual sem o cache de múltiplos downloads.
+
 ## Resumo executivo
 - Reduzir prompts internos e falhas silenciosas quando vários arquivos são disparados rapidamente, habilitando múltiplos downloads automáticos no Edge (Chromium) via preferências do navegador.
 

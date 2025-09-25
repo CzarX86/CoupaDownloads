@@ -6,6 +6,10 @@
 - Responsáveis: Gemini (Developer)
 - Observações: Esta proposta formaliza o processo de migração dos dados de `review.csv` para o banco de dados e a remoção completa do fluxo de trabalho legado baseado em CSV.
 
+## Estado da revisão (2025-09-25)
+
+- [ ] Implementado no código-base. Embora exista um esboço de `scripts/migrate_review_csv.py`, a CLI (`tools/feedback_cli.py`) ainda aceita parâmetros baseados em CSV por padrão e a documentação não foi atualizada para exigir o modo banco de dados, portanto a migração/decomissionamento não ocorreu.
+
 ## Objetivo
 Migrar os datasets `review.csv` existentes para o novo banco de dados, atualizar a documentação e os processos, e desativar os caminhos legados da CLI e do fluxo de trabalho baseados em CSV, uma vez que o novo fluxo de trabalho orientado ao banco de dados esteja validado.
 

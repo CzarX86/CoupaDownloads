@@ -6,6 +6,10 @@
 - Responsáveis: Gemini
 - Observações: Este PR é fundamental para fechar o ciclo de feedback humano-no-loop, permitindo que as correções do usuário melhorem diretamente a inteligência do sistema. Depende do PR 48 (Backend - Endpoints de Anotação Interativa).
 
+## Estado da revisão (2025-09-25)
+
+- [ ] Implementado no código-base. A função `create_training_run` em `src/server/pdf_training_app/services.py` permanece com lógica placeholder que apenas escreve um arquivo dummy e registra uma métrica “pending implementation”, portanto não há gatilho de feedback imediato.
+
 ## Objetivo
 
 Implementar um endpoint no backend que, ao receber anotações corrigidas ou novas, acione um processo de fine-tuning ou atualização incremental do modelo de extração de entidades, visando melhorar a precisão para documentos subsequentes de forma quase imediata.

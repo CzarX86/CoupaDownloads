@@ -5,6 +5,10 @@
 - Responsáveis: Gemini
 - Observações: Este documento detalha o design para o PR 50, que implementa o gatilho de feedback imediato do modelo. Depende do PR 48 e é um pré-requisito para o PR 51.
 
+## Estado da revisão (2025-09-25)
+
+- [ ] Implementado no código-base. O serviço de treinamento continua gerando um artefato fictício (`"Placeholder model artifact"`) e nenhum endpoint específico de feedback foi exposto, logo o design não foi aplicado.
+
 ## Resumo executivo
 
 Este documento detalha o design para um novo endpoint de backend que permitirá o feedback imediato do modelo. Ao receber anotações corrigidas ou novas, este endpoint acionará um fine-tuning assíncrono ou uma atualização incremental do modelo de extração de entidades. Isso visa melhorar a precisão da predição para documentos subsequentes em tempo quase real, fechando o ciclo de feedback humano-no-loop.

@@ -6,6 +6,10 @@
 - Responsáveis: Gemini
 - Observações: Este PR fecha o ciclo de feedback humano-no-loop no frontend. Depende do PR 49 (Frontend - UI de Anotação Interativa) e do PR 50 (Backend - Gatilho de Feedback Imediato do Modelo).
 
+## Estado da revisão (2025-09-25)
+
+- [ ] Implementado no código-base. O frontend não oferece botão ou chamada para disparar feedback do modelo e `pdfTraining.ts` não possui função para o endpoint de feedback, demonstrando que a integração não foi construída.
+
 ## Objetivo
 
 Integrar a funcionalidade de acionamento do feedback imediato do modelo no frontend, permitindo que o usuário, após realizar anotações, possa enviar essas informações para o backend para fine-tuning do modelo, com o objetivo de melhorar as predições futuras.

@@ -6,6 +6,10 @@
 - Responsáveis: Gemini
 - Observações: Este PR é o coração da experiência de anotação interativa. Depende do PR 47 (Frontend - Exibir Entidades Pré-processadas no PDF) e do PR 48 (Backend - Endpoints de Anotação Interativa).
 
+## Estado da revisão (2025-09-25)
+
+- [ ] Implementado no código-base. O `PdfViewer` não possui seleção de texto nem formulários de edição, e `src/spa/src/api/pdfTraining.ts` carece de chamadas CRUD para anotações, logo a UI interativa ainda não foi construída.
+
 ## Objetivo
 
 Implementar a interface de usuário no frontend que permita aos usuários interagir diretamente com o PDF renderizado para criar, editar e excluir anotações, enviando essas alterações de forma granular para o backend.

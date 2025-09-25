@@ -3,7 +3,12 @@
 - Implementação: pending
 - Data: 2025-09-23
 - Responsáveis: TBD
-- Observações: 
+- Observações:
+
+
+## Estado da revisão (2025-09-25)
+
+- [ ] Implementado no código-base. O arquivo `src/core/browser.py` ainda não define a preferência `"profile.default_content_setting_values.automatic_downloads"` nas funções `_create_browser_options` e `_create_browser_options_without_profile`, mantendo o comportamento anterior sem suporte a múltiplos downloads automáticos.
 
 
 ## Objetivo

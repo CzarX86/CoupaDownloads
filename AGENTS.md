@@ -31,9 +31,9 @@ poetry run python tools/feedback_cli.py --help   # CLI clássica com automaçõe
 
 Nosso processo de desenvolvimento é guiado por documentos para garantir clareza, rastreabilidade e alinhamento. Cada mudança, seja uma nova feature, uma correção de bug ou um estudo técnico, segue um ciclo de vida de três artefatos principais, localizados em `PR_PLANS/`.
 
-1.  **Proposta de Mudança (`_template-proposta.md`)**: O ponto de partida. Registra **o que** precisa ser feito e **por quê**.
-2.  **Documento de Design (`_template-design-doc.md`)**: O blueprint técnico. Detalha **como** a solução será implementada. É essencial para mudanças complexas, mas pode ser simplificado ou omitido para tarefas triviais.
-3.  **Relatório de Implementação (`_template-relatorio-implementacao.md`)**: A prova da entrega. Consolida **o que foi entregue** e serve como o artefato final para revisão.
+1.  **Proposta de Mudança (`PR_PLANS/Templates/_template-proposta.md`)**: O ponto de partida. Registra **o que** precisa ser feito e **por quê**.
+2.  **Documento de Design (`PR_PLANS/Templates/_template-design-doc.md`)**: O blueprint técnico. Detalha **como** a solução será implementada. É essencial para mudanças complexas, mas pode ser simplificado ou omitido para tarefas triviais.
+3.  **Relatório de Implementação (`PR_PLANS/Templates/_template-relatorio-implementacao.md`)**: A prova da entrega. Consolida **o que foi entregue** e serve como o artefato final para revisão.
 
 ### Fluxo Visual
 ```mermaid

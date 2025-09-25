@@ -5,6 +5,10 @@
 - Responsáveis: TBD
 - Observações: Baseado no plano `25-single-session-profile-multi-window-workers-PR.md`.
 
+## Estado da revisão (2025-09-25)
+
+- [ ] Implementado no código-base. O `BrowserManager` não oferece API para abrir novas janelas na mesma sessão e `MainApp.run` não redireciona para uma estratégia multi-janela quando o perfil está ativo, sinalizando que o design permanece pendente.
+
 ## Resumo executivo
 TODO detalhar objetivo.
 

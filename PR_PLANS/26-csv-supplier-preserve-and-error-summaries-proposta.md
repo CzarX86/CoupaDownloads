@@ -3,7 +3,12 @@
 - Implementação: pending
 - Data: 2025-09-23
 - Responsáveis: TBD
-- Observações: 
+- Observações:
+
+
+## Estado da revisão (2025-09-25)
+
+- [ ] Implementado no código-base. As rotinas atuais (`src/core/csv_processor.py` e `src/core/excel_processor.py`) continuam lendo/escrevendo a coluna `SUPPLIER`, não produzem prefixos `✅/❌` nos nomes de anexos e `Downloader` mantém mensagens de “Initiated download…”, mostrando que a melhoria ainda não foi executada.
 
 
 ## Objective

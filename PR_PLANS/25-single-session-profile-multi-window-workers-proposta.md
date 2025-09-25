@@ -3,7 +3,12 @@
 - Implementação: pending
 - Data: 2025-09-23
 - Responsáveis: TBD
-- Observações: 
+- Observações:
+
+
+## Estado da revisão (2025-09-25)
+
+- [ ] Implementado no código-base. `src/core/browser.py` não possui helper `open_new_window` e `src/Core_main.py` continua utilizando apenas `ProcessPoolExecutor` sem lógica de multi-janela quando `USE_EDGE_PROFILE=true`, evidenciando que o plano não foi aplicado.
 
 
 ## Objective

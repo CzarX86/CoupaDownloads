@@ -5,6 +5,10 @@
 - Responsáveis: TBD
 - Observações: Baseado no plano `22-pipeline-init-and-english-ui-PR.md`.
 
+## Estado da revisão (2025-09-25)
+
+- [ ] Implementado no código-base. A CLI permanece em pt-BR e `rag_assisted_extraction.py` continua instanciando `HuggingFaceEmbedding` a cada chamada sem cache global, indicando que o design ainda não foi executado.
+
 ## Resumo executivo
 TODO detalhar objetivo.
 

@@ -5,6 +5,10 @@
 - Responsáveis: Gemini (Developer)
 - Observações: Detalhes técnicos para a migração de dados de CSV para o banco de dados e a remoção do fluxo legado.
 
+## Estado da revisão (2025-09-25)
+
+- [ ] Implementado no código-base. O script `scripts/migrate_review_csv.py` permanece como rascunho e a CLI segue aceitando `--review-csv`/`--out-dir`, sem validações que obriguem o uso do banco de dados, então a descontinuação ainda não aconteceu.
+
 ## Resumo executivo
 Este documento descreve a arquitetura e o plano de implementação para migrar os dados históricos de `review.csv` para o banco de dados da aplicação. Ele também detalha a remoção do código legado relacionado ao fluxo de trabalho baseado em CSV, incluindo comandos da CLI e flags, garantindo que o sistema opere exclusivamente no novo modo orientado ao banco de dados.
 
