@@ -1,6 +1,7 @@
 import os
 import time
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
+from urllib.parse import urljoin
 from selenium.webdriver.remote.webelement import WebElement
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
@@ -361,6 +362,160 @@ class Downloader:
 
         return None
 
+    def _locate_pr_link(self, driver) -> Optional[Dict[str, str]]:
+        css_selectors = getattr(Config, 'PR_LINK_CSS_SELECTORS', []) or []
+        for sel in css_selectors:
+            try:
+                candidates = driver.find_elements(By.CSS_SELECTOR, sel)
+            except Exception:
+                candidates = []
+            for el in candidates:
+                try:
+                    href = (el.get_attribute('href') or '').strip()
+                except Exception:
+                    href = ''
+                if not href:
+                    continue
+                text = ''
+                try:
+                    text = (el.text or '').strip()
+                except Exception:
+                    text = ''
+                return {
+                    'href': href,
+                    'text': text,
+                    'source': f'css::{sel}'
+                }
+
+        xpath_selectors = getattr(Config, 'PR_LINK_XPATH_CANDIDATES', []) or []
+        for xp in xpath_selectors:
+            try:
+                candidates = driver.find_elements(By.XPATH, xp)
+            except Exception:
+                candidates = []
+            for el in candidates:
+                try:
+                    href = (el.get_attribute('href') or '').strip()
+                except Exception:
+                    href = ''
+                if not href:
+                    continue
+                text = ''
+                try:
+                    text = (el.text or '').strip()
+                except Exception:
+                    text = ''
+                return {
+                    'href': href,
+                    'text': text,
+                    'source': f'xpath::{xp}'
+                }
+
+        link_texts = getattr(Config, 'PR_LINK_TEXT_CANDIDATES', []) or []
+        for snippet in link_texts:
+            try:
+                candidates = driver.find_elements(By.PARTIAL_LINK_TEXT, snippet)
+            except Exception:
+                candidates = []
+            for el in candidates:
+                try:
+                    href = (el.get_attribute('href') or '').strip()
+                except Exception:
+                    href = ''
+                if not href:
+                    continue
+                text = ''
+                try:
+                    text = (el.text or '').strip()
+                except Exception:
+                    text = ''
+                return {
+                    'href': href,
+                    'text': text,
+                    'source': f'partial_link::{snippet}'
+                }
+        return None
+
+    def _navigate_to_pr_from_po(self, order_number: str) -> Dict[str, Optional[str]]:
+        info: Dict[str, Optional[str]] = {
+            'status': 'not_attempted',
+            'url': '',
+            'href': '',
+            'text': '',
+            'source': '',
+            'elapsed': None,
+            'error': None,
+            'order_number': order_number,
+        }
+        print("   🔁 Attempting PR fallback navigation...")
+
+        timeout = getattr(Config, 'PR_FALLBACK_LINK_TIMEOUT', 4.0)
+        poll = getattr(Config, 'PR_FALLBACK_LINK_POLL', 0.2)
+        start = time.perf_counter()
+
+        try:
+            link_info = WebDriverWait(
+                self.driver,
+                timeout,
+                poll_frequency=poll,
+            ).until(lambda drv: self._locate_pr_link(drv))
+        except TimeoutException:
+            info['status'] = 'timeout'
+            info['elapsed'] = round(time.perf_counter() - start, 3)
+            print("   ⚠ PR fallback link not found within timeout window.")
+            return info
+        except Exception as exc:
+            info['status'] = 'error'
+            info['elapsed'] = round(time.perf_counter() - start, 3)
+            info['error'] = self._short_exception(exc)
+            print(f"   ⚠ Error while locating PR fallback link: {info['error']}")
+            return info
+
+        if not link_info:
+            info['status'] = 'not_found'
+            info['elapsed'] = round(time.perf_counter() - start, 3)
+            print("   ⚠ No PR link candidates matched the configured selectors.")
+            return info
+
+        href = (link_info.get('href') or '').strip()
+        if not href:
+            info['status'] = 'missing_href'
+            info['elapsed'] = round(time.perf_counter() - start, 3)
+            print("   ⚠ PR link located but href attribute is empty.")
+            return info
+
+        target_url = urljoin(f"{Config.BASE_URL}/", href)
+        info.update({
+            'status': 'navigated',
+            'href': href,
+            'url': target_url,
+            'text': (link_info.get('text') or '').strip(),
+            'source': link_info.get('source') or '',
+        })
+
+        print(
+            "   🔁 Navigating to PR page: "
+            f"{target_url} (source={info['source'] or 'unknown'})"
+        )
+
+        try:
+            self.driver.get(target_url)
+        except Exception as exc:
+            info['status'] = 'navigation_error'
+            info['error'] = self._short_exception(exc)
+            info['elapsed'] = round(time.perf_counter() - start, 3)
+            print(f"   ⚠ Error navigating to PR page: {info['error']}")
+            return info
+
+        ready_timeout = getattr(Config, 'PR_FALLBACK_READY_TIMEOUT', 0)
+        if ready_timeout and ready_timeout > 0:
+            self._wait_for_dom_ready(timeout=ready_timeout)
+        else:
+            self._wait_for_dom_ready()
+
+        info['elapsed'] = round(time.perf_counter() - start, 3)
+        return info
+
     def _detect_error_page(self, phase: str, timeout: Optional[float] = None) -> Optional[dict]:
         markers = getattr(Config, 'ERROR_PAGE_MARKERS', []) or []
         poll = getattr(Config, 'ERROR_PAGE_WAIT_POLL', 0.2)
@@ -427,25 +582,136 @@ class Downloader:
                 'attachment_names': [],
                 'errors': [{'filename': '', 'reason': marker_text}],
                 'error_info': error_info,
+                'fallback_attempted': False,
+                'fallback_used': False,
+                'fallback_details': {},
+                'source_page': 'PO',
+                'initial_url': url,
             }
 
+        initial_url = url
         attachments = self._find_attachments()
         supplier = self._extract_supplier_name()
+        fallback_attempted = False
+        fallback_used = False
+        fallback_details: Dict[str, Optional[str]] = {}
+
         if not attachments:
-            msg = "No attachments found on PO page."
-            print(f"   📭 {msg}")
-            return {
-                'success': True,
-                'status_code': 'NO_ATTACHMENTS',
-                'status_reason': 'PO_WITHOUT_ATTACHMENTS',
-                'message': msg,
-                'supplier_name': supplier or '',
-                'attachments_found': 0,
-                'attachments_downloaded': 0,
-                'coupa_url': url,
-                'attachment_names': [],
-                'errors': [],
-            }
+            if not getattr(Config, 'PR_FALLBACK_ENABLED', True):
+                msg = "No attachments found on PO page (fallback disabled)."
+                print(f"   📭 {msg}")
+                return {
+                    'success': True,
+                    'status_code': 'NO_ATTACHMENTS',
+                    'status_reason': 'FALLBACK_DISABLED',
+                    'message': msg,
+                    'supplier_name': supplier or '',
+                    'attachments_found': 0,
+                    'attachments_downloaded': 0,
+                    'coupa_url': url,
+                    'attachment_names': [],
+                    'errors': [],
+                    'fallback_attempted': False,
+                    'fallback_used': False,
+                    'fallback_details': {'status': 'disabled'},
+                    'source_page': 'PO',
+                    'initial_url': initial_url,
+                }
+
+            print("   📭 No attachments found on PO page. Evaluating PR fallback...")
+            fallback_attempted = True
+            fallback_details = self._navigate_to_pr_from_po(order_number) or {}
+
+            status = fallback_details.get('status') if isinstance(fallback_details, dict) else None
+            fallback_url = fallback_details.get('url') if isinstance(fallback_details, dict) else ''
+            if status != 'navigated' or not fallback_url:
+                if status == 'timeout':
+                    msg = "No attachments found on PO page; PR link search timed out."
+                elif status == 'navigation_error':
+                    msg = "No attachments found on PO page; navigation to PR failed."
+                elif status == 'error':
+                    msg = "No attachments found on PO page; PR lookup failed."
+                elif status == 'missing_href':
+                    msg = "No attachments found on PO page; PR link missing href attribute."
+                else:
+                    msg = "No attachments found on PO page; PR link unavailable."
+                print(f"   📭 {msg}")
+                return {
+                    'success': True,
+                    'status_code': 'NO_ATTACHMENTS',
+                    'status_reason': 'PR_LINK_NOT_FOUND',
+                    'message': msg,
+                    'supplier_name': supplier or '',
+                    'attachments_found': 0,
+                    'attachments_downloaded': 0,
+                    'coupa_url': url,
+                    'attachment_names': [],
+                    'errors': [],
+                    'fallback_attempted': True,
+                    'fallback_used': False,
+                    'fallback_details': fallback_details or {},
+                    'source_page': 'PO',
+                    'initial_url': initial_url,
+                }
+
+            fallback_used = True
+            url = fallback_url
+
+            pr_error_info = self._detect_error_page('pr_fallback_early')
+            if not pr_error_info:
+                ready_timeout = getattr(Config, 'ERROR_PAGE_READY_CHECK_TIMEOUT', 1.0)
+                pr_error_info = self._detect_error_page('pr_fallback_post_ready', timeout=ready_timeout)
+
+            if pr_error_info:
+                marker_raw = (pr_error_info.get('marker') or 'Coupa error page').strip()
+                marker_text = self._truncate_text(marker_raw, 150)
+                msg = self._truncate_text(f"PR fallback landed on an error page: {marker_text}")
+                print(
+                    "   ❌ "
+                    f"{msg} (phase={pr_error_info.get('phase')}, source={pr_error_info.get('source')}, "
+                    f"{pr_error_info.get('elapsed', 0)}s)"
+                )
+                return {
+                    'success': False,
+                    'status_code': 'PR_NOT_ACCESSIBLE',
+                    'status_reason': 'PR_FALLBACK_ERROR_PAGE',
+                    'message': msg,
+                    'supplier_name': '',
+                    'attachments_found': 0,
+                    'attachments_downloaded': 0,
+                    'coupa_url': url,
+                    'attachment_names': [],
+                    'errors': [{'filename': '', 'reason': marker_text}],
+                    'error_info': pr_error_info,
+                    'fallback_attempted': True,
+                    'fallback_used': True,
+                    'fallback_details': fallback_details or {},
+                    'source_page': 'PR',
+                    'initial_url': initial_url,
+                }
+
+            supplier = self._extract_supplier_name() or supplier
+            attachments = self._find_attachments()
+            if not attachments:
+                msg = "No attachments found on PO or PR pages."
+                print(f"   📭 {msg}")
+                return {
+                    'success': True,
+                    'status_code': 'NO_ATTACHMENTS',
+                    'status_reason': 'PO_AND_PR_WITHOUT_ATTACHMENTS',
+                    'message': msg,
+                    'supplier_name': supplier or '',
+                    'attachments_found': 0,
+                    'attachments_downloaded': 0,
+                    'coupa_url': url,
+                    'attachment_names': [],
+                    'errors': [],
+                    'fallback_attempted': True,
+                    'fallback_used': True,
+                    'fallback_details': fallback_details or {},
+                    'source_page': 'PR',
+                    'initial_url': initial_url,
+                }
 
         total_attachments = len(attachments)
         print(f"   Processing {total_attachments} attachments...")
@@ -474,29 +740,33 @@ class Downloader:
                     'reason': self._truncate_text(error_reason or 'unknown error', 160),
                 })
 
+        origin_label = 'PR fallback' if fallback_used else 'PO page'
         if downloaded_count == total_attachments:
-            msg = self._truncate_text(f"Downloaded {downloaded_count} attachment(s).")
+            base_msg = f"Downloaded {downloaded_count} attachment(s) from {origin_label}."
+            msg = self._truncate_text(base_msg)
             print(f"   ✅ {msg}")
             status_code = 'COMPLETED'
-            status_reason = 'ALL_ATTACHMENTS_DOWNLOADED'
+            status_reason = 'PR_FALLBACK_COMPLETED' if fallback_used else 'ALL_ATTACHMENTS_DOWNLOADED'
         elif downloaded_count > 0:
             summary = self._summarize_download_errors(download_errors)
-            msg = self._truncate_text(
-                f"Partial download: {downloaded_count} of {total_attachments} attachment(s)."
-                + (f" Issues: {summary}" if summary else '')
+            base_msg = (
+                f"Partial download from {origin_label}: {downloaded_count} of {total_attachments} attachment(s)."
             )
+            if summary:
+                base_msg += f" Issues: {summary}"
+            msg = self._truncate_text(base_msg)
             print(f"   ⚠ {msg}")
             status_code = 'PARTIAL'
-            status_reason = 'PARTIAL_DOWNLOAD'
+            status_reason = 'PR_FALLBACK_PARTIAL' if fallback_used else 'PARTIAL_DOWNLOAD'
         else:
             summary = self._summarize_download_errors(download_errors)
-            msg = self._truncate_text(
-                f"Failed to download {total_attachments} attachment(s)."
-                + (f" Issues: {summary}" if summary else '')
-            )
+            base_msg = f"Failed to download {total_attachments} attachment(s) from {origin_label}."
+            if summary:
+                base_msg += f" Issues: {summary}"
+            msg = self._truncate_text(base_msg)
             print(f"   ❌ {msg}")
             status_code = 'FAILED'
-            status_reason = 'DOWNLOADS_FAILED'
+            status_reason = 'PR_FALLBACK_FAILED' if fallback_used else 'DOWNLOADS_FAILED'
 
         return {
             'success': downloaded_count == total_attachments,
@@ -509,4 +779,9 @@ class Downloader:
             'coupa_url': url,
             'attachment_names': names_list,
             'errors': download_errors,
+            'fallback_attempted': fallback_attempted,
+            'fallback_used': fallback_used,
+            'fallback_details': fallback_details or {},
+            'source_page': 'PR' if fallback_used else 'PO',
+            'initial_url': initial_url,
         }

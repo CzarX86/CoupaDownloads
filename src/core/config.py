@@ -82,6 +82,31 @@ class Config:
     ERROR_PAGE_WAIT_POLL = float(os.environ.get("ERROR_PAGE_WAIT_POLL", "0.2"))
     EARLY_ERROR_CHECK_BEFORE_READY = os.environ.get("EARLY_ERROR_CHECK_BEFORE_READY", "true").lower() == "true"
 
+    # PR fallback navigation controls
+    PR_FALLBACK_ENABLED = os.environ.get("PR_FALLBACK_ENABLED", "true").lower() == "true"
+    PR_FALLBACK_LINK_TIMEOUT = float(os.environ.get("PR_FALLBACK_LINK_TIMEOUT", "4"))
+    PR_FALLBACK_LINK_POLL = float(os.environ.get("PR_FALLBACK_LINK_POLL", "0.2"))
+    PR_FALLBACK_READY_TIMEOUT = float(os.environ.get("PR_FALLBACK_READY_TIMEOUT", "8"))
+    PR_LINK_CSS_SELECTORS = [
+        "a[href*='/requisition_headers/']",
+        "a[href*='requisition_header']",
+        "a[data-testid*='requisition']",
+        "a[data-qa*='requisition']",
+        "a[href*='/req/']",
+    ]
+    PR_LINK_XPATH_CANDIDATES = [
+        "//a[contains(@href,'/requisition_') or contains(@href,'/requisition-')]",
+        "//a[contains(@href,'requisition_headers')]",
+        "//a[contains(normalize-space(.),'Requisition')]",
+        "//a[contains(normalize-space(.),'Requisição')]",
+    ]
+    PR_LINK_TEXT_CANDIDATES = [
+        "Requisition",
+        "Purchase Requisition",
+        "Requisição",
+        "Requisições",
+    ]
+
     # Output verbosity controls
     SHOW_EDGE_CRASH_STACKTRACE = False
     VERBOSE_OUTPUT = os.environ.get("VERBOSE_OUTPUT", "false").lower() == "true"

@@ -198,6 +198,11 @@ def process_po_worker(args):
             'status_reason': result_payload.get('status_reason', ''),
             'errors': result_payload.get('errors', []),
             'success': result_payload.get('success', False),
+            'fallback_attempted': result_payload.get('fallback_attempted', False),
+            'fallback_used': result_payload.get('fallback_used', False),
+            'fallback_details': result_payload.get('fallback_details', {}),
+            'source_page': result_payload.get('source_page', 'PO'),
+            'initial_url': result_payload.get('initial_url', result_payload.get('coupa_url', '')),
         }
         print(f"[worker] 🏁 Done {display_po} → {status_code}", flush=True)
         return result

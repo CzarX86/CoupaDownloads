@@ -357,12 +357,13 @@ class ExcelProcessor:
             # Print status update
             status_emoji = {
                 'COMPLETED': '✅',
-                'FAILED': '❌', 
+                'FAILED': '❌',
                 'PARTIAL': '⚠️',
                 'PENDING': '⏳',
                 'SKIPPED': '⏭️',
                 'NO_ATTACHMENTS': '📭',
-                'PO_NOT_FOUND': '🚫'
+                'PO_NOT_FOUND': '🚫',
+                'PR_NOT_ACCESSIBLE': '🚫',
             }.get(status, '📋')
             
             print(f"  {status_emoji} Updated {po_number}: {status}")
