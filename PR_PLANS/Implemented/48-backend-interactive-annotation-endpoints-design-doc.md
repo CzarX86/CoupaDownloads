@@ -1,13 +1,13 @@
 # Arquitetura 48 — Backend - Endpoints de Anotação Interativa (backend-interactive-annotation-endpoints)
 
-- Status: draft
+- Status: implementado
 - Data: 2025-09-23
 - Responsáveis: Gemini
 - Observações: Este documento detalha o design para o PR 48, que implementa endpoints de API para gerenciamento interativo de anotações. Depende do PR 46 e é um pré-requisito para o PR 49.
 
 ## Estado da revisão (2025-09-25)
 
-- [ ] Implementado no código-base. Os módulos `api.py` e `services.py` não possuem métodos CRUD para anotações individuais e somente mantêm o fluxo de ingestão em lote, demonstrando que este design permanece sem execução.
+- [x] Implementado no código-base. `api.py`, `services.py` e `server/db/repository.py` expõem operações CRUD completas para anotações e os modelos Pydantic foram expandidos conforme definido neste desenho.
 
 ## Resumo executivo
 

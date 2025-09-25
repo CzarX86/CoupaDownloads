@@ -1,14 +1,14 @@
 # PR 49 — Frontend - UI de Anotação Interativa (frontend-interactive-annotation-ui)
 
-- Status: draft
-- Implementação: pending
+- Status: implemented
+- Implementação: concluída
 - Data: 2025-09-23
 - Responsáveis: Gemini
 - Observações: Este PR é o coração da experiência de anotação interativa. Depende do PR 47 (Frontend - Exibir Entidades Pré-processadas no PDF) e do PR 48 (Backend - Endpoints de Anotação Interativa).
 
 ## Estado da revisão (2025-09-25)
 
-- [ ] Implementado no código-base. O `PdfViewer` não possui seleção de texto nem formulários de edição, e `src/spa/src/api/pdfTraining.ts` carece de chamadas CRUD para anotações, logo a UI interativa ainda não foi construída.
+- [x] Implementado no código-base. O `PdfViewer` agora captura seleções, o `AnnotationForm` foi introduzido com CRUD via `src/spa/src/api/pdfTraining.ts`, e `PdfTrainingWizard` e `AnnotationCard` coordenam criação, edição e remoção em tempo real.
 
 ## Objetivo
 

@@ -1,13 +1,13 @@
 # Arquitetura 50 — Backend - Gatilho de Feedback Imediato do Modelo (backend-immediate-model-feedback-trigger)
 
-- Status: draft
+- Status: implementado
 - Data: 2025-09-23
 - Responsáveis: Gemini
 - Observações: Este documento detalha o design para o PR 50, que implementa o gatilho de feedback imediato do modelo. Depende do PR 48 e é um pré-requisito para o PR 51.
 
 ## Estado da revisão (2025-09-25)
 
-- [ ] Implementado no código-base. O serviço de treinamento continua gerando um artefato fictício (`"Placeholder model artifact"`) e nenhum endpoint específico de feedback foi exposto, logo o design não foi aplicado.
+- [x] Implementado no código-base. O endpoint dedicado de feedback foi publicado, `create_training_run` monta datasets reais, dispara `fine_tune_model` e registra métricas/modelos no banco conforme previsto neste design.
 
 ## Resumo executivo
 
