@@ -1,6 +1,6 @@
 # Arquitetura 52 — Frontend - Padronizar Estilos com Tailwind e shadcn/ui (frontend-shadcn-integration)
 
-- Status: draft
+- Status: implemented
 - Data: 2025-01-05
 - Responsáveis: Gemini (desenvolvimento)
 - Observações: Requer instalar Tailwind CSS e dependências antes de executar o build do SPA. Complementa o PR 45, que entregou o visualizador básico de PDF.
@@ -87,8 +87,8 @@ flowchart TD
 
 ## Testes e evidências
 
-- Validar build local do SPA (`npm run build`) para garantir que Tailwind e shadcn estão corretamente integrados.
-- Executar linting do front-end caso exista (`npm run lint`).
+- Validar build local do SPA (`npm run build`) para garantir que Tailwind e shadcn estão corretamente integrados. ✅ Executado.
+- Executar linting do front-end caso exista (`npm run lint`). ✅ Executado.
 - Revisar visual manualmente garantindo que layout mínimo seja preservado.
 
 ## Decisões, trade-offs e alternativas consideradas

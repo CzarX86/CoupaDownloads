@@ -58,6 +58,7 @@ tmp/
 
 # Local database and blob storage
 storage/
+!src/spa/src/lib/
 
 # Downloaded files (keep the structure but ignore content)
 data/downloads/

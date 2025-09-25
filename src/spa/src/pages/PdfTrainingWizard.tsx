@@ -1,38 +1,34 @@
 import React, { useState } from 'react';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import DocumentTable from '../components/DocumentTable';
 import TrainingHistory from '../components/TrainingHistory';
 import AnnotationCard from '../components/AnnotationCard';
 import WarningsPanel from '../components/WarningsPanel';
-import PdfViewer from '../components/PdfViewer'; // Import PdfViewer
+import PdfViewer from '../components/PdfViewer';
 import { Document } from '../api/pdfTraining';
-
-const queryClient = new QueryClient();
 
 const PdfTrainingWizard: React.FC = () => {
   const [selectedDoc, setSelectedDoc] = useState<Document | null>(null);
   const [warnings] = useState<string[]>([]);
 
-  // This would be passed to the DocumentTable and updated on row selection
   const handleSelectDocument = (doc: Document) => {
     setSelectedDoc(doc);
   };
 
   return (
-    <QueryClientProvider client={queryClient}>
-      <div className="wizard-dashboard">
-        <div>
-          <WarningsPanel warnings={warnings} />
-          <DocumentTable onSelectDocument={handleSelectDocument} />
-          {/* Add PdfViewer here */}
-          <PdfViewer documentId={selectedDoc ? String(selectedDoc.id) : null} />
-        </div>
-        <div>
-          <AnnotationCard doc={selectedDoc} />
-          <TrainingHistory />
-        </div>
+    <div className="grid gap-6 lg:grid-cols-[1.6fr_1fr]">
+      <div className="space-y-6">
+        <WarningsPanel warnings={warnings} />
+        <DocumentTable
+          onSelectDocument={handleSelectDocument}
+          selectedDocumentId={selectedDoc?.id}
+        />
+        <PdfViewer documentId={selectedDoc?.id ?? null} />
       </div>
-    </QueryClientProvider>
+      <div className="space-y-6">
+        <AnnotationCard doc={selectedDoc} />
+        <TrainingHistory />
+      </div>
+    </div>
   );
 };
 

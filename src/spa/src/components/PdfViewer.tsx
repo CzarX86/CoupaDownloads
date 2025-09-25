@@ -4,8 +4,16 @@ import { Document, Page, pdfjs } from 'react-pdf';
 import 'react-pdf/dist/Page/AnnotationLayer.css';
 import 'react-pdf/dist/Page/TextLayer.css';
 import { fetchPdfContent } from '../api/pdfTraining';
+import { Button } from './ui/button';
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from './ui/card';
 
-// Set up PDF.js worker source
 pdfjs.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.js`;
 
 interface PdfViewerProps {
@@ -24,51 +32,102 @@ const PdfViewer: React.FC<PdfViewerProps> = ({ documentId }) => {
       }
       return fetchPdfContent(documentId);
     },
-    enabled: !!documentId, // Only run the query if documentId is available
+    enabled: !!documentId,
   });
 
   const onDocumentLoadSuccess = ({ numPages }: { numPages: number }) => {
     setNumPages(numPages);
-    setPageNumber(1); // Reset to first page on new document load
+    setPageNumber(1);
   };
 
   if (!documentId) {
-    return <div className="pdf-viewer-placeholder">Select a document to view its PDF.</div>;
+    return (
+      <Card className="border-dashed">
+        <CardHeader>
+          <CardTitle className="text-lg">PDF preview</CardTitle>
+          <CardDescription>Select a document to load the PDF preview.</CardDescription>
+        </CardHeader>
+      </Card>
+    );
   }
 
   if (isLoading) {
-    return <div className="pdf-viewer-loading">Loading PDF...</div>;
-  };
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-lg">PDF preview</CardTitle>
+          <CardDescription>Loading PDF…</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="flex h-48 items-center justify-center text-sm text-muted-foreground">
+            Fetching PDF from the server…
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
 
   if (isError) {
-    return <div className="pdf-viewer-error">Error loading PDF: {(error as Error).message}</div>;
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-lg">PDF preview</CardTitle>
+          <CardDescription>Error loading PDF</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <p className="text-sm text-destructive">
+            {(error as Error).message}
+          </p>
+        </CardContent>
+      </Card>
+    );
   }
 
   return (
-    <div className="pdf-viewer-container">
-      <Document
-        file={pdfUrl}
-        onLoadSuccess={onDocumentLoadSuccess}
-        onLoadError={(err) => console.error('Failed to load PDF:', err)}
-      >
-        <Page pageNumber={pageNumber} />
-      </Document>
-      <div className="pdf-viewer-controls">
-        <button
-          onClick={() => setPageNumber(prevPage => Math.max(prevPage - 1, 1))}
-          disabled={pageNumber <= 1}
-        >
-          Previous
-        </button>
-        <span>Page {pageNumber} of {numPages || '...'}</span>
-        <button
-          onClick={() => setPageNumber(prevPage => Math.min(prevPage + 1, numPages || 1))}
-          disabled={pageNumber >= (numPages || 1)}
-        >
-          Next
-        </button>
-      </div>
-    </div>
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-lg">PDF preview</CardTitle>
+        <CardDescription>Navigate between pages using the controls below.</CardDescription>
+      </CardHeader>
+      <CardContent>
+        <div className="flex justify-center overflow-hidden rounded-lg border bg-muted/40">
+          <Document
+            file={pdfUrl}
+            onLoadSuccess={onDocumentLoadSuccess}
+            onLoadError={(err) => console.error('Failed to load PDF:', err)}
+          >
+            <Page pageNumber={pageNumber} width={640} renderTextLayer renderAnnotationLayer />
+          </Document>
+        </div>
+      </CardContent>
+      <CardFooter className="items-center justify-between">
+        <div className="text-sm text-muted-foreground">
+          Page {pageNumber} of {numPages ?? '…'}
+        </div>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setPageNumber((prevPage) => Math.max(prevPage - 1, 1))}
+            disabled={pageNumber <= 1}
+          >
+            Previous
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() =>
+              setPageNumber((prevPage) =>
+                Math.min(prevPage + 1, numPages ?? prevPage + 1)
+              )
+            }
+            disabled={numPages !== null && pageNumber >= numPages}
+          >
+            Next
+          </Button>
+        </div>
+      </CardFooter>
+    </Card>
   );
 };
 
