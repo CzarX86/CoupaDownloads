@@ -3,18 +3,24 @@ import { useQuery } from '@tanstack/react-query';
 import { Document, Page, pdfjs } from 'react-pdf';
 import 'react-pdf/dist/Page/AnnotationLayer.css';
 import 'react-pdf/dist/Page/TextLayer.css';
-import { fetchPdfContent, getJobs, JobDetail } from '../api/pdfTraining';
+import { fetchPdfContent } from '../api/pdfTraining';
+import { useDocumentJobs } from '../hooks/useJobPolling';
 
 // Set up PDF.js worker source
 pdfjs.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.js`;
 
 interface PdfViewerProps {
   documentId: string | null;
+  showJobStatus?: boolean;
 }
 
-const PdfViewer: React.FC<PdfViewerProps> = ({ documentId }) => {
+const PdfViewer: React.FC<PdfViewerProps> = ({ documentId, showJobStatus = false }) => {
   const [numPages, setNumPages] = useState<number | null>(null);
   const [pageNumber, setPageNumber] = useState<number>(1);
+
+  const { activeJob } = useDocumentJobs(documentId, {
+    enabled: showJobStatus && Boolean(documentId),
+  });
 
   const { data: pdfUrl, isLoading, isError, error } = useQuery({
     queryKey: ['pdfContent', documentId],
@@ -27,14 +33,6 @@ const PdfViewer: React.FC<PdfViewerProps> = ({ documentId }) => {
     enabled: !!documentId, // Only run the query if documentId is available
   });
 
-  const { data: jobs = [] } = useQuery<JobDetail[]>({
-    queryKey: ['document-jobs', documentId],
-    queryFn: () => getJobs({ resourceType: 'document', resourceId: documentId as string }),
-    enabled: !!documentId,
-  });
-
-  const activeJob = jobs.find((job) => job.status === 'PENDING' || job.status === 'RUNNING');
-
   const onDocumentLoadSuccess = ({ numPages }: { numPages: number }) => {
     setNumPages(numPages);
     setPageNumber(1); // Reset to first page on new document load
@@ -45,10 +43,10 @@ const PdfViewer: React.FC<PdfViewerProps> = ({ documentId }) => {
   }
 
   if (isLoading) {
-    if (activeJob) {
+    if (showJobStatus && activeJob) {
       return (
         <div className="pdf-viewer-loading" aria-live="polite">
-          <span className="processing-status__spinner" aria-hidden="true" />
+          <span className="processing-status__spinner" aria-hidden="true" data-testid="pdf-loading-spinner" />
           <div>
             <strong>Analyzing document…</strong>
             <div>{activeJob.detail || 'Preparing annotation assets before rendering the PDF.'}</div>
@@ -56,7 +54,11 @@ const PdfViewer: React.FC<PdfViewerProps> = ({ documentId }) => {
         </div>
       );
     }
-    return <div className="pdf-viewer-loading">Loading PDF...</div>;
+    return (
+      <div className="pdf-viewer-loading" aria-live="polite" data-testid="pdf-loading-spinner">
+        Loading PDF...
+      </div>
+    );
   }
 
   if (isError) {

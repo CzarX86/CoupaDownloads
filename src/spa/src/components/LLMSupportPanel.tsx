@@ -2,13 +2,13 @@ import React, { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import {
-  getJob,
   getLLMSupport,
   JobDetail,
   JobResponse,
   LLMSupportPayload,
   startLLMSupport,
 } from '../api/pdfTraining';
+import { useJobDetailPolling } from '../hooks/useJobPolling';
 
 interface LLMSupportPanelProps {
   documentId: string | null;
@@ -20,7 +20,7 @@ const renderJobStatus = (job: JobDetail | null | undefined) => {
   }
   if (job.status === 'FAILED') {
     return (
-      <div className="llm-support__status llm-support__status--error" role="alert">
+      <div className="llm-support__status llm-support__status--error" role="alert" data-testid="llm-support-status-error">
         <strong>LLM helper failed.</strong>
         <div>{job.detail ?? 'Check backend logs for details.'}</div>
       </div>
@@ -28,7 +28,7 @@ const renderJobStatus = (job: JobDetail | null | undefined) => {
   }
   if (job.status === 'PENDING' || job.status === 'RUNNING') {
     return (
-      <div className="llm-support__status llm-support__status--active" aria-live="polite">
+      <div className="llm-support__status llm-support__status--active" aria-live="polite" data-testid="llm-support-status-running">
         <span className="processing-status__spinner" aria-hidden="true" />
         <div>
           <strong>Generating LLM suggestions…</strong>
@@ -51,16 +51,7 @@ const LLMSupportPanel: React.FC<LLMSupportPanelProps> = ({ documentId }) => {
     staleTime: 1000 * 30,
   });
 
-  const jobQuery = useQuery<JobDetail>({
-    queryKey: ['llm-support-job', activeJobId],
-    queryFn: () => getJob(activeJobId as string),
-    enabled: Boolean(activeJobId),
-    refetchInterval: (data) => {
-      if (!data) {
-        return 1500;
-      }
-      return data.status === 'PENDING' || data.status === 'RUNNING' ? 1500 : false;
-    },
+  const jobQuery = useJobDetailPolling(activeJobId, {
     onSuccess: (job) => {
       if (job.status === 'SUCCEEDED') {
         queryClient.invalidateQueries({ queryKey: ['llm-support', documentId] });
@@ -119,7 +110,13 @@ const LLMSupportPanel: React.FC<LLMSupportPanelProps> = ({ documentId }) => {
       {renderJobStatus(jobQuery.data)}
 
       {supportQuery.isLoading && !support ? (
-        <p className="llm-support__placeholder">Fetching the latest LLM feedback…</p>
+        <p className="llm-support__placeholder" data-testid="llm-support-loading">Fetching the latest LLM feedback…</p>
+      ) : null}
+
+      {supportQuery.isError ? (
+        <p className="llm-support__status llm-support__status--error" role="alert">
+          {(supportQuery.error as Error)?.message ?? 'Failed to fetch LLM support payload.'}
+        </p>
       ) : null}
 
       {support && support.rows.length === 0 ? (

@@ -5,7 +5,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class JobStatus(str, Enum):
@@ -92,6 +92,21 @@ class JobListResponse(BaseModel):
 class TrainingRunCreateRequest(BaseModel):
     document_ids: Optional[List[str]] = Field(default=None, description="Subset of document IDs to include in the run")
     triggered_by: Optional[str] = Field(default=None, description="Identifier for the user/process triggering the run")
+
+    @field_validator("document_ids")
+    @classmethod
+    def _validate_document_ids(cls, value: Optional[List[str]]) -> Optional[List[str]]:
+        if value is None:
+            return None
+        cleaned: List[str] = []
+        for doc_id in value:
+            if not isinstance(doc_id, str):
+                raise TypeError("document_ids must contain string identifiers")
+            stripped = doc_id.strip()
+            if not stripped:
+                raise ValueError("document_ids cannot include empty identifiers")
+            cleaned.append(stripped)
+        return cleaned
 
 
 class LLMSupportRequest(BaseModel):

@@ -70,4 +70,4 @@ Os payloads retornam a decisão do modelo (`decision`), justificativas (`rationa
 2. Opcionalmente criar pares sintéticos com `tools/self_augment.py`.
 3. Executar o modo gamificado de `feedback_cli.py train-st` para aceitar/rejeitar sugestões e regenerar datasets.
 
-O arquivo `tools/feedback_cli.py` atual apenas imprime uma mensagem informando que o fluxo foi removido. Para qualquer implementação nova, baseie-se na UI ou nos endpoints documentados neste guia.
+O arquivo `tools/legacy/feedback_cli.py` atual apenas imprime uma mensagem informando que o fluxo foi removido. Para qualquer implementação nova, baseie-se na UI ou nos endpoints documentados neste guia.

@@ -317,6 +317,11 @@ class TestLLMSupportEndpoints:
         assert payload["document_id"] == document_id
         assert isinstance(payload["rows"], list)
 
+    def test_llm_support_missing_document(self, client: TestClient):
+        response = client.post("/api/pdf-training/documents/missing/support/llm")
+        assert response.status_code == 404
+        assert "Document not found" in response.json()["detail"]
+
 
 class TestAnnotationEndpoints:
     """Test annotation-related endpoints."""

@@ -1,6 +1,5 @@
 import React from 'react';
-import { useQuery } from '@tanstack/react-query';
-import { getJobs, JobDetail } from '../api/pdfTraining';
+import { useDocumentJobs } from '../hooks/useJobPolling';
 
 interface DocumentProcessingStatusProps {
   documentId: string | null;
@@ -29,19 +28,7 @@ const DocumentProcessingStatus: React.FC<DocumentProcessingStatusProps> = ({ doc
     );
   }
 
-  const { data: jobs = [], isLoading } = useQuery<JobDetail[]>({
-    queryKey: ['document-jobs', documentId],
-    queryFn: () => getJobs({ resourceType: 'document', resourceId: documentId }),
-    enabled: !!documentId,
-    refetchInterval: (data) => {
-      if (!Array.isArray(data)) {
-        return false;
-      }
-      const active = data.some((job) => job.status === 'PENDING' || job.status === 'RUNNING');
-      return active ? 2000 : false;
-    },
-    initialData: [],
-  });
+  const { jobs, isLoading, activeJob, latestJob } = useDocumentJobs(documentId);
 
   if (isLoading && jobs.length === 0) {
     return (
@@ -63,8 +50,7 @@ const DocumentProcessingStatus: React.FC<DocumentProcessingStatusProps> = ({ doc
     );
   }
 
-  const activeJob = jobs.find((job) => job.status === 'PENDING' || job.status === 'RUNNING');
-  const latestJob = jobs[0];
+  const latest = latestJob!;
 
   if (activeJob) {
     return (
@@ -79,12 +65,12 @@ const DocumentProcessingStatus: React.FC<DocumentProcessingStatusProps> = ({ doc
     );
   }
 
-  if (latestJob.status === 'FAILED') {
+  if (latest.status === 'FAILED') {
     return (
       <div className="processing-status processing-status--error" role="alert">
         <strong>Background preprocessing failed.</strong>
-        <div>{latestJob.detail || 'The extraction service reported an unexpected error.'}</div>
-        <small>Last attempt {formatTimestamp(latestJob.updated_at)}</small>
+        <div>{latest.detail || 'The extraction service reported an unexpected error.'}</div>
+        <small>Last attempt {formatTimestamp(latest.updated_at)}</small>
       </div>
     );
   }
@@ -92,8 +78,8 @@ const DocumentProcessingStatus: React.FC<DocumentProcessingStatusProps> = ({ doc
   return (
     <div className="processing-status processing-status--success" aria-live="polite">
       <strong>Preprocessing completed.</strong>
-      <div>{latestJob.detail || 'The document is ready for PDF annotation.'}</div>
-      <small>Finished {formatTimestamp(latestJob.finished_at || latestJob.updated_at)}</small>
+      <div>{latest.detail || 'The document is ready for PDF annotation.'}</div>
+      <small>Finished {formatTimestamp(latest.finished_at || latest.updated_at)}</small>
     </div>
   );
 };

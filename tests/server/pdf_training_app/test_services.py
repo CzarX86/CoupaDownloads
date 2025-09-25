@@ -59,6 +59,7 @@ def service_context() -> SimpleNamespace:
         db_path = base_path / "app.db"
         os.environ["PDF_TRAINING_STORAGE_ROOT"] = str(storage_root)
         os.environ["PDF_TRAINING_DB_URL"] = f"sqlite+aiosqlite:///{db_path}"
+        os.environ["PDF_TRAINING_FORCE_SYNC_JOBS"] = "1"
 
         ctx = _reload_modules()
         try:
@@ -269,3 +270,36 @@ async def test_llm_support_generates_payload(service_context: SimpleNamespace) -
     support_payload = await services.get_llm_support_payload(document_detail.document.id)
     assert support_payload["document_id"] == document_detail.document.id
     assert isinstance(support_payload["rows"], list)
+
+
+@pytest.mark.asyncio
+async def test_llm_support_handles_empty_review_csv(service_context: SimpleNamespace) -> None:
+    services = service_context.services
+    job_manager = service_context.job_manager
+    repository = service_context.repository
+    db_session = service_context.db_session
+
+    upload = _make_upload_file(b"%PDF-1.4\n1 0 obj\n<<>>\nendobj\n", "empty.pdf", "application/pdf")
+    document_detail = await services.create_document(upload, {"ingested_by": "llm-empty"})
+
+    analysis_job = await services.start_analysis(document_detail.document.id)
+    await job_manager.wait_until_complete(analysis_job.job_id, timeout=5)
+
+    async with db_session.async_session() as session:  # type: ignore[attr-defined]
+        document = await repository.get_document(session, document_detail.document.id)
+        annotation = document.annotations[0]
+
+    from server.db.storage import annotation_analysis_dir
+
+    review_path = annotation_analysis_dir(annotation.id) / "review.csv"
+    review_path.write_text("row_id\n", encoding="utf-8")
+
+    llm_job = await services.start_llm_support(document_detail.document.id, dry_run=True)
+    completed_llm = await job_manager.wait_until_complete(llm_job.job_id, timeout=5)
+
+    assert completed_llm.status == "SUCCEEDED"
+    payload = completed_llm.payload or {}
+    assert payload.get("rows") == []
+
+    cached_payload = await services.get_llm_support_payload(document_detail.document.id)
+    assert cached_payload["rows"] == []

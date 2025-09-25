@@ -47,7 +47,7 @@ poetry run python -m src.Core_main
 ### Feedback and training loop
 - 🧭 **PDF Training Wizard** — start the FastAPI backend (`PYTHONPATH=src poetry run python -m server.pdf_training_app.main`) and the SPA (`cd src/spa && npm run dev`) to upload PDFs, acompanhar o pré-processamento, anotar direto no viewer e gerar datasets/treinamentos.
 - 📡 **API endpoints** — `curl http://localhost:8008/api/pdf-training/jobs?resource_type=document&resource_id=<id>` monitora jobs de análise; use `/api/pdf-training/documents` para gerenciar uploads e `/api/pdf-training/training-runs` para disparar treinamentos.
-- 🪦 **Legacy CLI** — `tools/feedback_cli.py` permanece apenas como stub informativo. Todo o fluxo de treinamento/feedback ocorre pelo backend + SPA ou chamadas REST.
+- 🪦 **Legacy CLI** — `tools/legacy/feedback_cli.py` permanece apenas como stub informativo. Todo o fluxo de treinamento/feedback ocorre pelo backend + SPA ou chamadas REST.
 
 ## 📚 User Guide
 For a complete end-to-end manual (installation, configuration, running, outputs, troubleshooting), see:

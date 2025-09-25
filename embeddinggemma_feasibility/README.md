@@ -106,7 +106,7 @@ After completing the assessment:
 
 ## HITL Feedback (legado CSV)
 
-> ⚠️ **Importante:** o pipeline acima dependia de `tools/feedback_cli.py`, agora reduzido a um stub que apenas informa a descontinuação do fluxo CSV. Mantenha as instruções abaixo somente como registro histórico.
+> ⚠️ **Importante:** o pipeline acima dependia de `tools/legacy/feedback_cli.py`, agora reduzido a um stub que apenas informa a descontinuação do fluxo CSV. Mantenha as instruções abaixo somente como registro histórico.
 
 - Consulte `docs/HITL_FEEDBACK_WORKFLOW.md` para o processo suportado (upload de PDFs no wizard, revisão no viewer e treinamento via backend).
-- Scripts como `tools/feedback_cli.py prepare/ingest/eval/train-st` devem ser evitados em ambientes novos; use-os apenas para reproduzir experimentos antigos em ambientes isolados.
+- Scripts como `tools/legacy/feedback_cli.py prepare/ingest/eval/train-st` devem ser evitados em ambientes novos; use-os apenas para reproduzir experimentos antigos em ambientes isolados.
