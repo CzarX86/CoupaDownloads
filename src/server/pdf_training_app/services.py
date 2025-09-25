@@ -11,8 +11,6 @@ from typing import Any, Dict, Iterable, List, Optional
 from uuid import uuid4
 
 from fastapi import UploadFile
-import pandas as pd
-
 from server.db import repository
 from server.db.models import (
     Annotation,
@@ -29,8 +27,6 @@ from server.db.storage import (
     document_blob_path,
     model_blob_path,
 )
-from tools.feedback_utils import write_review_csv
-from tools.pdf_annotation import prepare_pdf_annotation_project
 
 from . import datasets
 from .jobs import job_manager
@@ -53,15 +49,26 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _build_default_review_dataframe(document_filename: str) -> pd.DataFrame:
+def _write_json(path: Path, payload: Dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def _load_json(path: Path) -> Dict[str, Any]:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _build_default_annotation_row(document_filename: str) -> Dict[str, Any]:
     row: Dict[str, Any] = {
-        "row_id": 1,
+        "row_id": "1",
         "Source File": document_filename,
         "annotator": "",
         "notes": "",
         "timestamp": "",
     }
     for column in METADATA_COLUMNS:
+        if column == "Source File":
+            continue
         row[column] = ""
 
     seen_pretty: set[str] = set()
@@ -69,30 +76,114 @@ def _build_default_review_dataframe(document_filename: str) -> pd.DataFrame:
         if pretty in seen_pretty:
             continue
         seen_pretty.add(pretty)
+        row[pretty] = ""
         row[f"{pretty}_pred"] = ""
         row[f"{pretty}_gold"] = ""
         row[f"{pretty}_status"] = ""
-    return pd.DataFrame([row])
+    return row
 
 
 def _prepare_analysis_assets(document_path: Path, annotation_id: str) -> Dict[str, Any]:
     analysis_dir = annotation_analysis_dir(annotation_id)
-    review_csv_path = analysis_dir / "review.csv"
-    dataframe = _build_default_review_dataframe(document_path.name)
-    write_review_csv(dataframe, str(review_csv_path))
-    project_info = prepare_pdf_annotation_project(
-        review_csv=str(review_csv_path),
-        out_dir=str(analysis_dir),
-        pdf_root=str(document_path.parent),
-    )
-    project_info.update(
+    analysis_dir.mkdir(parents=True, exist_ok=True)
+
+    row = _build_default_annotation_row(document_path.name)
+    tasks = [{"id": row["row_id"], "data": row}]
+    fields = [
         {
-            "analysis_dir": str(analysis_dir),
-            "review_csv": str(review_csv_path),
+            "normalized": normalized,
+            "label": pretty,
         }
-    )
-    # Ensure payload is JSON-serialisable
-    return {key: (value if not isinstance(value, Path) else str(value)) for key, value in project_info.items()}
+        for normalized, pretty in NORMALIZED_TO_PRETTY.items()
+    ]
+
+    manifest = {
+        "annotation_id": annotation_id,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "document_filename": document_path.name,
+        "fields": fields,
+        "metadata_columns": METADATA_COLUMNS,
+        "rows": [row],
+    }
+
+    config = {
+        "fields": fields,
+        "metadata_columns": METADATA_COLUMNS,
+    }
+
+    tasks_path = analysis_dir / "tasks.json"
+    manifest_path = analysis_dir / "analysis.json"
+    config_path = analysis_dir / "config.json"
+
+    _write_json(tasks_path, tasks)
+    _write_json(manifest_path, manifest)
+    _write_json(config_path, config)
+
+    return {
+        "analysis_dir": str(analysis_dir),
+        "tasks_path": str(tasks_path),
+        "manifest_path": str(manifest_path),
+        "config_path": str(config_path),
+    }
+
+
+def _apply_annotation_to_manifest(annotation_id: str, annotation_payload: Any) -> None:
+    analysis_dir = annotation_analysis_dir(annotation_id)
+    manifest_path = analysis_dir / "analysis.json"
+    if not manifest_path.exists():
+        return
+    manifest = _load_json(manifest_path)
+    rows = manifest.get("rows", [])
+    if not isinstance(rows, list):
+        rows = []
+    _merge_annotation_payload(rows, annotation_payload)
+    manifest["rows"] = rows
+    manifest["updated_at"] = datetime.now(timezone.utc).isoformat()
+    _write_json(manifest_path, manifest)
+
+
+def _merge_annotation_payload(rows: List[Dict[str, Any]], annotation_payload: Any) -> None:
+    if not annotation_payload or not isinstance(annotation_payload, list):
+        return
+
+    row_lookup: Dict[str, Dict[str, Any]] = {}
+    for index, row in enumerate(rows):
+        key = str(row.get("row_id") or index + 1)
+        row_lookup[key] = row
+
+    for item in annotation_payload:
+        if not isinstance(item, dict):
+            continue
+        data = item.get("data") or {}
+        raw_row_id = data.get("row_id", item.get("id"))
+        if raw_row_id is None:
+            continue
+        row = row_lookup.get(str(raw_row_id))
+        if row is None:
+            continue
+        annotations = item.get("annotations") or []
+        for annotation in annotations:
+            results = annotation.get("result") or []
+            for result in results:
+                from_name = result.get("from_name")
+                value = result.get("value") or {}
+                if not from_name:
+                    continue
+                if from_name.endswith("_gold"):
+                    texts = value.get("text")
+                    if isinstance(texts, list):
+                        text_value = " ".join(text.strip() for text in texts if text).strip()
+                    elif texts is None:
+                        text_value = ""
+                    else:
+                        text_value = str(texts).strip()
+                    row[from_name] = text_value
+                    base = from_name[:-5]
+                    if base and base not in row:
+                        row[base] = text_value
+                elif from_name.endswith("_status"):
+                    choices = value.get("choices") or []
+                    row[from_name] = choices[0] if choices else row.get(from_name, "")
 
 
 async def create_document(file: UploadFile, metadata: Optional[Dict[str, Any]]) -> DocumentDetail:
@@ -277,7 +368,7 @@ async def start_analysis(document_id: str) -> JobResponse:
             annotation_id = annotation.id
             latest_version_id = latest_version.id
 
-        await _record_progress("Preparing annotation assets")
+        await _record_progress("Preparing annotation manifest")
         project_info = await asyncio.to_thread(
             _prepare_analysis_assets,
             document_path,
@@ -306,16 +397,20 @@ async def start_analysis(document_id: str) -> JobResponse:
                 payload={
                     "job_id": job_id,
                     "analysis_dir": project_info.get("analysis_dir"),
-                    "config_path": project_info.get("config"),
+                    "config_path": project_info.get("config_path"),
                     "tasks_path": project_info.get("tasks_path"),
-                    "review_csv": project_info.get("review_csv"),
-                    "copied_pdfs": project_info.get("copied_pdfs"),
-                    "missing_pdfs": project_info.get("missing_pdfs"),
+                    "manifest_path": project_info.get("manifest_path"),
                 },
             )
             await session.commit()
 
-        await _record_progress("Analysis assets ready", payload={"document_id": document_id})
+        await _record_progress(
+            "Annotation manifest ready",
+            payload={
+                "document_id": document_id,
+                "manifest_path": project_info.get("manifest_path"),
+            },
+        )
         return {"document_id": document_id, "analysis": project_info}
 
     job_id = await job_manager.submit(
@@ -355,6 +450,8 @@ async def ingest_annotation_export(document_id: str, export_file: UploadFile) ->
         )
         await session.commit()
         await session.refresh(annotation)
+
+    _apply_annotation_to_manifest(annotation.id, payload)
 
     return AnnotationDetail(
         id=annotation.id,

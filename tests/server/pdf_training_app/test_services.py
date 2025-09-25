@@ -201,8 +201,10 @@ async def test_document_flow_end_to_end(service_context: SimpleNamespace) -> Non
     analysis_info = analysis_payload.get("analysis") or {}
     tasks_path = Path(analysis_info.get("tasks_path"))
     assert tasks_path.exists()
-    config_path = Path(analysis_info.get("config"))
+    config_path = Path(analysis_info.get("config_path"))
     assert config_path.exists()
+    manifest_path = Path(analysis_info.get("manifest_path"))
+    assert manifest_path.exists()
 
     tasks = json.loads(tasks_path.read_text(encoding="utf-8"))
     export_payload = _build_export_payload(tasks)
@@ -273,7 +275,7 @@ async def test_llm_support_generates_payload(service_context: SimpleNamespace) -
 
 
 @pytest.mark.asyncio
-async def test_llm_support_handles_empty_review_csv(service_context: SimpleNamespace) -> None:
+async def test_llm_support_handles_empty_manifest(service_context: SimpleNamespace) -> None:
     services = service_context.services
     job_manager = service_context.job_manager
     repository = service_context.repository
@@ -291,8 +293,10 @@ async def test_llm_support_handles_empty_review_csv(service_context: SimpleNames
 
     from server.db.storage import annotation_analysis_dir
 
-    review_path = annotation_analysis_dir(annotation.id) / "review.csv"
-    review_path.write_text("row_id\n", encoding="utf-8")
+    manifest_path = annotation_analysis_dir(annotation.id) / "analysis.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["rows"] = []
+    manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
     llm_job = await services.start_llm_support(document_detail.document.id, dry_run=True)
     completed_llm = await job_manager.wait_until_complete(llm_job.job_id, timeout=5)

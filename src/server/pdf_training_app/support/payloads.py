@@ -5,15 +5,7 @@ import asyncio
 import json
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict
-
-import pandas as pd
-
-
-async def read_review_dataframe(review_csv: Path) -> pd.DataFrame:
-    """Load the review CSV on a background thread."""
-
-    return await asyncio.to_thread(pd.read_csv, review_csv)
+from typing import Any, Dict, Mapping
 
 
 def format_index(index: int | tuple[int, ...]) -> str:
@@ -30,7 +22,7 @@ def format_index(index: int | tuple[int, ...]) -> str:
         return str(index)
 
 
-def row_label(row: pd.Series, index: int | tuple[int, ...]) -> str:
+def row_label(row: Mapping[str, Any], index: int | tuple[int, ...]) -> str:
     """Derive the row identifier used when building prompts."""
 
     value = row.get("row_id")

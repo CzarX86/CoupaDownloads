@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
+import pandas as pd
+
 from server.db import repository
 from server.db.models import JobType as DbJobType
 from server.db.session import async_session
@@ -15,7 +17,7 @@ from server.db.storage import annotation_analysis_dir
 from ..jobs import job_manager
 from ..models import JobResponse, JobStatus as ApiJobStatus, JobType as ApiJobType
 from .config import LLMConfig, load_config
-from .payloads import placeholder_payload, read_review_dataframe, row_label, write_support_payload
+from .payloads import placeholder_payload, row_label, write_support_payload
 
 try:
     from tools import llm_critique
@@ -51,7 +53,14 @@ async def _record_job_detail(job_id: str, detail: str, payload: Optional[Dict[st
         await session.commit()
 
 
-async def _load_review_context(document_id: str) -> tuple[Path, Dict[str, Any]]:
+async def _read_json(path: Path) -> Dict[str, Any]:
+    def _reader() -> Dict[str, Any]:
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    return await asyncio.to_thread(_reader)
+
+
+async def _load_manifest_context(document_id: str) -> tuple[Dict[str, Any], Dict[str, Any]]:
     async with async_session() as session:
         document = await repository.get_document(session, document_id)
         if not document:
@@ -60,21 +69,22 @@ async def _load_review_context(document_id: str) -> tuple[Path, Dict[str, Any]]:
             raise ValueError("Annotation record not found for document")
         annotation = document.annotations[0]
         analysis_dir = annotation_analysis_dir(annotation.id)
-        review_csv = analysis_dir / "review.csv"
-        if not review_csv.exists():
-            raise ValueError("Review CSV not found. Run preprocessing first.")
-    return review_csv, {"annotation": annotation, "analysis_dir": analysis_dir}
+        manifest_path = analysis_dir / "analysis.json"
+        if not manifest_path.exists():
+            raise ValueError("Annotation manifest not found. Run preprocessing first.")
+        manifest = await _read_json(manifest_path)
+    return manifest, {"annotation": annotation, "analysis_dir": analysis_dir, "manifest_path": manifest_path}
 
 
 async def _generate_llm_support(document_id: str, config: LLMConfig, job_id: str) -> Dict[str, Any]:
     await _record_job_detail(job_id, "Loading document context")
-    review_csv, context = await _load_review_context(document_id)
+    manifest, context = await _load_manifest_context(document_id)
     annotation = context["annotation"]
     analysis_dir: Path = context["analysis_dir"]
-    df = await read_review_dataframe(review_csv)
+    rows = manifest.get("rows") or []
     support_path = analysis_dir / "llm_support.json"
 
-    if df.empty:
+    if not rows:
         payload = placeholder_payload(
             document_id,
             provider=config.provider,
@@ -84,13 +94,14 @@ async def _generate_llm_support(document_id: str, config: LLMConfig, job_id: str
             support_path=support_path,
         )
         await write_support_payload(support_path, payload)
-        await _record_job_detail(job_id, "Review CSV was empty; recorded placeholder payload.", payload)
+        await _record_job_detail(job_id, "No annotation rows available; recorded placeholder payload.", payload)
         return payload
 
     results: List[Dict[str, Any]] = []
-    for idx, row in df.iterrows():
+    for idx, row in enumerate(rows):
+        series = pd.Series(row)
         label = row_label(row, idx)
-        prompt = llm_critique._build_prompt(row, config.fields, label)
+        prompt = llm_critique._build_prompt(series, config.fields, label)
         response = await asyncio.to_thread(_run_llm_prompt, prompt, config)
         results.append(
             {
