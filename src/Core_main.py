@@ -5,6 +5,7 @@ import re
 import time
 import threading
 import multiprocessing as mp
+from datetime import datetime, timedelta
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from selenium.common.exceptions import (
     InvalidSessionIdException,
@@ -201,6 +202,7 @@ def process_po_worker(args):
             'fallback_attempted': result_payload.get('fallback_attempted', False),
             'fallback_used': result_payload.get('fallback_used', False),
             'fallback_details': result_payload.get('fallback_details', {}),
+            'fallback_trigger_reason': result_payload.get('fallback_trigger_reason', ''),
             'source_page': result_payload.get('source_page', 'PO'),
             'initial_url': result_payload.get('initial_url', result_payload.get('coupa_url', '')),
         }
@@ -342,6 +344,11 @@ class MainApp:
         self.folder_hierarchy = FolderHierarchyManager()
         self.driver = None
         self.lock = threading.Lock()  # Thread safety for browser operations
+        self._run_start_time: float | None = None
+        self._current_po_start_time: float | None = None
+        self._completed_po_count = 0
+        self._total_po_count = 0
+        self._accumulated_po_seconds = 0.0
 
     def _has_active_downloads(self, folder_path: str) -> bool:
         try:
@@ -402,13 +409,118 @@ class MainApp:
             self.driver = self.browser_manager.driver
             print("✅ Browser initialized successfully")
 
+    def _prepare_progress_tracking(self, total_pos: int) -> None:
+        """Reset telemetry accumulators before sequential PO processing."""
+        self._total_po_count = max(0, total_pos)
+        self._completed_po_count = 0
+        self._accumulated_po_seconds = 0.0
+        self._current_po_start_time = None
+        self._run_start_time = time.perf_counter()
+
+    def _format_duration(self, seconds: float | None) -> str:
+        if seconds is None or seconds < 0:
+            return "--:--"
+        total_minutes = int(seconds // 60)
+        hours, minutes = divmod(total_minutes, 60)
+        return f"{hours:02d}:{minutes:02d}"
+
+    def _progress_snapshot(self) -> tuple[str, str, str]:
+        if self._run_start_time is None:
+            return "--:--", "--:--", "--"
+
+        elapsed_seconds = max(0.0, time.perf_counter() - self._run_start_time)
+        elapsed = self._format_duration(elapsed_seconds)
+
+        if self._completed_po_count <= 0 or self._accumulated_po_seconds <= 0.0:
+            return elapsed, "--:--", "--"
+
+        remaining_pos = max(self._total_po_count - self._completed_po_count, 0)
+        if remaining_pos <= 0:
+            eta_time = datetime.now()
+            return elapsed, "00:00", eta_time.strftime("%Y-%m-%d %H:%M")
+
+        average = self._accumulated_po_seconds / self._completed_po_count
+        remaining_seconds = max(0.0, average * remaining_pos)
+        remaining = self._format_duration(remaining_seconds)
+        eta = (datetime.now() + timedelta(seconds=remaining_seconds)).strftime("%Y-%m-%d %H:%M")
+        return elapsed, remaining, eta
+
+    def _build_progress_line(self, index: int, total: int) -> str:
+        elapsed, remaining, eta = self._progress_snapshot()
+        return (
+            f"📋 Processing PO {index + 1}/{total} – "
+            f"Elapsed Time: {elapsed}, Remaining Time: {remaining}, "
+            f"Estimated Completion: {eta}"
+        )
+
+    def _register_po_completion(self) -> None:
+        if self._current_po_start_time is None:
+            return
+
+        duration = max(0.0, time.perf_counter() - self._current_po_start_time)
+        self._accumulated_po_seconds += duration
+        if self._total_po_count > 0:
+            self._completed_po_count = min(self._completed_po_count + 1, self._total_po_count)
+        else:
+            self._completed_po_count += 1
+        self._current_po_start_time = None
+
+    def _compose_csv_message(self, result_payload: dict) -> str:
+        status_code = (result_payload.get('status_code') or '').upper()
+        status_reason = result_payload.get('status_reason', '') or ''
+        fallback_used = bool(result_payload.get('fallback_used'))
+        fallback_details = result_payload.get('fallback_details') or {}
+        trigger_reason = (
+            result_payload.get('fallback_trigger_reason')
+            or fallback_details.get('trigger_reason')
+            or ''
+        )
+        message = result_payload.get('message', '') or ''
+
+        if fallback_used:
+            parts: list[str] = []
+            if message:
+                parts.append(message)
+
+            if trigger_reason == 'po_without_pdf':
+                parts.append('PO page did not expose PDF attachments.')
+            elif trigger_reason == 'po_without_attachments':
+                parts.append('PO page did not expose attachments.')
+
+            source = (fallback_details.get('source') or '').strip()
+            if source:
+                friendly_source = source.replace('::', ' via ')
+                parts.append(f"PR link source: {friendly_source}")
+
+            pr_url = (fallback_details.get('url') or '').strip()
+            if pr_url:
+                parts.append(f"PR URL: {pr_url}")
+
+            if not parts:
+                parts.append('PR fallback used to retrieve documents.')
+            return ' — '.join(parts)
+
+        if status_code == 'COMPLETED':
+            return ''
+        if message:
+            return message
+        if status_code == 'NO_ATTACHMENTS':
+            return status_reason.replace('_', ' ').title() if status_reason else 'No attachments found.'
+        if status_reason:
+            return status_reason.replace('_', ' ').title()
+        return ''
+
     def process_single_po(self, po_data, hierarchy_cols, has_hierarchy_data, index, total):
         """Process a single PO using the existing browser window (no extra tabs)."""
         display_po = po_data['po_number']
         po_number = po_data['po_number']
-        
-        print(f"📋 Processing PO {index+1}/{total}: {display_po}")
-        
+        if self._run_start_time is None:
+            self._prepare_progress_tracking(total)
+
+        self._current_po_start_time = time.perf_counter()
+        print(self._build_progress_line(index, total))
+        print(f"   Current PO: {display_po}")
+
         try:
             # Create hierarchical folder structure
             folder_path = self.folder_hierarchy.create_folder_path(
@@ -456,13 +568,7 @@ class MainApp:
                 formatted_names = self.folder_hierarchy.format_attachment_names(
                     result_payload.get('attachment_names', [])
                 )
-                csv_message = message
-                if status_code == 'COMPLETED':
-                    csv_message = ''
-                elif status_code == 'NO_ATTACHMENTS':
-                    csv_message = message or 'No attachments found.'
-                elif not csv_message and status_reason:
-                    csv_message = status_reason.replace('_', ' ').title()
+                csv_message = self._compose_csv_message(result_payload)
                 self.excel_processor.update_po_status(
                     display_po,
                     status_code,
@@ -522,6 +628,8 @@ class MainApp:
                 print(f"   🔴 Browser recovery failed: {str(recovery_error)}")
                 
             return False
+        finally:
+            self._register_po_completion()
 
     def run(self) -> None:
         """
@@ -597,13 +705,7 @@ class MainApp:
                     formatted_names = self.folder_hierarchy.format_attachment_names(
                         result.get('attachment_names', [])
                     )
-                    csv_message = message
-                    if status_code == 'COMPLETED':
-                        csv_message = ''
-                    elif status_code == 'NO_ATTACHMENTS':
-                        csv_message = message or 'No attachments found.'
-                    elif not csv_message and status_reason:
-                        csv_message = status_reason.replace('_', ' ').title()
+                    csv_message = self._compose_csv_message(result)
                     self.excel_processor.update_po_status(
                         display_po,
                         status_code,
@@ -633,6 +735,7 @@ class MainApp:
             # Legacy in-process mode (single WebDriver, sequential)
             print("📊 Using in-process mode (single WebDriver, sequential)")
             self.initialize_browser_once()
+            self._prepare_progress_tracking(len(po_data_list))
             for i, po_data in enumerate(po_data_list):
                 ok = self.process_single_po(po_data, hierarchy_cols, has_hierarchy_data, i, len(po_data_list))
                 if ok:

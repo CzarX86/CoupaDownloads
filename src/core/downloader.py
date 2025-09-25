@@ -205,6 +205,29 @@ class Downloader:
         return summary
 
     @staticmethod
+    def _attachments_include_pdf(candidates: Optional[List[WebElement]]) -> bool:
+        """Check whether any attachment candidate looks like a PDF file."""
+        if not candidates:
+            return False
+        for element in candidates:
+            if element is None:
+                continue
+            for attr in ('href', 'download', 'title', 'aria-label'):
+                try:
+                    payload = (element.get_attribute(attr) or '').lower()
+                except Exception:
+                    payload = ''
+                if '.pdf' in payload:
+                    return True
+            try:
+                text_value = (element.text or '').lower()
+            except Exception:
+                text_value = ''
+            if '.pdf' in text_value:
+                return True
+        return False
+
+    @staticmethod
     def _truncate_text(text: str, limit: int = 220) -> str:
         if not text:
             return ''
@@ -595,9 +618,18 @@ class Downloader:
         fallback_attempted = False
         fallback_used = False
         fallback_details: Dict[str, Optional[str]] = {}
+        fallback_trigger_reason = ''
+        fallback_enabled = getattr(Config, 'PR_FALLBACK_ENABLED', True)
 
-        if not attachments:
-            if not getattr(Config, 'PR_FALLBACK_ENABLED', True):
+        attachments_missing = len(attachments) == 0 if attachments is not None else True
+        no_pdf_on_po = False
+        if not attachments_missing:
+            no_pdf_on_po = not self._attachments_include_pdf(attachments)
+
+        if attachments_missing or no_pdf_on_po:
+            fallback_trigger_reason = 'po_without_attachments' if attachments_missing else 'po_without_pdf'
+
+            if attachments_missing and not fallback_enabled:
                 msg = "No attachments found on PO page (fallback disabled)."
                 print(f"   📭 {msg}")
                 return {
@@ -613,107 +645,125 @@ class Downloader:
                     'errors': [],
                     'fallback_attempted': False,
                     'fallback_used': False,
-                    'fallback_details': {'status': 'disabled'},
+                    'fallback_details': {'status': 'disabled', 'trigger_reason': fallback_trigger_reason},
+                    'fallback_trigger_reason': fallback_trigger_reason,
                     'source_page': 'PO',
                     'initial_url': initial_url,
                 }
 
-            print("   📭 No attachments found on PO page. Evaluating PR fallback...")
-            fallback_attempted = True
-            fallback_details = self._navigate_to_pr_from_po(order_number) or {}
+            if attachments_missing:
+                print("   📭 No attachments found on PO page. Evaluating PR fallback...")
+            elif no_pdf_on_po and fallback_enabled:
+                print("   📄 No PDF attachments found on PO page. Triggering PR fallback...")
+            elif no_pdf_on_po and not fallback_enabled:
+                print("   📄 No PDF attachments found on PO page. PR fallback disabled; continuing with available attachments.")
+                fallback_trigger_reason = ''
 
-            status = fallback_details.get('status') if isinstance(fallback_details, dict) else None
-            fallback_url = fallback_details.get('url') if isinstance(fallback_details, dict) else ''
-            if status != 'navigated' or not fallback_url:
-                if status == 'timeout':
-                    msg = "No attachments found on PO page; PR link search timed out."
-                elif status == 'navigation_error':
-                    msg = "No attachments found on PO page; navigation to PR failed."
-                elif status == 'error':
-                    msg = "No attachments found on PO page; PR lookup failed."
-                elif status == 'missing_href':
-                    msg = "No attachments found on PO page; PR link missing href attribute."
-                else:
-                    msg = "No attachments found on PO page; PR link unavailable."
-                print(f"   📭 {msg}")
-                return {
-                    'success': True,
-                    'status_code': 'NO_ATTACHMENTS',
-                    'status_reason': 'PR_LINK_NOT_FOUND',
-                    'message': msg,
-                    'supplier_name': supplier or '',
-                    'attachments_found': 0,
-                    'attachments_downloaded': 0,
-                    'coupa_url': url,
-                    'attachment_names': [],
-                    'errors': [],
-                    'fallback_attempted': True,
-                    'fallback_used': False,
-                    'fallback_details': fallback_details or {},
-                    'source_page': 'PO',
-                    'initial_url': initial_url,
-                }
+            if fallback_enabled and (attachments_missing or no_pdf_on_po):
+                fallback_attempted = True
+                fallback_details = self._navigate_to_pr_from_po(order_number) or {}
+                if isinstance(fallback_details, dict):
+                    fallback_details.setdefault('trigger_reason', fallback_trigger_reason)
 
-            fallback_used = True
-            url = fallback_url
+                status = fallback_details.get('status') if isinstance(fallback_details, dict) else None
+                fallback_url = fallback_details.get('url') if isinstance(fallback_details, dict) else ''
+                if status != 'navigated' or not fallback_url:
+                    prefix = "No attachments found on PO page" if attachments_missing else "No PDF attachments found on PO page"
+                    if status == 'timeout':
+                        msg = f"{prefix}; PR link search timed out."
+                    elif status == 'navigation_error':
+                        msg = f"{prefix}; navigation to PR failed."
+                    elif status == 'error':
+                        msg = f"{prefix}; PR lookup failed."
+                    elif status == 'missing_href':
+                        msg = f"{prefix}; PR link missing href attribute."
+                    else:
+                        msg = f"{prefix}; PR link unavailable."
+                    print(f"   📭 {msg}")
+                    return {
+                        'success': True,
+                        'status_code': 'NO_ATTACHMENTS',
+                        'status_reason': 'PR_LINK_NOT_FOUND',
+                        'message': msg,
+                        'supplier_name': supplier or '',
+                        'attachments_found': 0,
+                        'attachments_downloaded': 0,
+                        'coupa_url': url,
+                        'attachment_names': [],
+                        'errors': [],
+                        'fallback_attempted': True,
+                        'fallback_used': False,
+                        'fallback_details': fallback_details or {'trigger_reason': fallback_trigger_reason},
+                        'fallback_trigger_reason': fallback_trigger_reason,
+                        'source_page': 'PO',
+                        'initial_url': initial_url,
+                    }
 
-            pr_error_info = self._detect_error_page('pr_fallback_early')
-            if not pr_error_info:
-                ready_timeout = getattr(Config, 'ERROR_PAGE_READY_CHECK_TIMEOUT', 1.0)
-                pr_error_info = self._detect_error_page('pr_fallback_post_ready', timeout=ready_timeout)
+                fallback_used = True
+                url = fallback_url
 
-            if pr_error_info:
-                marker_raw = (pr_error_info.get('marker') or 'Coupa error page').strip()
-                marker_text = self._truncate_text(marker_raw, 150)
-                msg = self._truncate_text(f"PR fallback landed on an error page: {marker_text}")
-                print(
-                    "   ❌ "
-                    f"{msg} (phase={pr_error_info.get('phase')}, source={pr_error_info.get('source')}, "
-                    f"{pr_error_info.get('elapsed', 0)}s)"
-                )
-                return {
-                    'success': False,
-                    'status_code': 'PR_NOT_ACCESSIBLE',
-                    'status_reason': 'PR_FALLBACK_ERROR_PAGE',
-                    'message': msg,
-                    'supplier_name': '',
-                    'attachments_found': 0,
-                    'attachments_downloaded': 0,
-                    'coupa_url': url,
-                    'attachment_names': [],
-                    'errors': [{'filename': '', 'reason': marker_text}],
-                    'error_info': pr_error_info,
-                    'fallback_attempted': True,
-                    'fallback_used': True,
-                    'fallback_details': fallback_details or {},
-                    'source_page': 'PR',
-                    'initial_url': initial_url,
-                }
+                pr_error_info = self._detect_error_page('pr_fallback_early')
+                if not pr_error_info:
+                    ready_timeout = getattr(Config, 'ERROR_PAGE_READY_CHECK_TIMEOUT', 1.0)
+                    pr_error_info = self._detect_error_page('pr_fallback_post_ready', timeout=ready_timeout)
 
-            supplier = self._extract_supplier_name() or supplier
-            attachments = self._find_attachments()
-            if not attachments:
-                msg = "No attachments found on PO or PR pages."
-                print(f"   📭 {msg}")
-                return {
-                    'success': True,
-                    'status_code': 'NO_ATTACHMENTS',
-                    'status_reason': 'PO_AND_PR_WITHOUT_ATTACHMENTS',
-                    'message': msg,
-                    'supplier_name': supplier or '',
-                    'attachments_found': 0,
-                    'attachments_downloaded': 0,
-                    'coupa_url': url,
-                    'attachment_names': [],
-                    'errors': [],
-                    'fallback_attempted': True,
-                    'fallback_used': True,
-                    'fallback_details': fallback_details or {},
-                    'source_page': 'PR',
-                    'initial_url': initial_url,
-                }
+                if pr_error_info:
+                    marker_raw = (pr_error_info.get('marker') or 'Coupa error page').strip()
+                    marker_text = self._truncate_text(marker_raw, 150)
+                    msg = self._truncate_text(f"PR fallback landed on an error page: {marker_text}")
+                    print(
+                        "   ❌ "
+                        f"{msg} (phase={pr_error_info.get('phase')}, source={pr_error_info.get('source')}, "
+                        f"{pr_error_info.get('elapsed', 0)}s)"
+                    )
+                    return {
+                        'success': False,
+                        'status_code': 'PR_NOT_ACCESSIBLE',
+                        'status_reason': 'PR_FALLBACK_ERROR_PAGE',
+                        'message': msg,
+                        'supplier_name': '',
+                        'attachments_found': 0,
+                        'attachments_downloaded': 0,
+                        'coupa_url': url,
+                        'attachment_names': [],
+                        'errors': [{'filename': '', 'reason': marker_text}],
+                        'error_info': pr_error_info,
+                        'fallback_attempted': True,
+                        'fallback_used': True,
+                        'fallback_details': fallback_details or {'trigger_reason': fallback_trigger_reason},
+                        'fallback_trigger_reason': fallback_trigger_reason,
+                        'source_page': 'PR',
+                        'initial_url': initial_url,
+                    }
 
-        total_attachments = len(attachments)
+                supplier = self._extract_supplier_name() or supplier
+                attachments = self._find_attachments()
+                if not attachments:
+                    msg = "No attachments found on PR page after fallback."
+                    if fallback_trigger_reason == 'po_without_pdf':
+                        msg = "No PDF attachments available on PO page and PR page returned no attachments."
+                    print(f"   📭 {msg}")
+                    return {
+                        'success': True,
+                        'status_code': 'NO_ATTACHMENTS',
+                        'status_reason': 'PO_AND_PR_WITHOUT_ATTACHMENTS',
+                        'message': msg,
+                        'supplier_name': supplier or '',
+                        'attachments_found': 0,
+                        'attachments_downloaded': 0,
+                        'coupa_url': url,
+                        'attachment_names': [],
+                        'errors': [],
+                        'fallback_attempted': True,
+                        'fallback_used': True,
+                        'fallback_details': fallback_details or {'trigger_reason': fallback_trigger_reason},
+                        'fallback_trigger_reason': fallback_trigger_reason,
+                        'source_page': 'PR',
+                        'initial_url': initial_url,
+                    }
+
+
+        total_attachments = len(attachments or [])
         print(f"   Processing {total_attachments} attachments...")
         downloaded_count = 0
         names_list: List[str] = []
@@ -782,6 +832,10 @@ class Downloader:
             'fallback_attempted': fallback_attempted,
             'fallback_used': fallback_used,
             'fallback_details': fallback_details or {},
+            'fallback_trigger_reason': (
+                (fallback_details or {}).get('trigger_reason')
+                or fallback_trigger_reason
+            ),
             'source_page': 'PR' if fallback_used else 'PO',
             'initial_url': initial_url,
         }
