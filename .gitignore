@@ -117,3 +117,10 @@ poetry.lock
 dmypy.json
 # SPA dependencies (Node.js/Vite)
 **/node_modules/
+
+# Experimental workspace
+experimental/*
+!experimental/__init__.py
+!experimental/core/
+!experimental/core/__init__.py
+!experimental/core/main.py
