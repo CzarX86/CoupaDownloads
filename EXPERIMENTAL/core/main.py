@@ -19,12 +19,18 @@ project_root_str = str(project_root)
 if project_root_str not in sys.path:
     sys.path.insert(0, project_root_str)
 
-from src.core.browser import BrowserManager
-from src.core.config import Config
-from src.core.downloader import Downloader
-from src.core.excel_processor import ExcelProcessor
-from src.core.folder_hierarchy import FolderHierarchyManager
-from src.core.ui import DownloadCLIController, PODescriptor
+# Add EXPERIMENTAL directory to path for local corelib imports
+experimental_root = Path(__file__).resolve().parents[1]
+experimental_root_str = str(experimental_root)
+if experimental_root_str not in sys.path:
+    sys.path.insert(0, experimental_root_str)
+
+from corelib.browser import BrowserManager
+from corelib.config import Config as ExperimentalConfig
+from corelib.downloader import Downloader
+from corelib.excel_processor import ExcelProcessor
+from corelib.folder_hierarchy import FolderHierarchyManager
+from corelib.ui import DownloadCLIController, PODescriptor
 
 # Feature toggles for the experimental runner
 ENABLE_INTERACTIVE_UI = True  # flip to False to disable the Textual UI without env vars
@@ -164,12 +170,12 @@ def process_po_worker(args):
         print("[worker] 🚀 Initializing WebDriver...", flush=True)
         # Avoid using a shared profile in workers to prevent profile locks/hangs
         try:
-            from src.core.config import Config as _Cfg
+            from corelib.config import Config as _Cfg
             _Cfg.EDGE_PROFILE_DIR = ''
             _Cfg.EDGE_PROFILE_NAME = ''
         except Exception:
             pass
-        browser_manager.initialize_driver()
+        browser_manager.initialize_driver(headless=ExperimentalConfig.HEADLESS)
         driver = browser_manager.driver
         print("[worker] ⚙️ WebDriver initialized", flush=True)
         browser_manager.update_download_directory(folder_path)
@@ -279,8 +285,8 @@ def _interactive_setup() -> None:
     os.environ['USE_PROCESS_POOL'] = 'true' if use_pool else 'false'
 
     # 3) Process workers with safe cap (only if using process pool)
+    default_workers = 1
     try:
-        default_workers = 1
         procs_int = default_workers
         if use_pool:
             procs = input(f"Number of process workers (1-3) [{default_workers}]: ").strip()
@@ -319,21 +325,21 @@ def _interactive_setup() -> None:
             os.environ['EDGE_DRIVER_PATH'] = manual
 
     # 6) Download folder base
-    default_dl = os.path.expanduser(Config.DOWNLOAD_FOLDER)
+    default_dl = os.path.expanduser(ExperimentalConfig.DOWNLOAD_FOLDER)
     dl = input(f"Base download folder [{default_dl}]: ").strip() or default_dl
-    Config.DOWNLOAD_FOLDER = os.path.expanduser(dl)
-    os.makedirs(Config.DOWNLOAD_FOLDER, exist_ok=True)
+    ExperimentalConfig.DOWNLOAD_FOLDER = os.path.expanduser(dl)
+    os.makedirs(ExperimentalConfig.DOWNLOAD_FOLDER, exist_ok=True)
 
     # 7) Edge profile usage
     use_prof = _prompt_bool("Use Edge profile (cookies/login)?", default=True)
     os.environ['USE_EDGE_PROFILE'] = 'true' if use_prof else 'false'
     print("Tip: Leave blank to keep the default shown in brackets.")
-    prof_dir = input(f"Edge profile directory [{Config.EDGE_PROFILE_DIR}]: ").strip()
+    prof_dir = input(f"Edge profile directory [{ExperimentalConfig.EDGE_PROFILE_DIR}]: ").strip()
     if prof_dir:
-        Config.EDGE_PROFILE_DIR = os.path.expanduser(prof_dir)
-    prof_name = input(f"Edge profile name [{Config.EDGE_PROFILE_NAME}]: ").strip()
+        ExperimentalConfig.EDGE_PROFILE_DIR = os.path.expanduser(prof_dir)
+    prof_name = input(f"Edge profile name [{ExperimentalConfig.EDGE_PROFILE_NAME}]: ").strip()
     if prof_name:
-        Config.EDGE_PROFILE_NAME = prof_name
+        ExperimentalConfig.EDGE_PROFILE_NAME = prof_name
     # 8) Pre-start cleanup (kill running Edge processes)
     kill_procs = _prompt_bool("Close any running Edge processes before starting?", default=True)
     os.environ['CLOSE_EDGE_PROCESSES'] = 'true' if kill_procs else 'false'
@@ -451,7 +457,7 @@ class MainApp:
         """Initialize browser once and keep it open for all POs."""
         if not self.driver:
             print("🚀 Initializing browser for parallel processing...")
-            self.browser_manager.initialize_driver()
+            self.browser_manager.initialize_driver(headless=ExperimentalConfig.HEADLESS)
             self.driver = self.browser_manager.driver
             print("✅ Browser initialized successfully")
 
@@ -586,7 +592,7 @@ class MainApp:
                     print("   ⚠️ Browser not responsive. Reinitializing driver...")
                     self._ui_log(display_po, 'Browser not responsive. Reinitializing driver…', level='warning')
                     self.browser_manager.cleanup()
-                    self.browser_manager.initialize_driver()
+                    self.browser_manager.initialize_driver(headless=ExperimentalConfig.HEADLESS)
                     self.driver = self.browser_manager.driver
 
                 # Ensure downloads for this PO go to the right folder
@@ -606,7 +612,7 @@ class MainApp:
                         level='warning',
                     )
                     self.browser_manager.cleanup()
-                    self.browser_manager.initialize_driver()
+                    self.browser_manager.initialize_driver(headless=ExperimentalConfig.HEADLESS)
                     self.driver = self.browser_manager.driver
                     downloader = Downloader(self.driver, self.browser_manager)
                     self._ui_log(display_po, 'Retrying download after driver recovery')
@@ -690,7 +696,7 @@ class MainApp:
                     if self.driver is None or not self.browser_manager.is_browser_responsive():
                         print("   ⚠️ Attempting browser recovery")
                         self.browser_manager.cleanup()
-                        self.browser_manager.initialize_driver()
+                        self.browser_manager.initialize_driver(headless=ExperimentalConfig.HEADLESS)
                         self.driver = self.browser_manager.driver
             except Exception as recovery_error:
                 print(f"   🔴 Browser recovery failed: {str(recovery_error)}")
@@ -821,8 +827,8 @@ class MainApp:
         # Interactive wizard for runtime config
         _interactive_setup()
 
-        os.makedirs(Config.INPUT_DIR, exist_ok=True)
-        os.makedirs(Config.DOWNLOAD_FOLDER, exist_ok=True)
+        os.makedirs(ExperimentalConfig.INPUT_DIR, exist_ok=True)
+        os.makedirs(ExperimentalConfig.DOWNLOAD_FOLDER, exist_ok=True)
 
         try:
             excel_path = self.excel_processor.get_excel_file_path()
@@ -842,8 +848,8 @@ class MainApp:
 
         print(f"Found {len(valid_entries)} POs to process.")
 
-        if Config.RANDOM_SAMPLE_POS and Config.RANDOM_SAMPLE_POS > 0:
-            k = min(Config.RANDOM_SAMPLE_POS, len(valid_entries))
+        if ExperimentalConfig.RANDOM_SAMPLE_POS and ExperimentalConfig.RANDOM_SAMPLE_POS > 0:
+            k = min(ExperimentalConfig.RANDOM_SAMPLE_POS, len(valid_entries))
             print(f"Sampling {k} random POs for processing...")
             valid_entries = random.sample(valid_entries, k)
 

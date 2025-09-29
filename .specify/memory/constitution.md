@@ -1,50 +1,41 @@
-# [PROJECT_NAME] Constitution
-<!-- Example: Spec Constitution, TaskFlow Constitution, etc. -->
+<!--
+Sync Impact Report:
+- Version change: Initial creation → v1.0.0  
+- New constitution establishing foundational governance for CoupaDownloads automation
+- Added sections: Core Principles (5), Development Workflow, Security Requirements, Governance
+- Templates requiring updates: ✅ aligned with existing .specify templates
+- Follow-up TODOs: None - all placeholders filled with concrete values
+-->
+
+# CoupaDownloads Constitution
 
 ## Core Principles
 
-### [PRINCIPLE_1_NAME]
-<!-- Example: I. Library-First -->
-[PRINCIPLE_1_DESCRIPTION]
-<!-- Example: Every feature starts as a standalone library; Libraries must be self-contained, independently testable, documented; Clear purpose required - no organizational-only libraries -->
+### I. Documentation-Driven Development
+Every change MUST follow the Proposal → Design → Implementation → Report workflow documented in AGENTS.md; Architecture decisions MUST be captured in ADRs when they have lasting impact; Documentation MUST be bilingual (Portuguese for users, English for technical interfaces) to serve enterprise stakeholders effectively.
 
-### [PRINCIPLE_2_NAME]
-<!-- Example: II. CLI Interface -->
-[PRINCIPLE_2_DESCRIPTION]
-<!-- Example: Every library exposes functionality via CLI; Text in/out protocol: stdin/args → stdout, errors → stderr; Support JSON + human-readable formats -->
+### II. Automation Reliability  
+Core automation workflows MUST be deterministic, resumable, and fail-safe; Browser automation MUST handle network interruptions, authentication timeouts, and session failures gracefully without corrupting data or requiring manual intervention; Configuration changes MUST be propagated consistently across all execution modes (sequential, process pool, headless/visible).
 
-### [PRINCIPLE_3_NAME]
-<!-- Example: III. Test-First (NON-NEGOTIABLE) -->
-[PRINCIPLE_3_DESCRIPTION]
-<!-- Example: TDD mandatory: Tests written → User approved → Tests fail → Then implement; Red-Green-Refactor cycle strictly enforced -->
+### III. Security by Design (NON-NEGOTIABLE)
+Credentials MUST never be committed to version control; Sensitive data MUST be handled through environment variables or secure configuration; Browser automation MUST respect corporate security policies and profile isolation; PII MUST be masked in logs and external communications.
 
-### [PRINCIPLE_4_NAME]
-<!-- Example: IV. Integration Testing -->
-[PRINCIPLE_4_DESCRIPTION]
-<!-- Example: Focus areas requiring integration tests: New library contract tests, Contract changes, Inter-service communication, Shared schemas -->
+### IV. Human-in-the-Loop Validation
+Critical business decisions (PO validation, contract interpretation, field extraction) MUST provide human review workflows with clear approval/rejection paths; AI predictions MUST be marked with confidence scores; Procurement processes MUST maintain complete audit trails for compliance requirements.
 
-### [PRINCIPLE_5_NAME]
-<!-- Example: V. Observability, VI. Versioning & Breaking Changes, VII. Simplicity -->
-[PRINCIPLE_5_DESCRIPTION]
-<!-- Example: Text I/O ensures debuggability; Structured logging required; Or: MAJOR.MINOR.BUILD format; Or: Start simple, YAGNI principles -->
+### V. Quality Assurance Standards
+Code MUST follow PEP 8 with type hints; Test coverage MUST exist for critical paths with `poetry run pytest`; Browser automation changes MUST be validated through complete end-to-end flows; Breaking changes to public contracts (CLI interfaces, data schemas) MUST be explicitly reviewed.
 
-## [SECTION_2_NAME]
-<!-- Example: Additional Constraints, Security Requirements, Performance Standards, etc. -->
+## Security Requirements
 
-[SECTION_2_CONTENT]
-<!-- Example: Technology stack requirements, compliance standards, deployment policies, etc. -->
+Procurement data protection policies: No credentials in repository; Use `storage/` only for local artifacts ignored by Git; Downloads of external binaries require approved Design Documents; Standard logs MUST avoid supplier names and PO numbers (use masking).
 
-## [SECTION_3_NAME]
-<!-- Example: Development Workflow, Review Process, Quality Gates, etc. -->
+## Development Workflow  
 
-[SECTION_3_CONTENT]
-<!-- Example: Code review requirements, testing gates, deployment approval process, etc. -->
+Branch naming: `feature/<descriptor>` or `fix/<ticket>`; Commit messages MUST be descriptive and ≤72 characters; Completed work artifacts move to `PR_PLANS/Implemented/`; Subprojects (EXPERIMENTAL/, tools/) MAY have local AGENTS.md files that take precedence for their scope.
 
 ## Governance
-<!-- Example: Constitution supersedes all other practices; Amendments require documentation, approval, migration plan -->
 
-[GOVERNANCE_RULES]
-<!-- Example: All PRs/reviews must verify compliance; Complexity must be justified; Use [GUIDANCE_FILE] for runtime development guidance -->
+This constitution supersedes conflicting practices in AGENTS.md or other guidance documents; Amendments require documented rationale and impact assessment; All feature specifications MUST pass constitutional compliance checks before implementation; Use AGENTS.md for detailed runtime development guidance that doesn't conflict with these principles.
 
-**Version**: [CONSTITUTION_VERSION] | **Ratified**: [RATIFICATION_DATE] | **Last Amended**: [LAST_AMENDED_DATE]
-<!-- Example: Version: 2.1.1 | Ratified: 2025-06-13 | Last Amended: 2025-07-16 -->
+**Version**: 1.0.0 | **Ratified**: 2025-01-15 | **Last Amended**: 2025-09-29
