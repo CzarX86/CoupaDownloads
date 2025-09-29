@@ -8,6 +8,7 @@ import multiprocessing as mp
 from datetime import datetime, timedelta
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
+from typing import Optional
 from selenium.common.exceptions import (
     InvalidSessionIdException,
     NoSuchWindowException,
@@ -31,9 +32,13 @@ from corelib.downloader import Downloader
 from corelib.excel_processor import ExcelProcessor
 from corelib.folder_hierarchy import FolderHierarchyManager
 from corelib.ui import DownloadCLIController, PODescriptor
+from corelib.models import InteractiveSetupSession, HeadlessConfiguration
 
 # Feature toggles for the experimental runner
 ENABLE_INTERACTIVE_UI = True  # flip to False to disable the Textual UI without env vars
+
+# Global variable to store current setup session (replaces environment variables)
+_current_setup_session: Optional[InteractiveSetupSession] = None
 
 
 # ---------- Helpers for process workers ----------
@@ -151,15 +156,19 @@ def _rename_folder_with_status(folder_path: str, status_code: str) -> str:
 def process_po_worker(args):
     """Run a single PO in its own process, with its own Edge driver.
 
-    Args tuple: (po_data, hierarchy_cols, has_hierarchy_data)
+    Args tuple: (po_data, hierarchy_cols, has_hierarchy_data, headless_config)
     Returns: dict with keys: po_number_display, status_code, message, final_folder
     """
-    po_data, hierarchy_cols, has_hierarchy_data = args
+    po_data, hierarchy_cols, has_hierarchy_data, headless_config = args
     display_po = po_data['po_number']
     folder_manager = FolderHierarchyManager()
     browser_manager = BrowserManager()
     driver = None
     folder_path = ''
+    
+    # Log headless configuration for this worker
+    print(f"[worker] 🎯 Headless configuration: {headless_config}", flush=True)
+    
     try:
         print(f"[worker] ▶ Starting PO {display_po}", flush=True)
         # Create folder without suffix
@@ -175,7 +184,7 @@ def process_po_worker(args):
             _Cfg.EDGE_PROFILE_NAME = ''
         except Exception:
             pass
-        browser_manager.initialize_driver(headless=ExperimentalConfig.HEADLESS)
+        browser_manager.initialize_driver(headless=headless_config.get_effective_headless_mode())
         driver = browser_manager.driver
         print("[worker] ⚙️ WebDriver initialized", flush=True)
         browser_manager.update_download_directory(folder_path)
@@ -269,7 +278,7 @@ def _prompt_bool(prompt: str, default: bool) -> bool:
         print("Please answer y or n.")
 
 
-def _interactive_setup() -> None:
+def _interactive_setup() -> 'InteractiveSetupSession':
     """Interactive wizard to gather runtime configuration from the user."""
     print("\n=== Interactive Setup ===")
     print("(Press Enter to accept defaults shown in [brackets])")
@@ -297,9 +306,22 @@ def _interactive_setup() -> None:
     os.environ['PROC_WORKERS'] = str(procs_int)
     os.environ.setdefault('PROC_WORKERS_CAP', '3')
 
-    # 4) Headless mode (default: Yes)
-    headless = _prompt_bool("Run browser in headless mode?", default=True)
-    os.environ['HEADLESS'] = 'true' if headless else 'false'
+    # 4) Headless mode (default: Yes) - NEW: Use HeadlessConfiguration instead of env var
+    headless_preference = _prompt_bool("Run browser in headless mode?", default=True)
+    
+    # Create interactive setup session to track user preferences
+    from corelib.models import InteractiveSetupSession
+    setup_session = InteractiveSetupSession(headless_preference=headless_preference)
+    
+    # Log the headless mode configuration
+    mode_str = "headless" if headless_preference else "visible"
+    print(f"🎯 Browser mode configured: {mode_str}")
+    
+    # Store setup session for later use (replace env var dependency)
+    global _current_setup_session
+    _current_setup_session = setup_session
+    
+    return setup_session
 
     # 5) Driver selection — auto-pick, fallback to download, final guidance
     # Respect existing env var; default to allowing auto-download
@@ -359,6 +381,19 @@ class MainApp:
         self._total_po_count = 0
         self._accumulated_po_seconds = 0.0
         self.cli_controller: DownloadCLIController | None = None
+        self._headless_config: HeadlessConfiguration | None = None
+
+    def set_headless_configuration(self, headless_config: HeadlessConfiguration) -> None:
+        """Set the headless configuration for this MainApp instance."""
+        self._headless_config = headless_config
+        print(f"[MainApp] 🎯 Headless configuration set: {headless_config}")
+
+    def _get_headless_setting(self) -> bool:
+        """Get the current headless setting from configuration."""
+        if self._headless_config is None:
+            print("[MainApp] ⚠️  No headless configuration set, falling back to default")
+            return False  # Safe default
+        return self._headless_config.get_effective_headless_mode()
 
     # ---- UI helpers ---------------------------------------------------------------------
 
@@ -457,7 +492,7 @@ class MainApp:
         """Initialize browser once and keep it open for all POs."""
         if not self.driver:
             print("🚀 Initializing browser for parallel processing...")
-            self.browser_manager.initialize_driver(headless=ExperimentalConfig.HEADLESS)
+            self.browser_manager.initialize_driver(headless=self._get_headless_setting())
             self.driver = self.browser_manager.driver
             print("✅ Browser initialized successfully")
 
@@ -592,7 +627,7 @@ class MainApp:
                     print("   ⚠️ Browser not responsive. Reinitializing driver...")
                     self._ui_log(display_po, 'Browser not responsive. Reinitializing driver…', level='warning')
                     self.browser_manager.cleanup()
-                    self.browser_manager.initialize_driver(headless=ExperimentalConfig.HEADLESS)
+                    self.browser_manager.initialize_driver(headless=self._get_headless_setting())
                     self.driver = self.browser_manager.driver
 
                 # Ensure downloads for this PO go to the right folder
@@ -612,7 +647,7 @@ class MainApp:
                         level='warning',
                     )
                     self.browser_manager.cleanup()
-                    self.browser_manager.initialize_driver(headless=ExperimentalConfig.HEADLESS)
+                    self.browser_manager.initialize_driver(headless=self._get_headless_setting())
                     self.driver = self.browser_manager.driver
                     downloader = Downloader(self.driver, self.browser_manager)
                     self._ui_log(display_po, 'Retrying download after driver recovery')
@@ -696,7 +731,7 @@ class MainApp:
                     if self.driver is None or not self.browser_manager.is_browser_responsive():
                         print("   ⚠️ Attempting browser recovery")
                         self.browser_manager.cleanup()
-                        self.browser_manager.initialize_driver(headless=ExperimentalConfig.HEADLESS)
+                        self.browser_manager.initialize_driver(headless=self._get_headless_setting())
                         self.driver = self.browser_manager.driver
             except Exception as recovery_error:
                 print(f"   🔴 Browser recovery failed: {str(recovery_error)}")
@@ -712,6 +747,7 @@ class MainApp:
         hierarchy_cols: list[str],
         has_hierarchy_data: bool,
         use_process_pool: bool,
+        headless_config: HeadlessConfiguration,
     ) -> tuple[int, int]:
         successful = 0
         failed = 0
@@ -736,7 +772,7 @@ class MainApp:
                         self._ui_log(descriptor.po_number, 'Dispatched to background worker')
                     future = executor.submit(
                         process_po_worker,
-                        (po_data, hierarchy_cols, has_hierarchy_data),
+                        (po_data, hierarchy_cols, has_hierarchy_data, headless_config),
                     )
                     future_map[future] = po_data
 
@@ -825,7 +861,10 @@ class MainApp:
         Main execution loop for processing POs with parallel tabs.
         """
         # Interactive wizard for runtime config
-        _interactive_setup()
+        setup_session = _interactive_setup()
+        
+        # Set headless configuration from setup session
+        self.set_headless_configuration(setup_session.create_headless_configuration())
 
         os.makedirs(ExperimentalConfig.INPUT_DIR, exist_ok=True)
         os.makedirs(ExperimentalConfig.DOWNLOAD_FOLDER, exist_ok=True)
@@ -877,11 +916,15 @@ class MainApp:
         def _run_pipeline(controller: DownloadCLIController) -> None:
             self.cli_controller = controller
             try:
+                if self._headless_config is None:
+                    raise RuntimeError("Headless configuration not set. Call set_headless_configuration first.")
+                
                 success, fail = self._process_po_entries(
                     po_data_list,
                     hierarchy_cols,
                     has_hierarchy_data,
                     use_process_pool,
+                    self._headless_config,
                 )
                 results['success'] = success
                 results['failed'] = fail
@@ -895,21 +938,29 @@ class MainApp:
             except Exception as exc:
                 print(f"⚠️ Interactive UI disabled: {exc}")
                 self.cli_controller = None
+                if self._headless_config is None:
+                    raise RuntimeError("Headless configuration not set. Call set_headless_configuration first.")
+                
                 successful, failed = self._process_po_entries(
                     po_data_list,
                     hierarchy_cols,
                     has_hierarchy_data,
                     use_process_pool,
+                    self._headless_config,
                 )
             else:
                 successful = results.get('success', 0)
                 failed = results.get('failed', 0)
         else:
+            if self._headless_config is None:
+                raise RuntimeError("Headless configuration not set. Call set_headless_configuration first.")
+                
             successful, failed = self._process_po_entries(
                 po_data_list,
                 hierarchy_cols,
                 has_hierarchy_data,
                 use_process_pool,
+                self._headless_config,
             )
 
         print("-" * 60)

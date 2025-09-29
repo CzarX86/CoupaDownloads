@@ -43,43 +43,43 @@ EXPERIMENTAL subproject structure:
 - **Configuration**: `EXPERIMENTAL/corelib/config.py`
 
 ## Phase 3.1: Setup
-- [ ] T001 Verify development environment (Python 3.12, Poetry, Edge browser) and create test directories
-- [ ] T002 [P] Configure pytest for EXPERIMENTAL subproject testing in tests/pytest.ini
-- [ ] T003 [P] Set up test fixtures for browser automation in tests/conftest.py
+- [x] T001 Verify development environment (Python 3.12, Poetry, Edge browser) and create test directories
+- [x] T002 [P] Configure pytest for EXPERIMENTAL subproject testing in tests/pytest.ini
+- [x] T003 [P] Set up test fixtures for browser automation in tests/conftest.py
 
 ## Phase 3.2: Tests First (TDD) ⚠️ MUST COMPLETE BEFORE 3.3
 **CRITICAL: These tests MUST be written and MUST FAIL before ANY implementation**
-- [ ] T004 [P] Contract test BrowserManager.initialize_driver() headless parameter in tests/unit/test_browser_manager_contract.py
-- [ ] T005 [P] Contract test InteractiveSetup._interactive_setup() headless collection in tests/unit/test_interactive_setup_contract.py  
-- [ ] T006 [P] Contract test ProcessWorker.process_po_worker() headless config in tests/unit/test_process_worker_contract.py
-- [ ] T007 [P] Integration test full headless flow (setup → browser → processing) in tests/integration/test_headless_flow.py
-- [ ] T008 [P] Integration test headless failure handling (retry → prompt → choice) in tests/integration/test_headless_failure_handling.py
-- [ ] T009 [P] Integration test process pool mode with headless configuration in tests/integration/test_headless_process_pool.py
+- [x] T004 [P] Contract test BrowserManager.initialize_driver() headless parameter in tests/unit/test_browser_manager_contract.py
+- [x] T005 [P] Contract test InteractiveSetup._interactive_setup() headless collection in tests/unit/test_interactive_setup_contract.py  
+- [x] T006 [P] Contract test ProcessWorker.process_po_worker() headless config in tests/unit/test_process_worker_contract.py
+- [x] T007 [P] Integration test full headless flow (setup → browser → processing) in tests/integration/test_headless_flow.py
+- [x] T008 [P] Integration test headless failure handling (retry → prompt → choice) in tests/integration/test_headless_failure_handling.py
+- [x] T009 [P] Integration test process pool mode with headless configuration in tests/integration/test_headless_process_pool.py
 
 ## Phase 3.3: Core Implementation (ONLY after tests are failing)
-- [ ] T010 [P] HeadlessConfiguration data model in EXPERIMENTAL/corelib/models.py
-- [ ] T011 [P] BrowserInstance data model in EXPERIMENTAL/corelib/models.py  
-- [ ] T012 [P] InteractiveSetupSession data model in EXPERIMENTAL/corelib/models.py
-- [ ] T013 Update BrowserManager.initialize_driver() to honor headless parameter in EXPERIMENTAL/corelib/browser.py
-- [ ] T014 Update BrowserManager._create_browser_options() to apply headless arguments in EXPERIMENTAL/corelib/browser.py
-- [ ] T015 Update BrowserManager.start() method headless parameter propagation in EXPERIMENTAL/corelib/browser.py
-- [ ] T016 Implement headless retry and user prompt logic in EXPERIMENTAL/corelib/browser.py
-- [ ] T017 Update interactive setup to collect and pass headless preference in EXPERIMENTAL/core/main.py
-- [ ] T018 Remove environment variable HEADLESS dependencies in EXPERIMENTAL/corelib/config.py
+- [x] T010 [P] HeadlessConfiguration data model in EXPERIMENTAL/corelib/models.py
+- [x] T011 [P] BrowserInstance data model in EXPERIMENTAL/corelib/models.py  
+- [x] T012 [P] InteractiveSetupSession data model in EXPERIMENTAL/corelib/models.py
+- [x] T013 Update BrowserManager.initialize_driver() to honor headless parameter in EXPERIMENTAL/corelib/browser.py
+- [x] T014 Update BrowserManager._create_browser_options() to apply headless arguments in EXPERIMENTAL/corelib/browser.py
+- [x] T015 Update BrowserManager.start() method headless parameter propagation in EXPERIMENTAL/corelib/browser.py
+- [x] T016 Implement headless retry and user prompt logic in EXPERIMENTAL/corelib/browser.py
+- [x] T017 Update interactive setup to collect and pass headless preference in EXPERIMENTAL/core/main.py
+- [x] T018 Remove environment variable HEADLESS dependencies in EXPERIMENTAL/corelib/config.py
 
 ## Phase 3.4: Integration
-- [ ] T019 Update MainApp.process_single_po() to pass headless configuration in EXPERIMENTAL/core/main.py
-- [ ] T020 Update process_po_worker() to receive and use headless configuration in EXPERIMENTAL/core/main.py
-- [ ] T021 Add headless mode logging and user feedback in EXPERIMENTAL/core/main.py
-- [ ] T022 Ensure headless configuration propagates to all browser initialization points in EXPERIMENTAL/core/main.py
+- [x] T019 Update MainApp.process_single_po() to pass headless configuration in EXPERIMENTAL/core/main.py
+- [x] T020 Update process_po_worker() to receive and use headless configuration in EXPERIMENTAL/core/main.py
+- [x] T021 Add headless mode logging and user feedback in EXPERIMENTAL/core/main.py
+- [x] T022 Ensure headless configuration propagates to all browser initialization points in EXPERIMENTAL/core/main.py
 
 ## Phase 3.5: Polish
-- [ ] T023 [P] Unit tests for HeadlessConfiguration state transitions in tests/unit/test_headless_configuration.py
-- [ ] T024 [P] Unit tests for browser option validation in tests/unit/test_browser_options.py
-- [ ] T025 [P] End-to-end validation tests per quickstart.md scenarios in tests/browser_automation/test_headless_e2e.py
-- [ ] T026 Performance test: browser initialization < 10 seconds in tests/performance/test_initialization_speed.py
-- [ ] T027 Update EXPERIMENTAL/docs/ with headless mode configuration guidance
-- [ ] T028 Remove debugging code and finalize error handling messages
+- [x] T023 [P] Unit tests for HeadlessConfiguration state transitions in tests/unit/test_headless_configuration.py
+- [x] T024 [P] Unit tests for browser option validation in tests/unit/test_browser_options.py
+- [x] T025 [P] End-to-end validation tests per quickstart.md scenarios in tests/browser_automation/test_headless_e2e.py
+- [x] T026 Performance test: browser initialization < 10 seconds in tests/performance/test_initialization_speed.py
+- [x] T027 Update EXPERIMENTAL/docs/ with headless mode configuration guidance
+- [x] T028 Remove debugging code and finalize error handling messages
 
 ## Dependencies
 - Setup (T001-T003) before everything
