@@ -178,6 +178,57 @@ def sample_po_data():
     }
 
 
+@pytest.fixture
+def test_po_batch():
+    """Batch of test PO data for parallel processing tests."""
+    return [
+        {
+            "po_number": "PARALLEL-001",
+            "supplier": "Test Supplier A",
+            "url": "https://example.com/po1",
+            "amount": 1000.00
+        },
+        {
+            "po_number": "PARALLEL-002", 
+            "supplier": "Test Supplier B",
+            "url": "https://example.com/po2",
+            "amount": 2000.00
+        },
+        {
+            "po_number": "PARALLEL-003",
+            "supplier": "Test Supplier C", 
+            "url": "https://example.com/po3",
+            "amount": 1500.00
+        },
+        {
+            "po_number": "PARALLEL-004",
+            "supplier": "Test Supplier D",
+            "url": "https://example.com/po4",
+            "amount": 2500.00
+        }
+    ]
+
+
+@pytest.fixture
+def temp_profile_dir():
+    """Create temporary directory for browser profiles during parallel testing."""
+    with tempfile.TemporaryDirectory(prefix="test_profile_") as temp_dir:
+        yield temp_dir
+
+
+@pytest.fixture
+def mock_headless_config():
+    """Mock HeadlessConfiguration for parallel processing tests."""
+    class MockHeadlessConfig:
+        def __init__(self, headless: bool = True):
+            self.headless = headless
+            self.source = 'test'
+            self.retry_attempted = False
+            self.fallback_to_visible = False
+    
+    return MockHeadlessConfig(headless=True)
+
+
 @pytest.fixture(autouse=True)
 def isolate_environment():
     """Automatically isolate test environment for each test."""

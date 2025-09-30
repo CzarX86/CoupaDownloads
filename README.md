@@ -2,8 +2,11 @@
 
 ## ✨ What's New in This Release
 
-This release includes everything you need to run CoupaDownloads on Windows:
+This release includes everything you need to run CoupaDownloads on Windows with enhanced parallel processing:
 
+- ✅ **Parallel Processing** - Process multiple POs simultaneously with configurable workers
+- ✅ **Profile Isolation** - Independent browser profiles prevent worker conflicts
+- ✅ **Performance Scaling** - Up to 6x faster processing with optimal worker configuration
 - ✅ **Automatic EdgeDriver download** - No manual driver management needed
 - ✅ **Enhanced driver compatibility** - Works with Edge 116-120
 - ✅ **One-click setup** - Just run `setup_windows.bat`
@@ -36,13 +39,31 @@ Supported columns (CSV/Excel) — the app fills these when available:
   AttachmentName, LAST_PROCESSED, ERROR_MESSAGE, DOWNLOAD_FOLDER, COUPA_URL
 
 ### Step 4: Run the Application
-```cmd
-# (Opcional) Abra uma shell do Poetry
-# poetry shell
 
+**Standard Mode (Sequential):**
+```cmd
 # Run the application (module mode)
 poetry run python -m src.Core_main
 ```
+
+**Parallel Processing Mode:**
+```cmd
+# Enable parallel processing with environment variables
+export COUPA_ENABLE_PARALLEL=true
+export COUPA_MAX_WORKERS=4
+poetry run python -m src.Core_main
+
+# Or configure directly in interactive mode
+poetry run python -m src.Core_main --parallel --workers 4
+```
+
+**Parallel Processing Configuration:**
+- `COUPA_ENABLE_PARALLEL=true` - Enable parallel processing
+- `COUPA_MAX_WORKERS=4` - Set number of worker processes (recommended: 2-8)
+- `COUPA_PROFILE_CLEANUP_ON_START=true` - Clean profiles on startup
+- `COUPA_PROFILE_REUSE_ENABLED=true` - Reuse browser profiles (default: true)
+
+For detailed configuration options, see: `EXPERIMENTAL/docs/parallel-processing.md`
 
 ### Feedback and training loop
 - 🪄 **Guided wizard** — `poetry run python tools/feedback_cli.py wizard`
@@ -52,7 +73,8 @@ poetry run python -m src.Core_main
 
 ## 📚 User Guide
 For a complete end-to-end manual (installation, configuration, running, outputs, troubleshooting), see:
-`docs/USER_GUIDE.md`
+- `docs/USER_GUIDE.md` - General usage guide
+- `EXPERIMENTAL/docs/parallel-processing.md` - Parallel processing configuration and optimization
 
 ## 🔧 What the Setup Does
 
@@ -61,7 +83,8 @@ For a complete end-to-end manual (installation, configuration, running, outputs,
 3. **Creates virtual environment**
 4. **Installs all dependencies**
 5. **Sets up sample files**
-6. **Configures everything**
+6. **Configures parallel processing environment**
+7. **Sets up everything**
 
 ## 📁 Release Contents
 
@@ -73,6 +96,12 @@ CoupaDownloads/
 ├── poetry.lock                # Versões travadas das dependências
 ├── drivers/                   # EdgeDriver versions (downloaded)
 ├── src/                      # Application source code
+├── EXPERIMENTAL/             # Parallel processing implementation
+│   ├── docs/parallel-processing.md  # Parallel processing guide
+│   ├── core/                # Enhanced core modules
+│   ├── workers/             # Worker pool and profile management
+│   └── corelib/             # Shared configuration and models
+├── tests/                    # Test suites including performance validation
 ├── data/
 │   ├── input/               # Your PO numbers here
 │   ├── output/              # Generated reports
@@ -99,6 +128,14 @@ CoupaDownloads/
 - Run Command Prompt as Administrator
 - Or run PowerShell with: `Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser`
 
+### Parallel Processing Issues
+- **High resource usage**: Reduce `COUPA_MAX_WORKERS` (try 2-4 workers)
+- **Profile conflicts**: Set `COUPA_PROFILE_CLEANUP_ON_START=true`
+- **Memory issues**: Lower worker count or increase system RAM
+- **Performance not improving**: Check system specs and network latency
+
+Run performance validation: `poetry run pytest tests/integration/parallel/test_performance_validation.py -v`
+
 ## 🎉 Success Indicators
 
 You'll know it's working when:
@@ -107,6 +144,8 @@ You'll know it's working when:
 - ✅ Virtual environment activates (shows `(venv)` in prompt)
 - ✅ Dependencies install without errors
 - ✅ Browser opens when running the application
+- ✅ Parallel processing shows worker count > 1 in logs (when enabled)
+- ✅ Performance tests pass with expected scaling improvements
 
 ## 📞 Support
 
@@ -144,6 +183,8 @@ Notes:
 
 ## 📖 Documentation
 
+- **Parallel Processing Guide**: `EXPERIMENTAL/docs/parallel-processing.md`
+- **Performance Reports**: `reports/performance_validation_report.md`
 - Release notes: `docs/RELEASE_NOTES.md`
 - Release strategy: `docs/RELEASE_STRATEGY.md`
 - Offline bundle guide: `docs/howto/README_Offline.md`
