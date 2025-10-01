@@ -121,3 +121,8 @@ Para capturar a **memória de longo prazo do projeto**, utilizamos Architecture 
 - Para refatorações grandes, prefira várias entregas pequenas em vez de um PR amplo.
 - Se uma proposta depender de outra, mencione claramente (ex.: '''executar após Proposta 26''').
 - Ajude a manter este `AGENTS.md` alinhado com a prática diária; atualize-o junto com novas convenções.
+
+### Atualizações de Workflow (Perfis)
+- O ProfileManager agora possui mecanismos de degradação graciosa, timeouts brandos de clone e recuperação básica de corrupção.
+- O WorkerPool integra monitoramento de recursos e registra perfis/Workers no ciclo de vida (start/stop, scale up/down).
+- Métricas de perfis aparecem em `get_status()` do WorkerPool. Guia de troubleshooting em `docs/profile_troubleshooting.md`.
