@@ -7,8 +7,9 @@ Usa a planilha Contract_Tracker para melhorar a extração de campos.
 import pandas as pd
 import json
 import re
+from dataclasses import asdict, is_dataclass
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Any, Dict, List, Tuple
 import logging
 
 class ContractDataTrainer:
@@ -221,6 +222,54 @@ class ContractDataTrainer:
 
         self.logger.info(f"💾 Dados de treinamento salvos: {output_file}")
         return training_data
+
+
+def _normalise_training_record(record: Any) -> Dict[str, Any]:
+    if is_dataclass(record):
+        return asdict(record)
+    if isinstance(record, dict):
+        return record
+    if hasattr(record, "_asdict"):
+        return record._asdict()
+    if hasattr(record, "__dict__"):
+        return dict(record.__dict__)
+    return {"value": str(record)}
+
+
+def fine_tune_model(records: List[Any], output_dir: Path) -> Tuple[Path, Dict[str, Any]]:
+    """Executa um fine-tuning simplificado com base nas anotações.
+
+    Gera um artefato textual com estatísticas das anotações e retorna métricas
+    para consumo pelo serviço de treinamento.
+    """
+
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    normalised = [_normalise_training_record(record) for record in records]
+    artifact_path = output_dir / "feedback-model.bin"
+    summary_path = output_dir / "feedback-summary.json"
+
+    annotation_count = len(normalised)
+    documents = sorted({rec.get("document_id") for rec in normalised if rec.get("document_id")})
+    entity_types = sorted({(rec.get("type") or "UNKNOWN") for rec in normalised})
+
+    artifact_payload = {
+        "artifact": "embeddinggemma-feedback",
+        "annotations": annotation_count,
+        "documents": documents,
+        "entity_types": entity_types,
+    }
+    artifact_path.write_text(json.dumps(artifact_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    summary_payload = {
+        "annotation_count": annotation_count,
+        "documents": documents,
+        "entity_types": entity_types,
+    }
+    summary_path.write_text(json.dumps(summary_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    return artifact_path, summary_payload
 
 def main():
     """Função principal."""

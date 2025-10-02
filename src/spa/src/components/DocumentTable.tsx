@@ -21,17 +21,15 @@ interface DocumentTableProps {
 }
 
 const statusLabels: Record<Document['status'], string> = {
-  new: 'New',
-  extracted: 'Extracted',
-  reviewing: 'Reviewing',
-  completed: 'Completed',
+  PENDING: 'Pending',
+  IN_REVIEW: 'In review',
+  COMPLETED: 'Completed',
 };
 
 const statusStyles: Record<Document['status'], string> = {
-  new: 'bg-blue-100 text-blue-800 dark:bg-blue-400/20 dark:text-blue-200',
-  extracted: 'bg-purple-100 text-purple-800 dark:bg-purple-400/20 dark:text-purple-200',
-  reviewing: 'bg-amber-100 text-amber-900 dark:bg-amber-400/20 dark:text-amber-100',
-  completed: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-400/20 dark:text-emerald-100',
+  PENDING: 'bg-blue-100 text-blue-800 dark:bg-blue-400/20 dark:text-blue-200',
+  IN_REVIEW: 'bg-amber-100 text-amber-900 dark:bg-amber-400/20 dark:text-amber-100',
+  COMPLETED: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-400/20 dark:text-emerald-100',
 };
 
 const formatDate = (date: string) =>
@@ -101,7 +99,7 @@ const DocumentTable: React.FC<DocumentTableProps> = ({
       <ul className="list-disc space-y-1 pl-4 text-left text-sm text-muted-foreground">
         <li>Only PDF files are accepted at the moment.</li>
         <li>Uploads larger than 20MB may take a few seconds to appear.</li>
-        <li>Documents move from <strong>New</strong> to <strong>Completed</strong> once retraining finishes.</li>
+        <li>Documents move from <strong>Pending</strong> to <strong>Completed</strong> once retraining finishes.</li>
       </ul>
     ),
     []

@@ -242,3 +242,25 @@ async def test_get_document_entities_returns_predictions(service_context: Simple
     assert amount_entity.location is not None
     assert amount_entity.location.page_num == 1
     assert amount_entity.location.bbox == [10.0, 20.0, 30.0, 40.0]
+
+
+@pytest.mark.asyncio
+async def test_trigger_model_feedback_creates_training_run(service_context: SimpleNamespace) -> None:
+    services = service_context.services
+    job_manager = service_context.job_manager
+
+    upload = _make_upload_file(b"%PDF-1.4\n1 0 obj\n<<>>\nendobj\n", "feedback.pdf", "application/pdf")
+    document_detail = await services.create_document(upload, {"ingested_by": "feedback-test"})
+
+    create_payload = services.AnnotationCreateRequest(type="Amount", value="$100.00")
+    await services.create_annotation(document_detail.document.id, create_payload)
+
+    feedback_request = services.FeedbackRequest(triggered_by="unit-test")
+    feedback_job = await services.trigger_model_feedback(document_detail.document.id, feedback_request)
+    assert feedback_job.job_type == "TRAINING"
+
+    completed_feedback = await job_manager.wait_until_complete(feedback_job.job_id, timeout=5)
+    assert completed_feedback.status == "SUCCEEDED"
+    payload = completed_feedback.payload or {}
+    assert payload.get("training_run_id") == feedback_job.job_id
+    assert "model_artifact_path" in payload
