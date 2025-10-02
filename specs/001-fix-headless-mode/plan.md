@@ -1,8 +1,8 @@
 
-# Implementation Plan: Fix Headless Mode in EXPERIMENTAL Subproject
+# Implementation Plan: [FEATURE]
 
-**Branch**: `001-fix-headless-mode` | **Date**: 2025-09-29 | **Spec**: [spec.md](./spec.md)
-**Input**: Feature specification from `/specs/001-fix-headless-mode/spec.md`
+**Branch**: `[###-feature-name]` | **Date**: [DATE] | **Spec**: [link]
+**Input**: Feature specification from `/specs/[###-feature-name]/spec.md`
 
 ## Execution Flow (/plan command scope)
 ```
@@ -31,54 +31,23 @@
 - Phase 3-4: Implementation execution (manual or via tools)
 
 ## Summary
-Fix headless mode functionality in the EXPERIMENTAL subproject where user selection in interactive setup doesn't affect browser behavior. Solution involves ensuring headless configuration is properly propagated from interactive setup to all browser initialization points, with fallback handling for initialization failures.
+[Extract from feature spec: primary requirement + technical approach from research]
 
 ## Technical Context
-**Language/Version**: Python 3.12  
-**Primary Dependencies**: Selenium WebDriver, Microsoft Edge, Poetry package management  
-**Storage**: Configuration state in memory/environment (no persistent storage required)  
-**Testing**: pytest for unit tests, end-to-end browser automation testing  
-**Target Platform**: Cross-platform (Windows, macOS, Linux) with Edge browser support
-**Project Type**: single - Python automation project with subproject structure  
-**Performance Goals**: Consistent browser initialization < 10 seconds regardless of headless mode  
-**Constraints**: Must maintain backward compatibility, no breaking changes to CLI interfaces  
-**Scale/Scope**: EXPERIMENTAL subproject only, affecting browser configuration and process workers
+**Language/Version**: [e.g., Python 3.11, Swift 5.9, Rust 1.75 or NEEDS CLARIFICATION]  
+**Primary Dependencies**: [e.g., FastAPI, UIKit, LLVM or NEEDS CLARIFICATION]  
+**Storage**: [if applicable, e.g., PostgreSQL, CoreData, files or N/A]  
+**Testing**: [e.g., pytest, XCTest, cargo test or NEEDS CLARIFICATION]  
+**Target Platform**: [e.g., Linux server, iOS 15+, WASM or NEEDS CLARIFICATION]
+**Project Type**: [single/web/mobile - determines source structure]  
+**Performance Goals**: [domain-specific, e.g., 1000 req/s, 10k lines/sec, 60 fps or NEEDS CLARIFICATION]  
+**Constraints**: [domain-specific, e.g., <200ms p95, <100MB memory, offline-capable or NEEDS CLARIFICATION]  
+**Scale/Scope**: [domain-specific, e.g., 10k users, 1M LOC, 50 screens or NEEDS CLARIFICATION]
 
 ## Constitution Check
 *GATE: Must pass before Phase 0 research. Re-check after Phase 1 design.*
 
-### I. Documentation-Driven Development
-- [x] **PASS**: Following Proposal → Design → Implementation → Report workflow
-- [x] **PASS**: ADRs will be created if architectural decisions emerge
-- [x] **PASS**: Documentation maintains English technical interfaces
-
-### II. Automation Reliability  
-- [x] **PASS**: Fix directly addresses configuration propagation consistency requirement
-- [x] **PASS**: Maintains deterministic, resumable browser automation workflows
-- [x] **PASS**: Handles failures gracefully with retry and user choice fallback
-
-### III. Security by Design
-- [x] **PASS**: No credential handling in scope
-- [x] **PASS**: Maintains existing browser profile isolation security
-- [x] **PASS**: No sensitive data exposure
-
-### IV. Human-in-the-Loop Validation
-- [x] **PASS**: Does not affect existing human review workflows
-- [x] **PASS**: Maintains audit trail capabilities
-- [x] **NOT APPLICABLE**: Configuration fix only
-
-### V. Quality Assurance Standards
-- [x] **PASS**: Will follow PEP 8 with type hints
-- [x] **PASS**: End-to-end testing required for browser automation changes
-- [x] **PASS**: No breaking changes to public contracts
-
-**Initial Constitution Check**: ✅ PASS - No violations detected
-
-**Post-Design Constitution Check**: ✅ PASS
-- All constitutional principles maintained in design
-- Explicit parameter passing enhances reliability (Principle II)
-- Clear contracts support quality assurance (Principle V)
-- No new security concerns introduced (Principle III)
+[Gates determined based on constitution file]
 
 ## Project Structure
 
@@ -94,29 +63,50 @@ specs/[###-feature]/
 ```
 
 ### Source Code (repository root)
+<!--
+  ACTION REQUIRED: Replace the placeholder tree below with the concrete layout
+  for this feature. Delete unused options and expand the chosen structure with
+  real paths (e.g., apps/admin, packages/something). The delivered plan must
+  not include Option labels.
+-->
 ```
-EXPERIMENTAL/
-├── core/
-│   └── main.py          # Interactive setup and execution flow
-├── corelib/
-│   ├── browser.py       # Browser management and configuration
-│   ├── config.py        # Configuration handling
-│   └── downloader.py    # Download automation
-└── docs/
+# [REMOVE IF UNUSED] Option 1: Single project (DEFAULT)
+src/
+├── models/
+├── services/
+├── cli/
+└── lib/
 
 tests/
-├── unit/
+├── contract/
 ├── integration/
-└── browser_automation/
+└── unit/
 
-src/                     # Main project (for reference)
-├── core/
-│   ├── browser.py       # Similar browser management
-│   └── config.py        # Main config
-└── utils/
+# [REMOVE IF UNUSED] Option 2: Web application (when "frontend" + "backend" detected)
+backend/
+├── src/
+│   ├── models/
+│   ├── services/
+│   └── api/
+└── tests/
+
+frontend/
+├── src/
+│   ├── components/
+│   ├── pages/
+│   └── services/
+└── tests/
+
+# [REMOVE IF UNUSED] Option 3: Mobile + API (when "iOS/Android" detected)
+api/
+└── [same as backend above]
+
+ios/ or android/
+└── [platform-specific structure: feature modules, UI flows, platform tests]
 ```
 
-**Structure Decision**: Single project with EXPERIMENTAL subproject. Focus on EXPERIMENTAL/corelib/browser.py and EXPERIMENTAL/core/main.py for headless mode configuration propagation. No new directories needed - this is a configuration fix within existing structure.
+**Structure Decision**: [Document the selected structure and reference the real
+directories captured above]
 
 ## Phase 0: Outline & Research
 1. **Extract unknowns from Technical Context** above:
@@ -212,18 +202,18 @@ src/                     # Main project (for reference)
 *This checklist is updated during execution flow*
 
 **Phase Status**:
-- [x] Phase 0: Research complete (/plan command)
-- [x] Phase 1: Design complete (/plan command)
-- [x] Phase 2: Task planning complete (/plan command - describe approach only)
+- [ ] Phase 0: Research complete (/plan command)
+- [ ] Phase 1: Design complete (/plan command)
+- [ ] Phase 2: Task planning complete (/plan command - describe approach only)
 - [ ] Phase 3: Tasks generated (/tasks command)
 - [ ] Phase 4: Implementation complete
 - [ ] Phase 5: Validation passed
 
 **Gate Status**:
-- [x] Initial Constitution Check: PASS
-- [x] Post-Design Constitution Check: PASS
-- [x] All NEEDS CLARIFICATION resolved
-- [x] Complexity deviations documented (none required)
+- [ ] Initial Constitution Check: PASS
+- [ ] Post-Design Constitution Check: PASS
+- [ ] All NEEDS CLARIFICATION resolved
+- [ ] Complexity deviations documented
 
 ---
-*Based on Constitution v1.0.0 - See `.specify/memory/constitution.md`*
+*Based on Constitution v2.1.1 - See `/memory/constitution.md`*
