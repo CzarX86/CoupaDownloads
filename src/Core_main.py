@@ -5,6 +5,7 @@ import re
 import time
 import threading
 import multiprocessing as mp
+import argparse
 from datetime import datetime, timedelta
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from selenium.common.exceptions import (
@@ -25,6 +26,7 @@ from src.core.config import Config
 from src.core.downloader import Downloader
 from src.core.excel_processor import ExcelProcessor
 from src.core.folder_hierarchy import FolderHierarchyManager
+
 
 
 # ---------- Helpers for process workers ----------
@@ -232,6 +234,7 @@ def process_po_worker(args):
             browser_manager.cleanup()
         except Exception:
             pass
+        # No per-worker clone directory to cleanup in legacy path
 
 
 def _scan_local_drivers() -> list[str]:
@@ -275,9 +278,23 @@ def _interactive_setup() -> None:
     use_pool = _prompt_bool("Use process workers (one WebDriver per process)?", default=False)
     os.environ['USE_PROCESS_POOL'] = 'true' if use_pool else 'false'
 
+    # 2.5) Choose persistent worker pool (if not using process pool)
+    if not use_pool:
+        use_persistent_pool = _prompt_bool("Use persistent worker pool (EXPERIMENTAL)?", default=False)
+        os.environ['USE_PERSISTENT_POOL'] = 'true' if use_persistent_pool else 'false'
+    else:
+        os.environ['USE_PERSISTENT_POOL'] = 'false'
+
+    # Check for conflicting settings
+    use_persistent_pool = os.environ.get('USE_PERSISTENT_POOL', 'false').lower() == 'true'
+    if use_persistent_pool and use_pool:
+        print("⚠️  Warning: Both USE_PROCESS_POOL and USE_PERSISTENT_POOL are enabled.")
+        print("   Using persistent worker pool (ignoring process pool setting).")
+        use_pool = False
+
     # 3) Process workers with safe cap (only if using process pool)
+    default_workers = 1
     try:
-        default_workers = 1
         procs_int = default_workers
         if use_pool:
             procs = input(f"Number of process workers (1-3) [{default_workers}]: ").strip()
@@ -287,6 +304,22 @@ def _interactive_setup() -> None:
         procs_int = default_workers
     os.environ['PROC_WORKERS'] = str(procs_int)
     os.environ.setdefault('PROC_WORKERS_CAP', '3')
+
+    # 3.5) Persistent worker pool configuration (only if using persistent pool)
+    if use_persistent_pool:
+        try:
+            pool_workers = input("Number of persistent workers (1-8) [4]: ").strip()
+            pool_workers_int = max(1, min(8, int(pool_workers))) if pool_workers else 4
+        except Exception:
+            pool_workers_int = 4
+        os.environ['PERSISTENT_WORKERS'] = str(pool_workers_int)
+
+        try:
+            memory_threshold = input("Memory threshold (0.5-0.9) [0.85]: ").strip()
+            memory_threshold_float = max(0.5, min(0.9, float(memory_threshold))) if memory_threshold else 0.85
+        except Exception:
+            memory_threshold_float = 0.85
+        os.environ['MEMORY_THRESHOLD'] = str(memory_threshold_float)
 
     # 4) Headless mode (default: Yes)
     headless = _prompt_bool("Run browser in headless mode?", default=True)
@@ -635,8 +668,17 @@ class MainApp:
         """
         Main execution loop for processing POs with parallel tabs.
         """
-        # Interactive wizard for runtime config
-        _interactive_setup()
+        # Check if we should skip interactive setup (CLI args provided)
+        skip_interactive = (
+            os.environ.get('USE_PERSISTENT_POOL') or
+            os.environ.get('PERSISTENT_WORKERS') or
+            os.environ.get('MEMORY_THRESHOLD') or
+            os.environ.get('EDGE_PROFILE_DIR')
+        )
+        
+        if not skip_interactive:
+            # Interactive wizard for runtime config
+            _interactive_setup()
 
         os.makedirs(Config.INPUT_DIR, exist_ok=True)
         os.makedirs(Config.DOWNLOAD_FOLDER, exist_ok=True)
@@ -674,11 +716,16 @@ class MainApp:
 
         print(f"🚀 Starting parallel processing with {len(po_data_list)} POs...")
         use_process_pool = os.environ.get('USE_PROCESS_POOL', 'false').lower() == 'true'
+        use_persistent_pool = os.environ.get('USE_PERSISTENT_POOL', 'false').lower() == 'true'
 
         successful = 0
         failed = 0
 
-        if use_process_pool:
+        if use_persistent_pool:
+            # EXPERIMENTAL: Persistent worker pool mode
+            print("🔬 Using EXPERIMENTAL persistent worker pool")
+            successful, failed = self._run_with_persistent_pool(po_data_list, hierarchy_cols, has_hierarchy_data)
+        elif use_process_pool:
             # Real parallelism: one Edge driver per process
             # Limit concurrency to reduce Edge rate-limits and memory pressure
             default_workers = min(2, len(po_data_list))
@@ -750,6 +797,110 @@ class MainApp:
     
         print(f"📊 Total: {successful + failed}")
 
+    def _run_with_persistent_pool(self, po_data_list, hierarchy_cols, has_hierarchy_data):
+        """Run PO processing using the EXPERIMENTAL persistent worker pool."""
+        try:
+            # Import worker pool components
+            from EXPERIMENTAL.workers.persistent_pool import PersistentWorkerPool
+            from EXPERIMENTAL.workers.models import PoolConfig
+        except ImportError as e:
+            print(f"❌ Failed to import worker pool components: {e}")
+            print("   Falling back to sequential processing...")
+            return self._run_sequential_fallback(po_data_list, hierarchy_cols, has_hierarchy_data)
+
+        # Get configuration from environment
+        worker_count = int(os.environ.get('PERSISTENT_WORKERS', '4'))
+        memory_threshold = float(os.environ.get('MEMORY_THRESHOLD', '0.75'))
+        base_profile_path = os.environ.get('EDGE_PROFILE_DIR', '')
+
+        # Create pool configuration
+        config = PoolConfig(
+            worker_count=worker_count,
+            headless_mode=os.environ.get('HEADLESS', 'true').lower() == 'true',
+            base_profile_path=base_profile_path,
+            memory_threshold=memory_threshold
+        )
+
+        successful = 0
+        failed = 0
+
+        try:
+            # Create and start worker pool
+            print(f"🏭 Starting persistent worker pool with {worker_count} workers...")
+            pool = PersistentWorkerPool(config)
+
+            # Run async pool operations
+            import asyncio
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+
+            try:
+                # Start pool
+                loop.run_until_complete(pool.start())
+                print("✅ Worker pool started successfully")
+
+                # Submit all POs
+                po_numbers = [po_data['po_number'] for po_data in po_data_list]
+                print(f"📤 Submitting {len(po_numbers)} POs to worker pool...")
+
+                handles = pool.submit_tasks(po_numbers)
+
+                # Wait for completion
+                print("⏳ Waiting for PO processing to complete...")
+                completed = loop.run_until_complete(pool.wait_for_completion(timeout=3600))  # 1 hour timeout
+
+                if not completed:
+                    print("⚠️ Timeout waiting for PO processing completion")
+
+                # Get final status
+                status = pool.get_status()
+                successful = status.get('completed_tasks', 0)
+                failed = status.get('failed_tasks', 0)
+
+                print(f"📊 Worker pool processing complete: {successful} successful, {failed} failed")
+
+            except Exception as e:
+                print(f"❌ Worker pool execution failed: {e}")
+                print("   Falling back to sequential processing...")
+                return self._run_sequential_fallback(po_data_list, hierarchy_cols, has_hierarchy_data)
+                
+            finally:
+                # Shutdown pool
+                print("🔄 Shutting down worker pool...")
+                try:
+                    loop.run_until_complete(pool.shutdown())
+                except Exception as e:
+                    print(f"⚠️ Error during pool shutdown: {e}")
+                loop.close()
+                print("✅ Worker pool shutdown complete")
+
+        except Exception as e:
+            print(f"❌ Worker pool initialization failed: {e}")
+            print("   Falling back to sequential processing...")
+            return self._run_sequential_fallback(po_data_list, hierarchy_cols, has_hierarchy_data)
+
+        return successful, failed
+
+    def _run_sequential_fallback(self, po_data_list, hierarchy_cols, has_hierarchy_data):
+        """Fallback to sequential processing when worker pool fails."""
+        print("📊 Falling back to sequential processing (single WebDriver)")
+        
+        successful = 0
+        failed = 0
+        
+        # Initialize browser once for sequential processing
+        self.initialize_browser_once()
+        self._prepare_progress_tracking(len(po_data_list))
+        
+        for i, po_data in enumerate(po_data_list):
+            ok = self.process_single_po(po_data, hierarchy_cols, has_hierarchy_data, i, len(po_data_list))
+            if ok:
+                successful += 1
+            else:
+                failed += 1
+        
+        return successful, failed
+
     def close(self):
         """Close the browser properly."""
         if self.driver:
@@ -760,6 +911,28 @@ class MainApp:
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Coupa PO Document Downloader")
+    parser.add_argument("--persistent-pool", action="store_true",
+                       help="Use EXPERIMENTAL persistent worker pool")
+    parser.add_argument("--workers", type=int, choices=range(1, 9),
+                       help="Number of persistent workers (1-8)")
+    parser.add_argument("--memory-threshold", type=float, 
+                       help="Memory threshold for worker management (0.5-0.9)")
+    parser.add_argument("--profile-dir", 
+                       help="Browser profile directory for worker pool")
+
+    args = parser.parse_args()
+
+    # Set environment variables from CLI args
+    if args.persistent_pool:
+        os.environ['USE_PERSISTENT_POOL'] = 'true'
+    if args.workers:
+        os.environ['PERSISTENT_WORKERS'] = str(args.workers)
+    if args.memory_threshold:
+        os.environ['MEMORY_THRESHOLD'] = str(args.memory_threshold)
+    if args.profile_dir:
+        os.environ['EDGE_PROFILE_DIR'] = args.profile_dir
+
     app = MainApp()
     try:
         app.run()

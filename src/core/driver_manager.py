@@ -11,9 +11,29 @@ import re
 import subprocess
 import sys
 import zipfile
+import tempfile
+import shutil
+import atexit
 from pathlib import Path
 from typing import Optional, List
 import requests
+
+# Keep track of temporary driver directories created by auto-downloads so
+# we can clean them up on process exit. This ensures downloaded drivers
+# are not persisted inside the project and are removed after use.
+_TEMP_DRIVER_DIRS: set[str] = set()
+
+
+def _cleanup_temp_driver_dirs() -> None:
+    for d in list(_TEMP_DRIVER_DIRS):
+        try:
+            shutil.rmtree(d)
+        except Exception:
+            pass
+
+
+# Register cleanup handler early
+atexit.register(_cleanup_temp_driver_dirs)
 
 
 class DriverManager:
@@ -62,7 +82,12 @@ class DriverManager:
                 print(f"✅ Using driver from EDGE_DRIVER_PATH: {env_path}")
                 return env_path
             else:
-                print("⚠️ EDGE_DRIVER_PATH provided but invalid; ignoring.")
+                # If the user explicitly configured an EDGE_DRIVER_PATH that
+                # points inside the repository but is missing/invalid, we must
+                # not create or overwrite files inside the repo. Fall back to
+                # an auto-download into a system temporary dir instead.
+                print("⚠️ EDGE_DRIVER_PATH provided but invalid or missing; ignoring. Will not write into project.\n"
+                      "If you intended to provide a persistent driver place a valid binary under 'drivers/' or set EDGE_DRIVER_PATH to a valid path outside the repo.")
 
         # 1. Try to find a suitable local driver first
         print("🔎 Searching for a compatible local EdgeDriver...")
@@ -85,20 +110,21 @@ class DriverManager:
             driver_version = "LATEST_STABLE"
         else:
             driver_version = self.get_compatible_driver_version(edge_version)
-        
+
+        # Download into a system temporary directory (never into the repo).
         zip_path = self.download_driver(driver_version)
         driver_path = self.extract_driver(zip_path)
-        
+
         # Clean up the downloaded zip file
         try:
             os.remove(zip_path)
             print(f"🧹 Cleaned up: {zip_path}")
         except Exception as e:
             print(f"⚠️ Warning: Could not remove zip file: {e}")
-        
+
         if not self.verify_driver(driver_path):
             raise RuntimeError("Downloaded EdgeDriver failed verification.")
-            
+
         return driver_path
 
     def _find_compatible_local_driver(self) -> Optional[str]:
@@ -166,6 +192,20 @@ class DriverManager:
                 drivers.append(full_path)
 
         return sorted(drivers, reverse=True)
+
+    def _is_path_in_project(self, path: str) -> bool:
+        """Return True if `path` is inside the project root directory.
+
+        We protect any paths inside the repository from being written to by
+        automatic download logic.
+        """
+        try:
+            pr = os.path.abspath(self.project_root)
+            p = os.path.abspath(path)
+            # commonpath will raise if on different drives on Windows; wrap
+            return os.path.commonpath([pr, p]) == pr
+        except Exception:
+            return False
 
     def _get_driver_version(self, driver_path: str) -> Optional[str]:
         """Return the driver version by invoking '<driver> --version'.
@@ -366,16 +406,21 @@ class DriverManager:
         zip_name = f"edgedriver_{self.platform}.zip"
         # The URL structure changed for newer drivers
         download_url = f"{self.EDGEDRIVER_BASE_URL}/{driver_version}/{zip_name}"
-        local_path = os.path.join(self.drivers_dir, f"edgedriver_{self.platform}_{driver_version}.zip")
-        
-        print(f"📥 Downloading EdgeDriver from: {download_url}")
-        os.makedirs(self.drivers_dir, exist_ok=True)
-        
+
+        # Create a temporary directory inside drivers/tmp/ and download there.
+        drivers_tmp_dir = os.path.join(self.drivers_dir, "tmp")
+        os.makedirs(drivers_tmp_dir, exist_ok=True)
+        tmp_dir = tempfile.mkdtemp(prefix="msedgedriver_", dir=drivers_tmp_dir)
+        _TEMP_DRIVER_DIRS.add(tmp_dir)
+        local_path = os.path.join(tmp_dir, f"edgedriver_{self.platform}_{driver_version}.zip")
+
+        print(f"📥 Downloading EdgeDriver from: {download_url} into temporary dir: {tmp_dir}")
+
         try:
             response = requests.get(download_url, stream=True, timeout=60)
             response.raise_for_status()
             total_size = int(response.headers.get('content-length', 0))
-            
+
             with open(local_path, 'wb') as f:
                 downloaded = 0
                 for chunk in response.iter_content(chunk_size=8192):
@@ -385,10 +430,16 @@ class DriverManager:
                         if total_size > 0:
                             progress = (downloaded / total_size) * 100
                             print(f"\r📥 Download progress: {progress:.1f}%", end='', flush=True)
-            
+
             print(f"\n✅ EdgeDriver downloaded successfully: {local_path}")
             return local_path
         except Exception as e:
+            # On failure, try to remove the temporary dir we created
+            try:
+                shutil.rmtree(tmp_dir)
+                _TEMP_DRIVER_DIRS.discard(tmp_dir)
+            except Exception:
+                pass
             print(f"\n❌ Failed to download EdgeDriver: {e}")
             raise
 

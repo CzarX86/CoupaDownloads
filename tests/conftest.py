@@ -229,6 +229,51 @@ def mock_headless_config():
     return MockHeadlessConfig(headless=True)
 
 
+@pytest.fixture
+def worker_pool_config():
+    """Configuration for worker pool testing."""
+    return {
+        'worker_count': 2,
+        'headless_mode': True,
+        'base_profile_path': '/tmp/test_profile',
+        'memory_threshold': 0.75,
+        'shutdown_timeout': 60.0,
+        'max_restart_attempts': 3,
+        'task_timeout': 300.0
+    }
+
+
+@pytest.fixture
+def mock_worker_pool():
+    """Mock PersistentWorkerPool for unit testing."""
+    with patch('EXPERIMENTAL.workers.persistent_pool.PersistentWorkerPool') as mock:
+        pool_instance = Mock()
+        pool_instance.start.return_value = None
+        pool_instance.submit_task.return_value = Mock()
+        pool_instance.shutdown.return_value = True
+        pool_instance.get_status.return_value = {
+            'pool_status': 'ready',
+            'workers': [],
+            'pending_tasks': 0,
+            'total_memory_usage': 0
+        }
+        mock.return_value = pool_instance
+        yield pool_instance
+
+
+@pytest.fixture
+def mock_browser_session():
+    """Mock BrowserSession for worker testing."""
+    with patch('EXPERIMENTAL.workers.browser_session.BrowserSession') as mock:
+        session_instance = Mock()
+        session_instance.authenticate.return_value = True
+        session_instance.create_tab.return_value = Mock()
+        session_instance.close_tab.return_value = None
+        session_instance.recover_session.return_value = True
+        mock.return_value = session_instance
+        yield session_instance
+
+
 @pytest.fixture(autouse=True)
 def isolate_environment():
     """Automatically isolate test environment for each test."""

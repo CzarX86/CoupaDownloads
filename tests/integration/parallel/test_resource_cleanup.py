@@ -15,6 +15,15 @@ from pathlib import Path
 from typing import List, Dict, Any
 
 
+# Multiprocessing workers must be at module scope to be picklable on macOS (spawn)
+def _worker_process_function(worker_id: int, duration: float):
+    """Simple worker function that runs for specified duration."""
+    start_time = time.time()
+    while time.time() - start_time < duration:
+        time.sleep(0.1)
+    return f"Worker {worker_id} completed"
+
+
 class TestResourceCleanup:
     """Test suite for verifying proper resource cleanup in parallel processing."""
     
@@ -82,12 +91,7 @@ class TestResourceCleanup:
         import multiprocessing
         import signal
         
-        def worker_function(worker_id: int, duration: float):
-            """Simple worker function that runs for specified duration."""
-            start_time = time.time()
-            while time.time() - start_time < duration:
-                time.sleep(0.1)
-            return f"Worker {worker_id} completed"
+        # worker function moved to module scope (_worker_process_function)
         
         # Start multiple worker processes
         worker_processes = []
@@ -96,7 +100,7 @@ class TestResourceCleanup:
         try:
             for i in range(max_workers):
                 process = multiprocessing.Process(
-                    target=worker_function,
+                    target=_worker_process_function,
                     args=(i, 2.0)  # 2 second duration
                 )
                 process.start()
