@@ -56,6 +56,9 @@ logs/
 temp/
 tmp/
 
+# Driver temporary downloads (auto-cleanup)
+drivers/tmp/
+
 # Local database and blob storage
 storage/
 !src/spa/src/lib/

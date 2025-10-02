@@ -41,8 +41,27 @@ from corelib.models import InteractiveSetupSession, HeadlessConfiguration
 from EXPERIMENTAL.workers.persistent_pool import PersistentWorkerPool
 from EXPERIMENTAL.workers.models import PoolConfig
 
-# Feature toggles for the experimental runner
-ENABLE_INTERACTIVE_UI = True  # flip to False to disable the Textual UI without env vars
+# Feature toggles for the experimental runner (NEW: interactive mode is now default)
+# If environment variables are provided, assume non-interactive automation mode
+# Otherwise, default to interactive mode for better user experience
+def _should_use_interactive_mode() -> bool:
+    """Determine if interactive mode should be used based on environment and arguments."""
+    # Check explicit ENABLE_INTERACTIVE_UI override first
+    explicit_interactive = os.environ.get('ENABLE_INTERACTIVE_UI', '').strip().lower()
+    if explicit_interactive in ('true', 'false'):
+        return explicit_interactive == 'true'
+    
+    # Check if runtime environment variables suggest automation mode (not .env file values)
+    # These are typically set by CI/CD or automation scripts
+    runtime_automation_vars = [
+        'EXCEL_FILE_PATH', 'HEADLESS', 'USE_PROCESS_POOL', 'PROC_WORKERS'
+    ]
+    has_runtime_automation = any(os.environ.get(var) for var in runtime_automation_vars)
+    
+    # Default: interactive mode unless runtime automation env vars are present
+    return not has_runtime_automation
+
+ENABLE_INTERACTIVE_UI = _should_use_interactive_mode()
 
 # Global variable to store current setup session (replaces environment variables)
 _current_setup_session: Optional[InteractiveSetupSession] = None
@@ -211,10 +230,25 @@ def _rename_folder_with_status(folder_path: str, status_code: str) -> str:
 def process_po_worker(args):
     """Run a single PO in its own process, with its own Edge driver.
 
-    Args tuple: (po_data, hierarchy_cols, has_hierarchy_data, headless_config)
+    Args tuple: (po_data, hierarchy_cols, has_hierarchy_data, headless_config[, download_root])
     Returns: dict with keys: po_number_display, status_code, message, final_folder
     """
-    po_data, hierarchy_cols, has_hierarchy_data, headless_config = args
+    if len(args) == 4:
+        po_data, hierarchy_cols, has_hierarchy_data, headless_config = args
+        download_root = os.environ.get('DOWNLOAD_FOLDER', ExperimentalConfig.DOWNLOAD_FOLDER)
+    elif len(args) >= 5:
+        po_data, hierarchy_cols, has_hierarchy_data, headless_config, download_root = args[:5]
+    else:
+        raise ValueError("process_po_worker expects at least 4 arguments")
+
+    download_root = os.path.abspath(os.path.expanduser(download_root)) if download_root else os.path.abspath(os.path.expanduser(ExperimentalConfig.DOWNLOAD_FOLDER))
+    os.environ['DOWNLOAD_FOLDER'] = download_root
+    try:
+        ExperimentalConfig.DOWNLOAD_FOLDER = download_root
+        from corelib.config import Config
+        Config.DOWNLOAD_FOLDER = download_root
+    except Exception:
+        pass
     display_po = po_data['po_number']
     folder_manager = FolderHierarchyManager()
     browser_manager = BrowserManager()
@@ -362,13 +396,46 @@ def _interactive_setup() -> 'InteractiveSetupSession':
     from src.core.excel_processor import ExcelProcessor
     default_input = ExcelProcessor.get_excel_file_path()
     inp = input(f"Path to input CSV/XLSX [{default_input}]: ").strip() or default_input
-    os.environ['EXCEL_FILE_PATH'] = inp
+    # Persist selection to experimental config (avoids env usage)
+    ExperimentalConfig.EXCEL_FILE_PATH = inp
 
-    # 2) Choose execution model
+    # 2) Download folder path
+    # Use value from .env as default, but expand ~ properly
+    default_download = os.path.expanduser(ExperimentalConfig.DOWNLOAD_FOLDER)
+    
+    # If using the old default format, suggest the new timestamped format
+    if "CoupaDownloads" in default_download and not any(char.isdigit() for char in os.path.basename(default_download)):
+        # Generate a new timestamped folder as suggestion
+        from corelib.config import generate_timestamped_download_folder
+        suggested_download = generate_timestamped_download_folder("/Users/juliocezar/Downloads")
+        print(f"💡 Suggested timestamped folder: {suggested_download}")
+        default_download = suggested_download
+    
+    download_path = input(f"Download folder path [{default_download}]: ").strip() or default_download
+    # Expand user path and ensure it's absolute
+    download_path = os.path.expanduser(download_path)
+    if not os.path.isabs(download_path):
+        download_path = os.path.abspath(download_path)
+    
+    # Update config and ensure folder exists
+    normalized_download = os.path.abspath(os.path.expanduser(download_path))
+    ExperimentalConfig.DOWNLOAD_FOLDER = normalized_download
+    # Keep core Config in sync so browser options pick the right path on first init
+    try:
+        from corelib.config import Config
+        Config.DOWNLOAD_FOLDER = normalized_download
+    except Exception:
+        pass
+    # Propagate selection so child processes inherit the correct folder
+    os.environ['DOWNLOAD_FOLDER'] = normalized_download
+    os.makedirs(normalized_download, exist_ok=True)
+    print(f"📁 Downloads will be saved to: {download_path}")
+
+    # 3) Choose execution model
     use_pool = _prompt_bool("Use process workers (one WebDriver per process)?", default=False)
-    os.environ['USE_PROCESS_POOL'] = 'true' if use_pool else 'false'
+    ExperimentalConfig.USE_PROCESS_POOL = bool(use_pool)
 
-    # 3) Process workers with safe cap (only if using process pool)
+    # 4) Process workers with safe cap (only if using process pool)
     default_workers = 1
     try:
         procs_int = default_workers
@@ -378,10 +445,10 @@ def _interactive_setup() -> 'InteractiveSetupSession':
                 procs_int = max(1, min(8, int(procs)))
     except Exception:
         procs_int = default_workers
-    os.environ['PROC_WORKERS'] = str(procs_int)
-    os.environ.setdefault('PROC_WORKERS_CAP', '8')
+    ExperimentalConfig.PROC_WORKERS = int(procs_int)
+    ExperimentalConfig.PROC_WORKERS_CAP = int(ExperimentalConfig.PROC_WORKERS_CAP or 8)
 
-    # 4) Headless mode (default: Yes) - NEW: Use HeadlessConfiguration instead of env var
+    # 5) Headless mode (default: Yes) - NEW: Use HeadlessConfiguration instead of env var
     headless_preference = _prompt_bool("Run browser in headless mode?", default=True)
     
     # Create interactive setup session to track user preferences
@@ -400,14 +467,14 @@ def _interactive_setup() -> 'InteractiveSetupSession':
 
     # 5) Driver selection — auto-pick, fallback to download, final guidance
     # Respect existing env var; default to allowing auto-download
-    allow_auto = os.environ.get('DRIVER_AUTO_DOWNLOAD', 'true').lower() == 'true'
-    os.environ['DRIVER_AUTO_DOWNLOAD'] = 'true' if allow_auto else 'false'
+    allow_auto = bool(getattr(ExperimentalConfig, 'DRIVER_AUTO_DOWNLOAD', True))
+    ExperimentalConfig.DRIVER_AUTO_DOWNLOAD = allow_auto
 
     from src.core.driver_manager import DriverManager
     dm = DriverManager()
     try:
         auto_path = dm.get_driver_path()  # auto local match; may download if allowed
-        os.environ['EDGE_DRIVER_PATH'] = auto_path
+        ExperimentalConfig.EDGE_DRIVER_PATH = auto_path
         print(f"   ✅ Auto-selected EdgeDriver: {auto_path}")
     except Exception as e:
         edge_version = dm.get_edge_version() or "unknown"
@@ -419,7 +486,7 @@ def _interactive_setup() -> 'InteractiveSetupSession':
         print("   Place it under 'drivers/' or set EDGE_DRIVER_PATH, then rerun.")
         manual = input("   Provide full path to EdgeDriver (or press Enter to continue without): ").strip()
         if manual:
-            os.environ['EDGE_DRIVER_PATH'] = manual
+            ExperimentalConfig.EDGE_DRIVER_PATH = manual
 
     # 6) Download folder base
     default_dl = os.path.expanduser(ExperimentalConfig.DOWNLOAD_FOLDER)
@@ -429,7 +496,7 @@ def _interactive_setup() -> 'InteractiveSetupSession':
 
     # 7) Edge profile usage
     use_prof = _prompt_bool("Use Edge profile (cookies/login)?", default=True)
-    os.environ['USE_EDGE_PROFILE'] = 'true' if use_prof else 'false'
+    ExperimentalConfig.USE_PROFILE = bool(use_prof)
     print("Tip: Leave blank to keep the default shown in brackets.")
     prof_dir = input(f"Edge profile directory [{ExperimentalConfig.EDGE_PROFILE_DIR}]: ").strip()
     if prof_dir:
@@ -439,8 +506,73 @@ def _interactive_setup() -> 'InteractiveSetupSession':
         ExperimentalConfig.EDGE_PROFILE_NAME = prof_name
     # 8) Pre-start cleanup (kill running Edge processes)
     kill_procs = _prompt_bool("Close any running Edge processes before starting?", default=True)
-    os.environ['CLOSE_EDGE_PROCESSES'] = 'true' if kill_procs else 'false'
+    ExperimentalConfig.CLOSE_EDGE_PROCESSES = bool(kill_procs)
     print("=== End of setup ===\n")
+
+
+def _apply_env_overrides_non_interactive() -> 'InteractiveSetupSession':
+    """Configure runtime from environment variables for non-interactive runs.
+
+    Respects the following vars (all optional):
+      - EXCEL_FILE_PATH: path to CSV/XLSX
+      - USE_PROCESS_POOL: 'true'|'false' (defaults to false)
+      - PROC_WORKERS: int 1-8 (defaults to 2)
+      - HEADLESS: 'true'|'false' (defaults to true)
+      - EDGE_PROFILE_DIR / EDGE_PROFILE_NAME: profile hints
+      - DOWNLOAD_FOLDER: base output folder
+    """
+    # Import here to avoid circulars during module import
+    from src.core.excel_processor import ExcelProcessor as SrcExcelProcessor
+    from corelib.models import InteractiveSetupSession
+
+    # Input path
+    input_path = os.environ.get('EXCEL_FILE_PATH')
+    if not input_path:
+        input_path = SrcExcelProcessor.get_excel_file_path()
+    ExperimentalConfig.EXCEL_FILE_PATH = os.path.expanduser(input_path)
+
+    # Execution model
+    ExperimentalConfig.USE_PROCESS_POOL = os.environ.get('USE_PROCESS_POOL', 'false').strip().lower() == 'true'
+    try:
+        workers = int(os.environ.get('PROC_WORKERS', '2'))
+    except ValueError:
+        workers = 2
+    ExperimentalConfig.PROC_WORKERS = max(1, min(8, workers))
+    ExperimentalConfig.PROC_WORKERS_CAP = int(getattr(ExperimentalConfig, 'PROC_WORKERS_CAP', 8) or 8)
+
+    # Headless
+    headless_pref = os.environ.get('HEADLESS', 'true').strip().lower() == 'true'
+    setup_session = InteractiveSetupSession(headless_preference=headless_pref)
+
+    # Download folder (apply timestamp prefix automatically)
+    from datetime import datetime
+    
+    base_dl = os.path.abspath(os.path.expanduser(os.environ.get('DOWNLOAD_FOLDER', ExperimentalConfig.DOWNLOAD_FOLDER)))
+    
+    # Add timestamp prefix to download folder
+    timestamp = datetime.now().strftime('%Y%m%d-%Hh%M')
+    parent_dir = os.path.dirname(base_dl)
+    base_name = os.path.basename(base_dl.rstrip('/'))
+    timestamped_dl = os.path.join(parent_dir, f"{timestamp}_{base_name}")
+    
+    ExperimentalConfig.DOWNLOAD_FOLDER = os.path.abspath(os.path.expanduser(timestamped_dl))
+    
+    # IMPORTANT: Also update Config.DOWNLOAD_FOLDER so browser uses the correct path
+    from corelib.config import Config
+    Config.DOWNLOAD_FOLDER = os.path.abspath(os.path.expanduser(timestamped_dl))
+    normalized_dl = Config.DOWNLOAD_FOLDER
+    os.environ['DOWNLOAD_FOLDER'] = normalized_dl
+    os.makedirs(normalized_dl, exist_ok=True)
+
+    # Profile hints (optional)
+    prof_dir = os.environ.get('EDGE_PROFILE_DIR')
+    if prof_dir:
+        ExperimentalConfig.EDGE_PROFILE_DIR = os.path.expanduser(prof_dir)
+    prof_name = os.environ.get('EDGE_PROFILE_NAME')
+    if prof_name:
+        ExperimentalConfig.EDGE_PROFILE_NAME = prof_name
+
+    return setup_session
 
 
 class MainApp:
@@ -875,14 +1007,14 @@ class MainApp:
         failed = 0
 
         # Check if parallel processing is enabled and beneficial
-        if self.enable_parallel and len(po_data_list) > 1:
+        if self.enable_parallel and len(po_data_list) > 1 and use_process_pool:
             try:
                 print(f"🚀 Using ProcessingSession with parallel processing ({self.max_workers} workers)")
                 
                 # Create ProcessingSession for intelligent mode selection
                 self._processing_session = ProcessingSession(
                     headless_config=headless_config,
-                    enable_parallel=True,
+                    enable_parallel=self.enable_parallel,
                     max_workers=self.max_workers,
                     progress_callback=self._parallel_progress_callback,
                     hierarchy_columns=hierarchy_cols,
@@ -890,14 +1022,22 @@ class MainApp:
                 )
                 
                 # Convert po_data_list to the format expected by ProcessingSession
+                # Preserve all hierarchy data for proper folder structure creation
                 processed_po_list = []
                 for po_data in po_data_list:
-                    processed_po = {
-                        'po_number': po_data.get('po_number', ''),
-                        'supplier': po_data.get('supplier', ''),
-                        'url': po_data.get('coupa_url', ''),
-                        'amount': po_data.get('amount', 0.0)
-                    }
+                    # Create a copy to preserve all fields including hierarchy columns
+                    processed_po = dict(po_data)
+                    
+                    # Ensure core fields are properly mapped
+                    if 'po_number' not in processed_po:
+                        processed_po['po_number'] = po_data.get('po_number', '')
+                    if 'supplier' not in processed_po:
+                        processed_po['supplier'] = po_data.get('supplier', '')
+                    if 'url' not in processed_po and 'coupa_url' in po_data:
+                        processed_po['url'] = po_data.get('coupa_url', '')
+                    if 'amount' not in processed_po:
+                        processed_po['amount'] = po_data.get('amount', 0.0)
+                    
                     processed_po_list.append(processed_po)
                 
                 # Process using ProcessingSession
@@ -966,10 +1106,14 @@ class MainApp:
         # Original implementation (backward compatibility)
         if use_process_pool:
             default_workers = min(2, len(po_data_list))
-            env_procs = int(os.environ.get("PROC_WORKERS", str(default_workers)))
-            hard_cap = int(os.environ.get("PROC_WORKERS_CAP", "3"))
+            from corelib.config import Config as ExperimentalConfig
+            env_procs = int(getattr(ExperimentalConfig, 'PROC_WORKERS', default_workers))
+            hard_cap = int(getattr(ExperimentalConfig, 'PROC_WORKERS_CAP', 3))
             proc_workers = max(1, min(env_procs, hard_cap, len(po_data_list)))
             print(f"📊 Using {proc_workers} process worker(s), one WebDriver per process")
+
+            # Use the ExperimentalConfig.DOWNLOAD_FOLDER that was updated during setup
+            download_root = os.path.abspath(os.path.expanduser(ExperimentalConfig.DOWNLOAD_FOLDER))
 
             with ProcessPoolExecutor(max_workers=proc_workers, mp_context=mp.get_context("spawn")) as executor:
                 future_map: dict = {}
@@ -984,7 +1128,7 @@ class MainApp:
                         self._ui_log(descriptor.po_number, 'Dispatched to background worker')
                     future = executor.submit(
                         process_po_worker,
-                        (po_data, hierarchy_cols, has_hierarchy_data, headless_config),
+                        (po_data, hierarchy_cols, has_hierarchy_data, headless_config, download_root),
                     )
                     future_map[future] = po_data
 
@@ -1072,8 +1216,12 @@ class MainApp:
         """
         Main execution loop for processing POs with parallel tabs.
         """
-        # Interactive wizard for runtime config
-        setup_session = _interactive_setup()
+        # Interactive or non-interactive configuration
+        if ENABLE_INTERACTIVE_UI:
+            setup_session = _interactive_setup()
+        else:
+            print("⚙️ Non-interactive mode: applying environment overrides")
+            setup_session = _apply_env_overrides_non_interactive()
         
         # Set headless configuration from setup session
         self.set_headless_configuration(setup_session.create_headless_configuration())
@@ -1097,12 +1245,16 @@ class MainApp:
             print("No valid PO entries found to process.")
             return
 
-        print(f"Found {len(valid_entries)} POs to process.")
+        print(f"📊 CSV Reading Results:")
+        print(f"  - Total entries read: {len(po_entries)}")
+        print(f"  - Valid POs after processing: {len(valid_entries)}")
+        print(f"  - PO numbers: {[entry[0] for entry in valid_entries[:10]]}{'...' if len(valid_entries) > 10 else ''}")
 
-        if ExperimentalConfig.RANDOM_SAMPLE_POS and ExperimentalConfig.RANDOM_SAMPLE_POS > 0:
-            k = min(ExperimentalConfig.RANDOM_SAMPLE_POS, len(valid_entries))
-            print(f"Sampling {k} random POs for processing...")
-            valid_entries = random.sample(valid_entries, k)
+        # Disable sampling for parallel testing to ensure multiple POs
+        # if ExperimentalConfig.RANDOM_SAMPLE_POS and ExperimentalConfig.RANDOM_SAMPLE_POS > 0:
+        #     k = min(ExperimentalConfig.RANDOM_SAMPLE_POS, len(valid_entries))
+        #     print(f"Sampling {k} random POs for processing...")
+        #     valid_entries = random.sample(valid_entries, k)
 
         # Convert to list of PO data
         po_data_list = []
@@ -1112,10 +1264,14 @@ class MainApp:
                     po_data_list.append(entry)
                     break
 
+        print(f"📋 PO Data Conversion:")
+        print(f"  - Valid entries: {len(valid_entries)}")
+        print(f"  - Po_data_list created: {len(po_data_list)}")
+        print(f"  - Sample PO data: {po_data_list[0] if po_data_list else 'None'}")
         print(f"🚀 Starting parallel processing with {len(po_data_list)} POs...")
-        use_process_pool = os.environ.get('USE_PROCESS_POOL', 'false').lower() == 'true'
+        use_process_pool = bool(getattr(ExperimentalConfig, 'USE_PROCESS_POOL', False))
 
-        requested_workers = os.environ.get('PROC_WORKERS', str(self.max_workers))
+        requested_workers = getattr(ExperimentalConfig, 'PROC_WORKERS', self.max_workers)
         try:
             configured_workers = max(1, min(8, int(requested_workers)))
         except (TypeError, ValueError):
@@ -1130,9 +1286,8 @@ class MainApp:
             for entry in po_data_list
             if entry.get('po_number')
         ]
-
-        env_toggle = os.environ.get('ENABLE_INTERACTIVE_UI')
-        enable_ui = ENABLE_INTERACTIVE_UI if env_toggle is None else env_toggle.lower() != 'false'
+        
+        enable_ui = ENABLE_INTERACTIVE_UI
         results: dict[str, int] = {}
 
         def _run_pipeline(controller: DownloadCLIController) -> None:
@@ -1373,19 +1528,35 @@ class ProcessingSession:
     
     def _process_parallel(self, po_list: List[dict]) -> Tuple[int, int, Dict[str, Any]]:
         """Process POs using parallel worker pool."""
+        # Check if profiles are disabled - if so, fall back to ProcessPoolExecutor
+        from corelib.config import Config as _Cfg
+        if not _Cfg.USE_PROFILE:
+            print("🔄 Profiles disabled, using ProcessPoolExecutor instead of PersistentWorkerPool")
+            return self._process_parallel_with_processpool(po_list)
+        
         import asyncio
         
         async def _async_process():
             try:
-                # Create PoolConfig
+                # Create PoolConfig with profile support
+                base_profile_path = _Cfg.EDGE_PROFILE_DIR or ""
+                if not base_profile_path:
+                    raise ValueError("Profile path required for PersistentWorkerPool, but none configured")
+                
+                download_root = os.path.abspath(os.path.expanduser(_Cfg.DOWNLOAD_FOLDER))
+                print(f"🏗️ Creating worker pool with download_root: {download_root}")
+
                 config = PoolConfig(
                     worker_count=min(self.max_workers, len(po_list)),
                     headless_mode=self.headless_config.get_effective_headless_mode(),
-                    base_profile_path=ExperimentalConfig.EDGE_PROFILE_DIR or "",
+                    base_profile_path=base_profile_path,
                     base_profile_name=ExperimentalConfig.EDGE_PROFILE_NAME or "Default",
                     hierarchy_columns=self.hierarchy_columns,
                     has_hierarchy_data=self.has_hierarchy_data,
+                    download_root=download_root,
                 )
+                
+                print(f"🔧 PoolConfig created with download_root: {config.download_root}")
                 
                 # Create and start worker pool
                 self.worker_pool = PersistentWorkerPool(config)
@@ -1486,35 +1657,172 @@ class ProcessingSession:
             return asyncio.run(_async_process())
     
     def _process_sequential(self, po_list: List[dict]) -> Tuple[int, int, Dict[str, Any]]:
-        """Process POs using sequential processing (legacy compatibility)."""
-        # This would integrate with the existing MainApp sequential processing
-        # For now, return a placeholder that simulates the processing
-        
+        """Process POs using sequential processing with real downloads (single WebDriver)."""
+        from corelib.browser import BrowserManager
+        from EXPERIMENTAL.corelib.po_processing import process_single_po
+
         successful = 0
         failed = 0
-        
-        for i, po_data in enumerate(po_list):
+        results: List[Dict[str, Any]] = []
+
+        browser_manager = BrowserManager()
+        driver = None
+    # Folder manager usage is encapsulated inside process_single_po
+
+        try:
+            # Initialize a single browser instance for all POs
+            browser_manager.initialize_driver(headless=self.headless_config.get_effective_headless_mode())
+            driver = browser_manager.driver
+
+            for i, po in enumerate(po_list):
+                po_number = po.get('po_number', '')
+                display_po = po_number
+                folder_path = ''
+                try:
+                    # Progress bookkeeping
+                    self.completed_tasks = i  # completed so far
+                    self.active_tasks = 1
+                    self._update_progress()
+
+                    # Process single PO using shared utility
+                    result_entry = process_single_po(
+                        po_number=po_number,
+                        po_data=po,
+                        driver=driver,
+                        browser_manager=browser_manager,
+                        hierarchy_columns=self.hierarchy_columns or [],
+                        has_hierarchy_data=bool(self.has_hierarchy_data),
+                    )
+                    results.append(result_entry)
+
+                    if result_entry['success']:
+                        successful += 1
+                    else:
+                        failed += 1
+
+                except Exception as e:
+                    # On error, mark failed and continue
+                    results.append({
+                        'po_number': po_number,
+                        'po_number_display': display_po or po_number,
+                        'status_code': 'FAILED',
+                        'message': str(e),
+                        'final_folder': '',
+                        'errors': [{'filename': '', 'reason': str(e)}],
+                        'success': False,
+                        'attachment_names': [],
+                        'attachments_found': 0,
+                        'attachments_downloaded': 0,
+                    })
+                    failed += 1
+
+                finally:
+                    # Update per-item progress
+                    self.completed_tasks = i + 1
+                    self.active_tasks = 0
+                    self._update_progress()
+
+        finally:
             try:
-                # Update progress
-                self.completed_tasks = i + 1
-                self._update_progress()
-                
-                # Simulate processing (in real implementation, this would call existing logic)
-                print(f"Processing PO {po_data.get('po_number', 'unknown')} ({i+1}/{len(po_list)})")
-                time.sleep(0.1)  # Simulate processing time
-                
-                successful += 1
-                
-            except Exception as e:
-                print(f"Failed to process PO {po_data.get('po_number', 'unknown')}: {e}")
-                failed += 1
-        
+                if driver is not None:
+                    browser_manager.cleanup()
+            except Exception:
+                pass
+
         session_report = {
             'processing_mode': 'sequential',
             'worker_count': 1,
-            'session_duration': (datetime.now() - self.start_time).total_seconds() if self.start_time else 0
+            'session_duration': (datetime.now() - self.start_time).total_seconds() if self.start_time else 0,
+            'results': results,
+        }
+
+        self.last_results = results
+        return successful, failed, session_report
+    
+    def _process_parallel_with_processpool(self, po_list: List[dict]) -> Tuple[int, int, Dict[str, Any]]:
+        """Process POs using ProcessPoolExecutor when profiles are disabled."""
+        successful = 0
+        failed = 0
+        results: List[Dict[str, Any]] = []
+        
+        # Use ProcessPoolExecutor similar to MainApp._process_po_entries
+        import multiprocessing as mp
+        from concurrent.futures import ProcessPoolExecutor, as_completed
+        
+        # Calculate workers
+        default_workers = min(2, len(po_list))
+        proc_workers = max(1, min(self.max_workers, len(po_list)))
+        print(f"📊 Using {proc_workers} ProcessPoolExecutor worker(s) (profiles disabled)")
+        
+        # Get download root for workers
+        from corelib.config import Config
+        download_root = os.path.abspath(os.path.expanduser(getattr(Config, 'DOWNLOAD_FOLDER', ExperimentalConfig.DOWNLOAD_FOLDER)))
+        
+        with ProcessPoolExecutor(max_workers=proc_workers, mp_context=mp.get_context("spawn")) as executor:
+            future_map: dict = {}
+            
+            # Convert po_list to expected format and submit tasks
+            for po_data in po_list:
+                # Ensure po_data has the right format for process_po_worker
+                task_args = (
+                    po_data, 
+                    self.hierarchy_columns or [], 
+                    bool(self.has_hierarchy_data), 
+                    self.headless_config,
+                    download_root
+                )
+                
+                future = executor.submit(process_po_worker, task_args)
+                future_map[future] = po_data
+                
+                # Update progress
+                self.total_tasks = len(po_list)
+                self._update_progress()
+            
+            # Collect results
+            for future in as_completed(future_map):
+                po_data = future_map[future]
+                po_number = po_data.get('po_number', '')
+                
+                try:
+                    result = future.result()
+                    results.append(result)
+                    
+                    if result.get('success', False) or result.get('status_code') in {'COMPLETED', 'NO_ATTACHMENTS'}:
+                        successful += 1
+                    else:
+                        failed += 1
+                        
+                except Exception as exc:
+                    # Handle worker exceptions
+                    error_result = {
+                        'po_number': po_number,
+                        'po_number_display': po_number,
+                        'status_code': 'FAILED',
+                        'message': str(exc),
+                        'final_folder': '',
+                        'errors': [{'filename': '', 'reason': str(exc)}],
+                        'success': False,
+                        'attachment_names': [],
+                        'attachments_found': 0,
+                        'attachments_downloaded': 0,
+                    }
+                    results.append(error_result)
+                    failed += 1
+                
+                # Update progress after each completion
+                self.completed_tasks = successful + failed
+                self._update_progress()
+        
+        # Create session report
+        session_report = {
+            'processing_mode': 'parallel_processpool',
+            'worker_count': proc_workers,
+            'session_duration': (datetime.now() - self.start_time).total_seconds() if self.start_time else 0,
+            'results': results,
         }
         
+        self.last_results = results
         return successful, failed, session_report
     
     def _monitor_parallel_progress(self):
