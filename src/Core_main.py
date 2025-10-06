@@ -6,7 +6,10 @@ import time
 import threading
 import multiprocessing as mp
 import argparse
+import uuid
 from datetime import datetime, timedelta
+from pathlib import Path
+from typing import Any, Dict
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from selenium.common.exceptions import (
     InvalidSessionIdException,
@@ -26,6 +29,7 @@ from src.core.config import Config
 from src.core.downloader import Downloader
 from src.core.excel_processor import ExcelProcessor
 from src.core.folder_hierarchy import FolderHierarchyManager
+from src.csv_handler import CSVHandler, WriteQueue
 
 
 
@@ -382,6 +386,9 @@ class MainApp:
         self._completed_po_count = 0
         self._total_po_count = 0
         self._accumulated_po_seconds = 0.0
+        self.csv_handler: CSVHandler | None = None
+        self._csv_write_queue: WriteQueue | None = None
+        self._csv_session_id: str | None = None
 
     def _has_active_downloads(self, folder_path: str) -> bool:
         try:
@@ -543,6 +550,81 @@ class MainApp:
             return status_reason.replace('_', ' ').title()
         return ''
 
+    def _initialize_csv_handler(self, csv_path: Path) -> None:
+        """Instantiate CSV handler, backup current CSV, and boot write queue."""
+        try:
+            backup_dir = csv_path.parent.parent / 'backup'
+            backup_dir.mkdir(parents=True, exist_ok=True)
+            self.csv_handler = CSVHandler(csv_path=csv_path, backup_dir=backup_dir)
+            self._csv_session_id = uuid.uuid4().hex[:8]
+            backup_path = self.csv_handler.create_session_backup(self._csv_session_id)
+            print(f"🛡️ CSV backup created at: {backup_path}")
+            self._csv_write_queue = WriteQueue(self.csv_handler)
+            self._csv_write_queue.start_writer_thread()
+        except Exception as handler_error:
+            self.csv_handler = None
+            self._csv_write_queue = None
+            self._csv_session_id = None
+            print(f"⚠️ Failed to initialize CSV handler: {handler_error}")
+
+    def _shutdown_csv_handler(self) -> None:
+        """Gracefully stop write queue threads."""
+        if self._csv_write_queue:
+            self._csv_write_queue.stop_writer_thread(timeout=15.0)
+        self._csv_write_queue = None
+
+    def _persist_csv_result(self, result: Dict[str, Any]) -> None:
+        """Persist a processing result to the CSV if handler is active."""
+        if not self.csv_handler:
+            return
+
+        updates = self._build_csv_updates(result)
+        po_number = result.get('po_number') or result.get('po_number_display')
+        if not po_number:
+            return
+
+        if self._csv_write_queue:
+            self._csv_write_queue.submit_write(po_number, updates)
+        else:
+            self.csv_handler.update_record(po_number, updates)
+
+    @staticmethod
+    def _build_csv_updates(result: Dict[str, Any]) -> Dict[str, Any]:
+        """Translate a processing result into CSV column updates."""
+        status_code = (result.get('status_code') or '').upper() or 'FAILED'
+        attachment_names = result.get('attachment_names') or []
+        if isinstance(attachment_names, str):
+            attachment_names = [name for name in attachment_names.split(';') if name]
+
+        error_message = ''
+        success = result.get('success')
+        if success is None:
+            success = status_code in {'COMPLETED', 'NO_ATTACHMENTS', 'PARTIAL'}
+        if not success:
+            error_message = result.get('message', '') or result.get('error', '')
+
+        updates: Dict[str, Any] = {
+            'STATUS': status_code,
+            'ATTACHMENTS_FOUND': result.get('attachments_found', 0),
+            'ATTACHMENTS_DOWNLOADED': result.get('attachments_downloaded', 0),
+            'AttachmentName': attachment_names,
+            'DOWNLOAD_FOLDER': result.get('final_folder', ''),
+            'COUPA_URL': result.get('coupa_url', ''),
+            'ERROR_MESSAGE': error_message,
+        }
+
+        supplier_name = result.get('supplier_name')
+        if supplier_name:
+            updates['SUPPLIER'] = supplier_name
+
+        last_processed = result.get('last_processed')
+        if isinstance(last_processed, datetime):
+            updates['LAST_PROCESSED'] = last_processed.isoformat()
+        elif isinstance(last_processed, str) and last_processed:
+            updates['LAST_PROCESSED'] = last_processed
+
+        return updates
+
     def process_single_po(self, po_data, hierarchy_cols, has_hierarchy_data, index, total):
         """Process a single PO using the existing browser window (no extra tabs)."""
         display_po = po_data['po_number']
@@ -613,6 +695,19 @@ class MainApp:
                     coupa_url=result_payload.get('coupa_url', ''),
                     attachment_names=formatted_names,
                 )
+                csv_result = {
+                    'po_number': po_number,
+                    'po_number_display': display_po,
+                    'status_code': status_code,
+                    'message': message,
+                    'final_folder': final_folder,
+                    'attachments_found': result_payload.get('attachments_found', 0),
+                    'attachments_downloaded': result_payload.get('attachments_downloaded', 0),
+                    'attachment_names': result_payload.get('attachment_names', []),
+                    'supplier_name': result_payload.get('supplier_name', ''),
+                    'coupa_url': result_payload.get('coupa_url', ''),
+                    'success': status_code in {'COMPLETED', 'NO_ATTACHMENTS', 'PARTIAL'},
+                }
 
             emoji = {
                 'COMPLETED': '✅',
@@ -623,6 +718,7 @@ class MainApp:
             }.get(status_code, 'ℹ️')
             log_message = message or status_reason or status_code
             print(f"   {emoji} {display_po}: {log_message}")
+            self._persist_csv_result(csv_result)
             return status_code in {'COMPLETED', 'NO_ATTACHMENTS'}
 
         except Exception as e:
@@ -630,6 +726,20 @@ class MainApp:
             print(f"   ❌ Error processing {display_po}: {friendly}")
             # Use unified FAILED status on exceptions in sequential mode
             self.excel_processor.update_po_status(display_po, "FAILED", error_message=friendly)
+            failure_result = {
+                'po_number': po_number,
+                'po_number_display': display_po,
+                'status_code': 'FAILED',
+                'message': friendly,
+                'final_folder': '',
+                'attachments_found': 0,
+                'attachments_downloaded': 0,
+                'attachment_names': [],
+                'supplier_name': po_data.get('supplier_name', ''),
+                'coupa_url': po_data.get('coupa_url', ''),
+                'success': False,
+            }
+            self._persist_csv_result(failure_result)
 
             # Clean up browser state: close any extra tabs and return to main tab
             try:
@@ -700,6 +810,10 @@ class MainApp:
             return
 
         print(f"Found {len(valid_entries)} POs to process.")
+
+        csv_input_path = Path(excel_path)
+        if csv_input_path.suffix.lower() == '.csv' and not self.csv_handler:
+            self._initialize_csv_handler(csv_input_path)
 
         if Config.RANDOM_SAMPLE_POS and Config.RANDOM_SAMPLE_POS > 0:
             k = min(Config.RANDOM_SAMPLE_POS, len(valid_entries))
@@ -778,6 +892,10 @@ class MainApp:
                         successful += 1
                     else:
                         failed += 1
+
+                    result_payload = dict(result)
+                    result_payload['success'] = status_code in {'COMPLETED', 'NO_ATTACHMENTS', 'PARTIAL'}
+                    self._persist_csv_result(result_payload)
         else:
             # Legacy in-process mode (single WebDriver, sequential)
             print("📊 Using in-process mode (single WebDriver, sequential)")
@@ -827,7 +945,7 @@ class MainApp:
         try:
             # Create and start worker pool
             print(f"🏭 Starting persistent worker pool with {worker_count} workers...")
-            pool = PersistentWorkerPool(config)
+            pool = PersistentWorkerPool(config, csv_handler=self.csv_handler)
 
             # Run async pool operations
             import asyncio
@@ -908,6 +1026,7 @@ class MainApp:
             self.browser_manager.cleanup()
             self.driver = None
             print("✅ Browser closed successfully")
+        self._shutdown_csv_handler()
 
 
 if __name__ == "__main__":

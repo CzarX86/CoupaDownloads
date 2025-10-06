@@ -39,6 +39,9 @@ from corelib.models import InteractiveSetupSession, HeadlessConfiguration
 
 # Import worker pool for parallel processing
 from EXPERIMENTAL.workers.persistent_pool import PersistentWorkerPool
+
+# Import CSV handler for incremental persistence
+from src.csv_handler import CSVHandler, WriteQueue
 from EXPERIMENTAL.workers.models import PoolConfig
 
 # Feature toggles for the experimental runner (NEW: interactive mode is now default)
@@ -230,14 +233,18 @@ def _rename_folder_with_status(folder_path: str, status_code: str) -> str:
 def process_po_worker(args):
     """Run a single PO in its own process, with its own Edge driver.
 
-    Args tuple: (po_data, hierarchy_cols, has_hierarchy_data, headless_config[, download_root])
+    Args tuple: (po_data, hierarchy_cols, has_hierarchy_data, headless_config[, download_root, csv_path])
     Returns: dict with keys: po_number_display, status_code, message, final_folder
     """
     if len(args) == 4:
         po_data, hierarchy_cols, has_hierarchy_data, headless_config = args
         download_root = os.environ.get('DOWNLOAD_FOLDER', ExperimentalConfig.DOWNLOAD_FOLDER)
-    elif len(args) >= 5:
-        po_data, hierarchy_cols, has_hierarchy_data, headless_config, download_root = args[:5]
+        csv_path = None
+    elif len(args) == 5:
+        po_data, hierarchy_cols, has_hierarchy_data, headless_config, download_root = args
+        csv_path = None
+    elif len(args) >= 6:
+        po_data, hierarchy_cols, has_hierarchy_data, headless_config, download_root, csv_path = args[:6]
     else:
         raise ValueError("process_po_worker expects at least 4 arguments")
 
@@ -255,6 +262,22 @@ def process_po_worker(args):
     driver = None
     folder_path = ''
     clone_dir = ''
+    
+    # Initialize CSV handler if path provided
+    csv_handler = None
+    if csv_path:
+        try:
+            import sys
+            from pathlib import Path
+            # Add src directory to path for imports
+            src_path = Path(__file__).parent.parent.parent / 'src'
+            if str(src_path) not in sys.path:
+                sys.path.insert(0, str(src_path))
+            from csv_handler.handler import CSVHandler
+            csv_handler = CSVHandler(csv_path)
+            print(f"[worker] 📊 CSV handler initialized for {csv_path}", flush=True)
+        except Exception as e:
+            print(f"[worker] ⚠️ Failed to initialize CSV handler: {e}", flush=True)
     
     # Log headless configuration for this worker
     print(f"[worker] 🎯 Headless configuration: {headless_config}", flush=True)
@@ -327,6 +350,26 @@ def process_po_worker(args):
             'source_page': result_payload.get('source_page', 'PO'),
             'initial_url': result_payload.get('initial_url', result_payload.get('coupa_url', '')),
         }
+        
+        # Persist to CSV if handler available
+        if csv_handler:
+            try:
+                csv_updates = {
+                    'po_number': display_po,
+                    'status': result_payload.get('status_code', status_code),
+                    'supplier': result_payload.get('supplier_name', ''),
+                    'attachments_found': result_payload.get('attachments_found', 0),
+                    'attachments_downloaded': result_payload.get('attachments_downloaded', 0),
+                    'final_folder': final_folder,
+                    'error_message': message,
+                    'coupa_url': result_payload.get('coupa_url', ''),
+                    'attachment_names': ', '.join(result_payload.get('attachment_names', []))
+                }
+                csv_handler.update_po_status(**csv_updates)
+                print(f"[worker] 💾 CSV updated for {display_po}", flush=True)
+            except Exception as e:
+                print(f"[worker] ⚠️ Failed to update CSV: {e}", flush=True)
+        
         print(f"[worker] 🏁 Done {display_po} → {status_code}", flush=True)
         return result
     except Exception as e:
@@ -339,6 +382,26 @@ def process_po_worker(args):
         except Exception:
             final_folder = folder_path or ''
         friendly = _humanize_exception(e)
+        
+        # Persist failed result to CSV if handler available
+        if csv_handler:
+            try:
+                csv_updates = {
+                    'po_number': display_po,
+                    'status': 'ERROR',
+                    'supplier': po_data.get('supplier', ''),
+                    'attachments_found': 0,
+                    'attachments_downloaded': 0,
+                    'final_folder': final_folder,
+                    'error_message': friendly,
+                    'coupa_url': po_data.get('coupa_url', ''),
+                    'attachment_names': ''
+                }
+                csv_handler.update_po_status(**csv_updates)
+                print(f"[worker] 💾 CSV updated for failed {display_po}", flush=True)
+            except Exception as csv_e:
+                print(f"[worker] ⚠️ Failed to update CSV for failed PO: {csv_e}", flush=True)
+        
         return {
             'po_number_display': display_po,
             'status_code': 'FAILED',
@@ -605,6 +668,11 @@ class MainApp:
         self.lock = threading.Lock()  # Thread safety for browser operations
         self._run_start_time: float | None = None
         self._current_po_start_time: float | None = None
+        
+        # CSV handler for incremental persistence
+        self.csv_handler: CSVHandler | None = None
+        self._csv_write_queue: WriteQueue | None = None
+        self._csv_session_id: str | None = None
         self._completed_po_count = 0
         self._total_po_count = 0
         self._accumulated_po_seconds = 0.0
@@ -800,6 +868,82 @@ class MainApp:
             self._completed_po_count += 1
         self._current_po_start_time = None
 
+    def _initialize_csv_handler(self, csv_path: Path) -> None:
+        """Instantiate CSV handler, backup current CSV, and boot write queue."""
+        import uuid
+        try:
+            backup_dir = csv_path.parent.parent / 'backup'
+            backup_dir.mkdir(parents=True, exist_ok=True)
+            self.csv_handler = CSVHandler(csv_path=csv_path, backup_dir=backup_dir)
+            self._csv_session_id = uuid.uuid4().hex[:8]
+            backup_path = self.csv_handler.create_session_backup(self._csv_session_id)
+            print(f"🛡️ CSV backup created at: {backup_path}")
+            self._csv_write_queue = WriteQueue(self.csv_handler)
+            self._csv_write_queue.start_writer_thread()
+        except Exception as handler_error:
+            self.csv_handler = None
+            self._csv_write_queue = None
+            self._csv_session_id = None
+            print(f"⚠️ Failed to initialize CSV handler: {handler_error}")
+
+    def _shutdown_csv_handler(self) -> None:
+        """Gracefully stop write queue threads."""
+        if self._csv_write_queue:
+            self._csv_write_queue.stop_writer_thread(timeout=15.0)
+        self._csv_write_queue = None
+
+    def _persist_csv_result(self, result: Dict[str, Any]) -> None:
+        """Persist a processing result to the CSV if handler is active."""
+        if not self.csv_handler:
+            return
+
+        updates = self._build_csv_updates(result)
+        po_number = result.get('po_number') or result.get('po_number_display')
+        if not po_number:
+            return
+
+        if self._csv_write_queue:
+            self._csv_write_queue.submit_write(po_number, updates)
+        else:
+            self.csv_handler.update_record(po_number, updates)
+
+    @staticmethod
+    def _build_csv_updates(result: Dict[str, Any]) -> Dict[str, Any]:
+        """Translate a processing result into CSV column updates."""
+        status_code = (result.get('status_code') or '').upper() or 'FAILED'
+        attachment_names = result.get('attachment_names') or []
+        if isinstance(attachment_names, str):
+            attachment_names = [name for name in attachment_names.split(';') if name]
+
+        error_message = ''
+        success = result.get('success')
+        if success is None:
+            success = status_code in {'COMPLETED', 'NO_ATTACHMENTS', 'PARTIAL'}
+        if not success:
+            error_message = result.get('message', '') or result.get('error', '')
+
+        updates: Dict[str, Any] = {
+            'STATUS': status_code,
+            'ATTACHMENTS_FOUND': result.get('attachments_found', 0),
+            'ATTACHMENTS_DOWNLOADED': result.get('attachments_downloaded', 0),
+            'AttachmentName': attachment_names,
+            'DOWNLOAD_FOLDER': result.get('final_folder', ''),
+            'COUPA_URL': result.get('coupa_url', ''),
+            'ERROR_MESSAGE': error_message,
+        }
+
+        supplier_name = result.get('supplier_name')
+        if supplier_name:
+            updates['SUPPLIER'] = supplier_name
+
+        last_processed = result.get('last_processed')
+        if isinstance(last_processed, datetime):
+            updates['LAST_PROCESSED'] = last_processed.isoformat()
+        elif isinstance(last_processed, str) and last_processed:
+            updates['LAST_PROCESSED'] = last_processed
+
+        return updates
+
     def _compose_csv_message(self, result_payload: dict) -> str:
         status_code = (result_payload.get('status_code') or '').upper()
         status_reason = result_payload.get('status_reason', '') or ''
@@ -935,6 +1079,10 @@ class MainApp:
                     result_payload.get('coupa_url', ''),
                 )
 
+                # Persist to CSV if handler initialized
+                if csv_handler:
+                    self._persist_csv_result(result_payload)
+
             emoji = {
                 'COMPLETED': '✅',
                 'NO_ATTACHMENTS': '📭',
@@ -954,6 +1102,17 @@ class MainApp:
             self._ui_po_completed(display_po, 'FAILED', friendly)
             # Use unified FAILED status on exceptions in sequential mode
             self.excel_processor.update_po_status(display_po, "FAILED", error_message=friendly)
+
+            # Persist to CSV if handler is initialized
+            if self.csv_handler:
+                failed_result = {
+                    'po_number': po_number,
+                    'po_number_display': display_po,
+                    'status_code': 'FAILED',
+                    'message': friendly,
+                    'supplier_name': vendor_hint,
+                }
+                self._persist_csv_result(failed_result)
 
             # Clean up browser state: close any extra tabs and return to main tab
             try:
@@ -1021,6 +1180,10 @@ class MainApp:
                     has_hierarchy_data=has_hierarchy_data,
                 )
                 
+                # Configure CSV path for workers if CSV handler is available
+                if self.csv_handler and hasattr(self.csv_handler, 'csv_path'):
+                    self._processing_session.set_csv_path(str(self.csv_handler.csv_path))
+                
                 # Convert po_data_list to the format expected by ProcessingSession
                 # Preserve all hierarchy data for proper folder structure creation
                 processed_po_list = []
@@ -1077,6 +1240,10 @@ class MainApp:
                             result.get('coupa_url', ''),
                         )
 
+                        # Persist to CSV if handler is initialized
+                        if self.csv_handler:
+                            self._persist_csv_result(result)
+
                         emoji = {
                             'COMPLETED': '✅',
                             'NO_ATTACHMENTS': '📭',
@@ -1126,9 +1293,15 @@ class MainApp:
                         self._ui_update_metadata(descriptor.po_number, descriptor.vendor, descriptor.link)
                         self._ui_po_started(po_data)
                         self._ui_log(descriptor.po_number, 'Dispatched to background worker')
+                    
+                    # Determine CSV path for worker
+                    csv_path = None
+                    if self.csv_handler and hasattr(self.csv_handler, 'csv_path'):
+                        csv_path = str(self.csv_handler.csv_path)
+                    
                     future = executor.submit(
                         process_po_worker,
-                        (po_data, hierarchy_cols, has_hierarchy_data, headless_config, download_root),
+                        (po_data, hierarchy_cols, has_hierarchy_data, headless_config, download_root, csv_path),
                     )
                     future_map[future] = po_data
 
@@ -1180,6 +1353,10 @@ class MainApp:
                         result.get('supplier_name', ''),
                         result.get('coupa_url', ''),
                     )
+
+                    # Persist to CSV if handler is initialized
+                    if self.csv_handler:
+                        self._persist_csv_result(result)
 
                     print("-" * 60)
                     emoji = {
@@ -1249,6 +1426,11 @@ class MainApp:
         print(f"  - Total entries read: {len(po_entries)}")
         print(f"  - Valid POs after processing: {len(valid_entries)}")
         print(f"  - PO numbers: {[entry[0] for entry in valid_entries[:10]]}{'...' if len(valid_entries) > 10 else ''}")
+
+        # Initialize CSV handler if input file is CSV
+        csv_input_path = Path(excel_path)
+        if csv_input_path.suffix.lower() == '.csv' and not self.csv_handler:
+            self._initialize_csv_handler(csv_input_path)
 
         # Disable sampling for parallel testing to ensure multiple POs
         # if ExperimentalConfig.RANDOM_SAMPLE_POS and ExperimentalConfig.RANDOM_SAMPLE_POS > 0:
@@ -1340,6 +1522,10 @@ class MainApp:
                 self._headless_config,
             )
 
+        # Shutdown CSV handler to ensure all data is persisted
+        if self.csv_handler:
+            self._shutdown_csv_handler()
+
         print("-" * 60)
         print("🎉 Processing complete!")
         print(f"✅ Successful: {successful}")
@@ -1348,6 +1534,10 @@ class MainApp:
 
     def close(self):
         """Close the browser properly."""
+        # Shutdown CSV handler first
+        if self.csv_handler:
+            self._shutdown_csv_handler()
+            
         if self.driver:
             print("🔄 Closing browser...")
             self.browser_manager.cleanup()
@@ -1413,6 +1603,13 @@ class ProcessingSession:
         self._progress_lock = threading.Lock()
         self._last_progress_update = datetime.now()
         self.last_results: List[Dict[str, Any]] = []
+        
+        # CSV handler support
+        self.csv_path: Optional[str] = None
+    
+    def set_csv_path(self, csv_path: str) -> None:
+        """Set CSV path for worker processes."""
+        self.csv_path = csv_path
     
     def process_pos(self, po_list: List[dict]) -> Tuple[int, int, Dict[str, Any]]:
         """Process list of POs with automatic mode selection."""
@@ -1559,7 +1756,16 @@ class ProcessingSession:
                 print(f"🔧 PoolConfig created with download_root: {config.download_root}")
                 
                 # Create and start worker pool
-                self.worker_pool = PersistentWorkerPool(config)
+                csv_handler = None
+                if hasattr(self, 'csv_path') and self.csv_path:
+                    try:
+                        from src.csv_handler import CSVHandler
+                        from pathlib import Path
+                        csv_handler = CSVHandler(Path(self.csv_path))
+                        print(f"[PersistentWorkerPool] CSV handler created for: {self.csv_path}")
+                    except Exception as e:
+                        print(f"[PersistentWorkerPool] Failed to create CSV handler: {e}")
+                self.worker_pool = PersistentWorkerPool(config, csv_handler=csv_handler)
                 await self.worker_pool.start()
                 
                 # Submit tasks
@@ -1619,6 +1825,9 @@ class ProcessingSession:
                 await self.worker_pool.shutdown()
                 self.worker_pool = None
 
+                # Process results for CSV persistence (workers should handle this individually)
+                # Note: CSV persistence is handled by individual workers in process_po_worker function
+
                 session_report = {
                     'processing_mode': 'parallel',
                     'worker_count': config.worker_count,
@@ -1649,6 +1858,7 @@ class ProcessingSession:
                 import concurrent.futures
                 with concurrent.futures.ThreadPoolExecutor() as executor:
                     future = executor.submit(asyncio.run, _async_process())
+
                     return future.result(timeout=900)  # 15 minute timeout
             else:
                 return loop.run_until_complete(_async_process())
@@ -1763,13 +1973,23 @@ class ProcessingSession:
             
             # Convert po_list to expected format and submit tasks
             for po_data in po_list:
+                # Determine CSV path for worker (ProcessingSession doesn't have direct CSV handler access)
+                csv_path = None
+                # Try to get CSV path from environment or current working directory
+                try:
+                    if hasattr(self, 'csv_path') and self.csv_path:
+                        csv_path = str(self.csv_path)
+                except:
+                    pass
+                
                 # Ensure po_data has the right format for process_po_worker
                 task_args = (
                     po_data, 
                     self.hierarchy_columns or [], 
                     bool(self.has_hierarchy_data), 
                     self.headless_config,
-                    download_root
+                    download_root,
+                    csv_path
                 )
                 
                 future = executor.submit(process_po_worker, task_args)
