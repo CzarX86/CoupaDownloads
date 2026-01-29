@@ -4,39 +4,41 @@
 Este documento detalha o design para a Proposta 01: otimizar o processamento paralelo de POs para usar um driver por worker (processo), reutilizado para múltiplas POs. O objetivo é reduzir overhead de inicialização de drivers, melhorando eficiência sem comprometer isolamento.
 
 ## 2. Arquitetura Atual
-- **Modo Paralelo**: Cada PO é processado em um processo separado via `ProcessPoolExecutor` ou `PersistentWorkerPool`. Cada processo chama `process_po_worker`, que inicializa um driver isolado.
+- **Modo Paralelo**: Cada PO é processado em um processo separado via `WorkerManager.process_parallel_with_session()` ou `process_parallel_legacy()`. Cada processo chama funções worker que inicializam um driver isolado.
 - **Problemas**: Overhead alto (inicialização/destruição de drivers por PO), ineficiência em recursos para lotes grandes.
-- **Componentes Chave**:
-  - `process_po_worker`: Função executada por processo, inicializa driver e processa um PO.
+- **Componentes Chave** (após refatoração PR 03):
+  - `WorkerManager`: Gerencia processamento paralelo, chama funções worker por processo.
   - `BrowserManager`: Gerencia inicialização e cleanup do driver.
   - `FolderHierarchyManager`: Cria pastas por PO.
+  - `ProcessingController`: Coordena processamento via WorkerManager.
 
 ## 3. Arquitetura Proposta
-- **Mudança Principal**: Modificar `process_po_worker` para aceitar uma lista de POs. Inicializar o driver uma vez por worker e reutilizá-lo em um loop interno para processar múltiplas POs.
+- **Mudança Principal**: Modificar métodos em `WorkerManager` (ex.: `process_parallel_with_session`) para aceitar filas de POs por worker. Inicializar o driver uma vez por worker e reutilizá-lo em um loop interno para processar múltiplas POs.
 - **Estrutura**:
   - Worker (processo): Inicializa driver uma vez, processa fila de POs sequencialmente com o mesmo driver.
   - Isolamento: Manter processos separados; adicionar limpeza de sessão entre POs (ex.: deletar cookies).
 - **Benefícios**: Redução de ~20-30% em tempo de processamento para lotes grandes, melhor reutilização de recursos.
 
 ## 4. Componentes e Interfaces
-- **process_po_worker (Modificado)**:
-  - Entrada: Lista de POs (dicts), config headless, download_root, csv_path.
-  - Lógica: Inicializar driver uma vez; loop sobre POs (criar pasta, atualizar download dir, chamar Downloader, esperar downloads, persistir CSV).
+- **WorkerManager (Modificado)**:
+  - Métodos como `process_parallel_with_session`: Modificar para distribuir filas de POs por worker e processar múltiplas POs por driver.
+  - Entrada: Lista de POs, dividir em sublistas por worker.
+  - Lógica: Worker inicializa driver uma vez; loop sobre POs na fila (criar pasta, atualizar download dir, chamar Downloader, esperar downloads).
   - Saída: Lista de resultados por PO.
 - **BrowserManager**:
   - Adicionar método para limpeza de sessão (ex.: `clear_session()`).
-- **PersistentWorkerPool**:
-  - Modificar para distribuir filas de POs por worker (ex.: dividir lista total em sublistas por worker).
+- **ProcessingController**:
+  - Coordena chamada para WorkerManager com filas de POs.
 - **FolderHierarchyManager**:
   - Sem mudanças; pasta por PO permanece isolada.
 
 ## 5. Fluxo de Dados
-1. MainApp chama _process_po_entries com lista de POs.
-2. PersistentWorkerPool divide POs em filas por worker.
-3. Cada worker executa process_po_worker:
-   - Inicializa driver e perfil clonado.
+1. MainApp chama `processing_controller.process_po_entries()` com lista de POs.
+2. ProcessingController chama `worker_manager.process_parallel_with_session()` com filas divididas por worker.
+3. Cada worker (processo) executa lógica:
+   - Inicializa driver e perfil clonado uma vez.
    - Para cada PO na fila: Cria pasta, atualiza download dir, navega e baixa anexos, limpa sessão.
-4. Resultados retornam para MainApp.
+4. Resultados retornam para ProcessingController e MainApp.
 
 ## 6. Considerações de Segurança
 - **Isolamento**: Perfis clonados por worker; limpeza de sessão entre POs para evitar vazamento de dados (ex.: cookies de fornecedores).
@@ -44,9 +46,9 @@ Este documento detalha o design para a Proposta 01: otimizar o processamento par
 - **Rede**: Downloads isolados por PO; validar URLs para evitar ataques.
 
 ## 7. Plano de Implementação
-1. Modificar process_po_worker para loop sobre lista de POs.
-2. Adicionar limpeza de sessão em BrowserManager.
-3. Atualizar PersistentWorkerPool para dividir filas.
+1. Modificar métodos em `WorkerManager` para processar filas de POs por worker com driver reutilizado.
+2. Adicionar limpeza de sessão em `BrowserManager`.
+3. Atualizar `ProcessingController` para dividir filas de POs.
 4. Testar com 2-3 POs por worker.
 5. Validar isolamento (ex.: POs de fornecedores diferentes não interferem).
 
