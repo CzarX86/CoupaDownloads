@@ -48,6 +48,8 @@ from .workers.models import PoolConfig
 from .setup_manager import SetupManager
 from .worker_manager import WorkerManager, ProcessingSession, _wait_for_downloads_complete, _legacy_rename_folder_with_status, _derive_status_label
 from .ui_controller import UIController
+from .processing_controller import ProcessingController
+from .csv_manager import CSVManager
 
 # Enable interactive UI mode (set to True to enable interactive prompts)
 ENABLE_INTERACTIVE_UI = os.environ.get('ENABLE_INTERACTIVE_UI', 'True').strip().lower() == 'true'
@@ -81,15 +83,12 @@ class MainApp:
         self.setup_manager = SetupManager()
         self.worker_manager = WorkerManager(enable_parallel=self.enable_parallel, max_workers=self.max_workers)
         self.ui_controller = UIController()
+        self.processing_controller = ProcessingController(self.worker_manager, self.ui_controller)
+        self.csv_manager = CSVManager()
         self.driver = None
         self.lock = threading.Lock()  # Thread safety for browser operations
         self._run_start_time: float | None = None
         self._current_po_start_time: float | None = None
-        
-        # CSV handler for incremental persistence
-        self.csv_handler: CSVHandler | None = None
-        self._csv_write_queue: WriteQueue | None = None
-        self._csv_session_id: str | None = None
         self._completed_po_count = 0
         self._total_po_count = 0
         self._accumulated_po_seconds = 0.0
@@ -242,30 +241,6 @@ class MainApp:
             self._completed_po_count += 1
         self._current_po_start_time = None
 
-    def _initialize_csv_handler(self, csv_path: Path) -> None:
-        """Instantiate CSV handler, backup current CSV, and boot write queue."""
-        import uuid
-        try:
-            backup_dir = csv_path.parent.parent / 'backup'
-            backup_dir.mkdir(parents=True, exist_ok=True)
-            self.csv_handler = CSVHandler(csv_path=csv_path, backup_dir=backup_dir)
-            self._csv_session_id = uuid.uuid4().hex[:8]
-            backup_path = self.csv_handler.create_session_backup(self._csv_session_id)
-            print(f"🛡️ CSV backup created at: {backup_path}")
-            self._csv_write_queue = WriteQueue(self.csv_handler)
-            self._csv_write_queue.start_writer_thread()
-        except Exception as handler_error:
-            self.csv_handler = None
-            self._csv_write_queue = None
-            self._csv_session_id = None
-            print(f"⚠️ Failed to initialize CSV handler: {handler_error}")
-
-    def _shutdown_csv_handler(self) -> None:
-        """Gracefully stop write queue threads."""
-        if self._csv_write_queue:
-            self._csv_write_queue.stop_writer_thread(timeout=15.0)
-        self._csv_write_queue = None
-
 
     @staticmethod
     def _build_csv_updates(result: Dict[str, Any]) -> Dict[str, Any]:
@@ -412,9 +387,9 @@ class MainApp:
                     result_payload.get('attachment_names', [])
                 )
                 csv_message = self._compose_csv_message(result_payload)
-                if self.csv_handler:
+                if self.csv_manager.is_initialized():
                     try:
-                        self.csv_handler.update_record(display_po, {
+                        self.csv_manager.update_record(display_po, {
                             'STATUS': status_code,
                             'SUPPLIER': result_payload.get('supplier_name', ''),
                             'ATTACHMENTS_FOUND': result_payload.get('attachments_found', 0),
@@ -445,9 +420,9 @@ class MainApp:
             friendly = _humanize_exception(e)
             print(f"   ❌ Error processing {display_po}: {friendly}")
             # Use unified FAILED status on exceptions in sequential mode
-            if self.csv_handler:
+            if self.csv_manager.is_initialized():
                 try:
-                    self.csv_handler.update_record(display_po, {
+                    self.csv_manager.update_record(display_po, {
                         'STATUS': 'FAILED',
                         'ERROR_MESSAGE': friendly,
                     })
@@ -455,7 +430,7 @@ class MainApp:
                     print(f"[seq] ⚠️ Failed incremental CSV update (failed path): {e}")
 
             # Persist to CSV if handler is initialized
-            if self.csv_handler:
+            if self.csv_manager.is_initialized():
                 failed_result = {
                     'po_number': po_number,
                     'po_number_display': display_po,
@@ -463,9 +438,9 @@ class MainApp:
                     'message': friendly,
                     'supplier_name': vendor_hint,
                 }
-                if self.csv_handler:
+                if self.csv_manager.is_initialized():
                     try:
-                        self.csv_handler.update_record(display_po, {
+                        self.csv_manager.update_record(display_po, {
                             'STATUS': 'FAILED',
                             'ERROR_MESSAGE': friendly,
                         })
@@ -525,7 +500,7 @@ class MainApp:
                 # Use WorkerManager for ProcessingSession approach
                 successful, failed, session_report = self.worker_manager.process_parallel_with_session(
                     po_data_list, hierarchy_cols, has_hierarchy_data, headless_config,
-                    csv_handler=self.csv_handler, folder_hierarchy=self.folder_hierarchy
+                    csv_handler=self.csv_manager.csv_handler, folder_hierarchy=self.folder_hierarchy
                 )
                 
                 self._last_parallel_report = session_report
@@ -540,7 +515,7 @@ class MainApp:
             # Use WorkerManager for legacy ProcessPoolExecutor approach
             successful, failed = self.worker_manager.process_parallel_legacy(
                 po_data_list, hierarchy_cols, has_hierarchy_data, headless_config,
-                csv_handler=self.csv_handler, folder_hierarchy=self.folder_hierarchy
+                csv_handler=self.csv_manager.csv_handler, folder_hierarchy=self.folder_hierarchy
             )
             return successful, failed
         else:
@@ -639,8 +614,8 @@ class MainApp:
 
         # Initialize CSV handler if input file is CSV
         csv_input_path = Path(excel_path)
-        if csv_input_path.suffix.lower() == '.csv' and not self.csv_handler:
-            self._initialize_csv_handler(csv_input_path)
+        if csv_input_path.suffix.lower() == '.csv':
+            self.csv_manager.initialize_csv_handler(csv_input_path)
 
         # Convert to list of PO data
         po_data_list = []
@@ -675,6 +650,7 @@ class MainApp:
         # Set initial global stats
         self.ui_controller.global_stats["total"] = len(po_data_list)
         self._run_start_time = time.perf_counter()
+        self.processing_controller.set_run_start_time(self._run_start_time)
 
         # Initialize worker states
         self.ui_controller.worker_states = [
@@ -716,17 +692,23 @@ class MainApp:
             if self._headless_config is None:
                 raise RuntimeError("Headless configuration not set.")
                 
-            successful, failed = self._process_po_entries(
+            successful, failed = self.processing_controller.process_po_entries(
                 po_data_list,
                 hierarchy_cols,
                 has_hierarchy_data,
                 use_process_pool,
                 self._headless_config,
+                self.enable_parallel,
+                self.max_workers,
+                self.csv_manager.csv_handler,
+                self.folder_hierarchy,
+                self.initialize_browser_once,
+                self._prepare_progress_tracking,
+                self.process_single_po,
             )
 
         # Shutdown CSV handler to ensure all data is persisted
-        if self.csv_handler:
-            self._shutdown_csv_handler()
+        self.csv_manager.shutdown_csv_handler()
 
         print("-" * 60)
         print("🎉 Processing complete!")
@@ -737,8 +719,7 @@ class MainApp:
     def close(self):
         """Close the browser properly."""
         # Shutdown CSV handler first
-        if self.csv_handler:
-            self._shutdown_csv_handler()
+        self.csv_manager.shutdown_csv_handler()
             
         if self.driver:
             print("🔄 Closing browser...")
