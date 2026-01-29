@@ -29,6 +29,13 @@ experimental_root_str = str(experimental_root)
 if experimental_root_str not in sys.path:
     sys.path.insert(0, experimental_root_str)
 
+from rich.table import Table
+from rich.panel import Panel
+from rich.columns import Columns
+from rich.layout import Layout
+from rich.live import Live
+from rich.console import Console, Group
+
 from .lib.browser import BrowserManager
 from .lib.config import Config as ExperimentalConfig
 from .lib.downloader import Downloader
@@ -625,17 +632,71 @@ class MainApp:
         self._accumulated_po_seconds = 0.0
         self._headless_config: HeadlessConfiguration | None = None
 
+        # Rich UI components
+        self.console = Console()
+        self.live: Optional[Live] = None
+
+        # Global stats for header
+        self.global_stats = {
+            "total": 0,
+            "completed": 0,
+            "failed": 0,
+            "active": 0,
+            "elapsed": "0m 0s",
+            "eta_global": "N/A",
+            "global_efficiency": "⏳"
+        }
+
+        # Worker states for table
+        self.worker_states: List[Dict[str, Any]] = []
+
     def set_headless_configuration(self, headless_config: HeadlessConfiguration) -> None:
         """Set the headless configuration for this MainApp instance."""
         self._headless_config = headless_config
         print(f"[MainApp] 🎯 Headless configuration set: {headless_config}")
 
-    def _get_headless_setting(self) -> bool:
-        """Get the current headless setting from .configuration."""
-        if self._headless_config is None:
-            print("[MainApp] ⚠️  No headless configuration set, falling back to default")
-            return False  # Safe default
-        return self._headless_config.get_effective_headless_mode()
+    def _build_progress_table(self) -> Table:
+        table = Table(title="Worker Progress")
+        table.add_column("Worker ID", style="blue", no_wrap=True)
+        table.add_column("Progress", style="cyan")
+        table.add_column("Tempo Transcorrido", style="yellow")
+        table.add_column("ETA Restante", style="green")
+        table.add_column("Eficiência", style="magenta")
+        for worker in self.worker_states:
+            table.add_row(
+                worker["worker_id"],
+                worker["progress"],
+                worker["elapsed"],
+                worker["eta"],
+                worker["efficiency"]
+            )
+        return table
+
+    def _update_header(self) -> Group:
+        """Update the header with KPI cards."""
+        time_card = Panel(
+            f"⏱️ Tempo Global\n{self.global_stats['elapsed']}\nETA: {self.global_stats['eta_global']}",
+            title="Tempo", border_style="blue"
+        )
+        total_card = Panel(
+            f"📊 Total POs\n{self.global_stats['total']}\nAtivos: {self.global_stats['active']}",
+            title="Total", border_style="cyan"
+        )
+        efficiency_card = Panel(
+            f"⚡ Eficiência Global\n{self.global_stats['global_efficiency']}",
+            title="Performance", border_style="yellow"
+        )
+        completed_card = Panel(
+            f"✅ Concluídos\n{self.global_stats['completed']}",
+            title="Sucesso", border_style="green"
+        )
+        failed_card = Panel(
+            f"❌ Falhas\n{self.global_stats['failed']}",
+            title="Erros", border_style="red"
+        )
+        
+        # All cards in a single row
+        return Columns([time_card, total_card, efficiency_card, completed_card, failed_card], equal=True, expand=True)
     
     def _parallel_progress_callback(self, progress: Dict[str, Any]) -> None:
         """Progress callback for ProcessingSession parallel processing."""
@@ -644,11 +705,69 @@ class MainApp:
             completed = progress.get('completed_tasks', 0)
             failed = progress.get('failed_tasks', 0)
             active = progress.get('active_tasks', 0)
-            
-            if total > 0:
-                completion_pct = (completed + failed) / total * 100
-                print(f"📊 Progress: {completed}/{total} completed ({completion_pct:.1f}%), {active} active, {failed} failed")
-                    
+
+            # Update global stats
+            self.global_stats["total"] = total
+            self.global_stats["completed"] = completed
+            self.global_stats["failed"] = failed
+            self.global_stats["active"] = active
+
+            # Calculate elapsed time
+            if self._run_start_time:
+                elapsed_seconds = time.perf_counter() - self._run_start_time
+                minutes, seconds = divmod(int(elapsed_seconds), 60)
+                self.global_stats["elapsed"] = f"{minutes}m {seconds}s"
+
+                # Estimate ETA global
+                if completed > 0:
+                    avg_time_per_po = elapsed_seconds / completed
+                    remaining_pos = total - completed - failed
+                    eta_seconds = avg_time_per_po * remaining_pos
+                    eta_minutes, eta_seconds = divmod(int(eta_seconds), 60)
+                    self.global_stats["eta_global"] = f"{eta_minutes}m {eta_seconds}s"
+                else:
+                    self.global_stats["eta_global"] = "⏳"
+                
+                # Calculate global efficiency
+                if elapsed_seconds > 0:
+                    global_efficiency = (completed / elapsed_seconds) * 60  # POs per minute
+                    self.global_stats["global_efficiency"] = f"{global_efficiency:.1f} POs/min"
+                else:
+                    self.global_stats["global_efficiency"] = "⏳"
+
+            # Update worker states with individual efficiency estimates
+            completed_per_worker = completed // self.max_workers
+            failed_per_worker = failed // self.max_workers
+            active_per_worker = active // self.max_workers
+            total_per_worker = total // self.max_workers
+            self.worker_states = []
+            for i in range(self.max_workers):
+                worker_id = f"Worker {i+1}"
+                progress_str = f"{completed_per_worker}/{total_per_worker} POs"
+                elapsed_worker = self.global_stats["elapsed"]
+                eta_worker = self.global_stats["eta_global"]
+                
+                # Estimate individual worker efficiency based on distributed workload
+                # Assuming even distribution of completed tasks among workers
+                worker_completed_estimate = completed_per_worker
+                if elapsed_seconds > 0 and worker_completed_estimate > 0:
+                    worker_efficiency = (worker_completed_estimate / elapsed_seconds) * 60
+                    efficiency = f"{worker_efficiency:.1f} POs/min"
+                else:
+                    efficiency = "⏳"
+                
+                self.worker_states.append({
+                    "worker_id": worker_id,
+                    "progress": progress_str,
+                    "elapsed": elapsed_worker,
+                    "eta": eta_worker,
+                    "efficiency": efficiency
+                })
+
+            # Update live with Group
+            if self.live:
+                self.live.update(Group(self._update_header(), "", self._build_progress_table()))
+
         except Exception as e:
             print(f"Error in progress callback: {e}")
 
@@ -693,8 +812,8 @@ class MainApp:
     def initialize_browser_once(self):
         """Initialize browser once and keep it open for all POs."""
         if not self.driver:
-            print("🚀 Initializing browser for parallel processing...")
-            self.browser_manager.initialize_driver(headless=self._get_headless_setting())
+            print("🚀 Initializing browser for sequential processing...")
+            self.browser_manager.initialize_driver(headless=self._headless_config.get_effective_headless_mode())
             self.driver = self.browser_manager.driver
             print("✅ Browser initialized successfully")
 
@@ -1252,8 +1371,46 @@ class MainApp:
                 ok = self.process_single_po(po_data, hierarchy_cols, has_hierarchy_data, i, len(po_data_list))
                 if ok:
                     successful += 1
+                    self.global_stats["completed"] += 1
                 else:
                     failed += 1
+                    self.global_stats["failed"] += 1
+                # Update active count (decrement as we complete)
+                self.global_stats["active"] = max(0, len(po_data_list) - (successful + failed))
+                
+                # Calculate elapsed time and ETA
+                if self._run_start_time:
+                    elapsed_seconds = time.perf_counter() - self._run_start_time
+                    minutes, seconds = divmod(int(elapsed_seconds), 60)
+                    self.global_stats["elapsed"] = f"{minutes}m {seconds}s"
+                    
+                    # Estimate ETA global
+                    if successful > 0:
+                        avg_time_per_po = elapsed_seconds / successful
+                        remaining_pos = len(po_data_list) - successful - failed
+                        eta_seconds = avg_time_per_po * remaining_pos
+                        eta_minutes, eta_seconds = divmod(int(eta_seconds), 60)
+                        self.global_stats["eta_global"] = f"{eta_minutes}m {eta_seconds}s"
+                    else:
+                        self.global_stats["eta_global"] = "⏳"
+                    
+                    # Calculate global efficiency
+                    if elapsed_seconds > 0:
+                        global_efficiency = (successful / elapsed_seconds) * 60  # POs per minute
+                        self.global_stats["global_efficiency"] = f"{global_efficiency:.1f} POs/min"
+                    else:
+                        self.global_stats["global_efficiency"] = "⏳"
+                
+                # Update worker progress for single worker
+                self.worker_states[0]["progress"] = f"{successful + failed}/{len(po_data_list)} POs"
+                self.worker_states[0]["elapsed"] = self.global_stats["elapsed"]
+                self.worker_states[0]["eta"] = self.global_stats["eta_global"]
+                efficiency = f"{(successful / max(1, elapsed_seconds)) * 60:.1f} POs/min" if elapsed_seconds > 0 else "⏳"
+                self.worker_states[0]["efficiency"] = efficiency
+                
+                # Update live display
+                if self.live:
+                    self.live.update(Group(self._update_header(), "", self._build_progress_table()))
 
         return successful, failed
 
@@ -1334,17 +1491,56 @@ class MainApp:
         if use_process_pool and not self.enable_parallel:
             self.enable_parallel = True
 
-        # Process POs directly without UI
-        if self._headless_config is None:
-            raise RuntimeError("Headless configuration not set.")
+        # Set initial global stats
+        self.global_stats["total"] = len(po_data_list)
+        self._run_start_time = time.perf_counter()
+
+        # Initialize worker states
+        self.worker_states = [
+            {
+                "worker_id": f"Worker {i+1}",
+                "progress": "0/0 POs",
+                "elapsed": "0m 0s",
+                "eta": "⏳",
+                "efficiency": "⏳"
+            } for i in range(self.max_workers)
+        ]
+
+        # Start Live display with initial Group
+        initial_renderable = Group(self._update_header(), "", self._build_progress_table())
+        with Live(initial_renderable, console=self.console, refresh_per_second=1) as live:
+            self.live = live
             
-        successful, failed = self._process_po_entries(
-            po_data_list,
-            hierarchy_cols,
-            has_hierarchy_data,
-            use_process_pool,
-            self._headless_config,
-        )
+            # Start a thread to update elapsed time every second
+            def update_timer():
+                while self.live:
+                    time.sleep(1)
+                    if self._run_start_time:
+                        elapsed_seconds = time.perf_counter() - self._run_start_time
+                        minutes, seconds = divmod(int(elapsed_seconds), 60)
+                        self.global_stats["elapsed"] = f"{minutes}m {seconds}s"
+                        # Update worker elapsed
+                        for worker in self.worker_states:
+                            worker["elapsed"] = self.global_stats["elapsed"]
+                        try:
+                            self.live.update(Group(self._update_header(), "", self._build_progress_table()))
+                        except:
+                            break  # Live closed
+            
+            timer_thread = threading.Thread(target=update_timer, daemon=True)
+            timer_thread.start()
+            
+            # Process POs directly without UI
+            if self._headless_config is None:
+                raise RuntimeError("Headless configuration not set.")
+                
+            successful, failed = self._process_po_entries(
+                po_data_list,
+                hierarchy_cols,
+                has_hierarchy_data,
+                use_process_pool,
+                self._headless_config,
+            )
 
         # Shutdown CSV handler to ensure all data is persisted
         if self.csv_handler:
@@ -1591,6 +1787,11 @@ class ProcessingSession:
                         print(f"[PersistentWorkerPool] Failed to create CSV handler: {e}")
                 self.worker_pool = PersistentWorkerPool(config, csv_handler=csv_handler)
                 await self.worker_pool.start()
+                
+                # Start progress monitoring thread
+                import threading
+                monitor_thread = threading.Thread(target=self._monitor_parallel_progress, daemon=True)
+                monitor_thread.start()
                 
                 # Submit tasks
                 po_numbers = [po['po_number'] for po in po_list]
@@ -1873,12 +2074,11 @@ class ProcessingSession:
         """Monitor progress of parallel processing."""
         while self.status == SessionStatus.RUNNING and self.worker_pool:
             try:
-                status = self.worker_pool.get_status()
+                # Get status from task queue
+                queue_stats = self.worker_pool.task_queue.get_queue_status()
                 
-                self.completed_tasks = status.get('completed_tasks', 0)
-                self.failed_tasks = status.get('failed_tasks', 0)
-                # For active tasks, we can use task_queue processing_tasks
-                queue_stats = status.get('task_queue', {})
+                self.completed_tasks = queue_stats.get('completed_tasks', 0)
+                self.failed_tasks = queue_stats.get('failed_tasks', 0)
                 self.active_tasks = queue_stats.get('processing_tasks', 0)
                 
                 self._update_progress()
