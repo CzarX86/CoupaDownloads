@@ -39,7 +39,7 @@ Este documento detalha o design para a Proposta 02: introduzir downloads paralel
 5. Retornar resultados para ProcessingController.
 
 ## 6. Considerações de Segurança
-- **Isolamento**: Downloads isolados por PO; validar URLs para evitar downloads maliciosos.
+- **Isolamento**: Downloads isolados por PO.
 - **Recursos**: Limitar threads para evitar sobrecarga; monitorar uso de CPU/rede.
 - **Dados**: Não expor credenciais; usar HTTPS para downloads.
 
@@ -53,10 +53,9 @@ Este documento detalha o design para a Proposta 02: introduzir downloads paralel
 ## 8. Testes e Validação
 - **Unit Tests**: Testar enfileiramento e processamento paralelo.
 - **Integration Tests**: Baixar múltiplos anexos; validar arquivos corretos em pasta.
-- **Benchmarks**: Medir tempo para POs com 5-10 anexos antes/depois.
 
 ## 9. Riscos e Mitigações
-- **Conflitos de Arquivos**: Mitigação - Usar nomes únicos (ex.: adicionar timestamp).
+- **Conflitos de Arquivos**: Mitigação - tbd.
 - **Falhas de Rede**: Mitigação - Retry em threads; logging detalhado.
 - **Overhead de Threads**: Mitigação - Limitar a 4 threads; testar em ambientes limitados.
 
@@ -64,4 +63,3 @@ Este documento detalha o design para a Proposta 02: introduzir downloads paralel
 - Redução de tempo >30% para POs com múltiplos anexos.
 - Zero downloads perdidos ou corrompidos.
 - Compatibilidade com empacotamento (threads leves).</content>
-<parameter name="filePath">/Users/juliocezar/Dev/CoupaDownloads_Refactoring/PR_PLANS/02-parallel-downloads-per-worker-design-doc.md

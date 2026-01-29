@@ -1,3 +1,9 @@
+"""
+Módulo CSVManager.
+
+Gerencia operações de CSV, incluindo backup, escrita incremental e shutdown handlers.
+"""
+
 from typing import Optional, Dict, Any
 from pathlib import Path
 

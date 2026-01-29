@@ -1,3 +1,10 @@
+"""
+Módulo WorkerManager.
+
+Gerencia o processamento paralelo de POs usando workers, incluindo inicialização de drivers,
+monitoramento de progresso e coordenação de downloads.
+"""
+
 import os
 import sys
 import shutil

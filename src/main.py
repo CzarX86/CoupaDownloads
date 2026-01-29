@@ -1,3 +1,10 @@
+"""
+Módulo principal do sistema CoupaDownloads.
+
+Este módulo contém a classe MainApp, responsável por orquestrar o processamento de POs,
+gerenciamento de UI, CSV e workers paralelos para download de anexos no Coupa.
+"""
+
 import os
 import sys
 import time

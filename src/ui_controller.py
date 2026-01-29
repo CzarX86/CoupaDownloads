@@ -1,3 +1,10 @@
+"""
+Módulo UIController.
+
+Controla a interface do usuário usando Rich, incluindo tabelas de progresso,
+layouts e atualizações em tempo real durante o processamento.
+"""
+
 from typing import Optional, List, Dict, Any
 from rich.table import Table
 from rich.panel import Panel

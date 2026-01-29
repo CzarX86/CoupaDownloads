@@ -1,0 +1,30 @@
+sequenceDiagram
+    participant AR as AppRunner
+    participant PC as ProcessingController
+    participant WM as WorkerManager
+    participant CM as CommunicationManager
+    participant UC as UIController
+    participant D as Downloader
+    participant W1 as Worker 1 (Processo)
+    participant W2 as Worker 2 (Processo)
+
+    AR->>PC: run() com lista de POs
+    PC->>PC: Cria fila compartilhada de POs
+    PC->>WM: process_parallel_with_session(fila compartilhada, CM)
+    WM->>W1: Inicializa worker 1 com driver
+    WM->>W2: Inicializa worker 2 com driver
+    loop Enquanto há POs na fila (competição)
+        W1->>W1: Pega PO da fila, cria pasta, navega PO
+        W1->>D: download_attachments_parallel(anexos)
+        D->>D: ThreadPoolExecutor processa downloads paralelos
+        D-->>W1: Downloads completos
+        W1->>W1: Limpa sessão
+        W1->>CM: Envia métricas (worker_id=1, po_id, status, tempo)
+        W2->>W2: Pega próximo PO da fila...
+    end
+    CM->>UC: Atualiza métricas por worker (ex.: tabela com worker 1 e 2)
+    UC->>UC: Atualiza display Rich em tempo real
+    W1-->>WM: Worker 1 finaliza (fila vazia)
+    W2-->>WM: Worker 2 finaliza
+    WM-->>PC: Resultados agregados
+    PC-->>AR: Finaliza

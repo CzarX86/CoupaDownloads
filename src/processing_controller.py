@@ -1,3 +1,10 @@
+"""
+Módulo ProcessingController.
+
+Coordena o processamento de entradas de PO, integrando WorkerManager, UIController e CSVHandler
+para execução paralela e feedback em tempo real.
+"""
+
 from typing import Optional, List, Dict, Any, Tuple
 from pathlib import Path
 import time
