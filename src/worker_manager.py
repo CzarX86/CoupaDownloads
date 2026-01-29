@@ -44,6 +44,553 @@ from .core.csv_handler import CSVHandler, WriteQueue
 from .workers.models import PoolConfig
 
 
+class SessionStatus(Enum):
+    IDLE = "idle"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class ProcessingSession:
+    """
+    High-level processing session that manages PO batch processing with automatic mode selection.
+    
+    This class implements the ProcessingSession API contract for T026 and T027.
+    """
+    
+    def __init__(
+        self,
+        headless_config: HeadlessConfiguration,
+        enable_parallel: bool = True,
+        max_workers: int = 4,
+        progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
+        hierarchy_columns: Optional[List[str]] = None,
+        has_hierarchy_data: bool = False,
+    ):
+        """Initialize processing session for PO batch processing."""
+        # Validate parameters
+        if not isinstance(headless_config, HeadlessConfiguration):
+            raise TypeError("headless_config must be HeadlessConfiguration instance")
+        
+        if not (isinstance(max_workers, int) and max_workers >= 1):
+            raise ValueError(f"max_workers must be a positive integer, got {max_workers}")
+        
+        # Configuration
+        self.headless_config = headless_config
+        self.enable_parallel = enable_parallel
+        self.max_workers = max_workers
+        self.progress_callback = progress_callback
+        self.hierarchy_columns = hierarchy_columns
+        self.has_hierarchy_data = has_hierarchy_data
+        
+        # Session state
+        self.status = SessionStatus.IDLE
+        self.worker_pool: Optional[PersistentWorkerPool] = None
+        self.start_time: Optional[datetime] = None
+        self.end_time: Optional[datetime] = None
+        
+        # Processing metrics
+        self.total_tasks = 0
+        self.completed_tasks = 0
+        self.failed_tasks = 0
+        self.active_tasks = 0
+        self.processing_mode = "sequential"
+
+        # Progress tracking
+        self._progress_lock = threading.Lock()
+        self._last_progress_update = datetime.now()
+        self.last_results: List[Dict[str, Any]] = []
+        
+        # CSV handler support
+        self.csv_path: Optional[str] = None
+    
+    def set_csv_path(self, csv_path: str) -> None:
+        """Set CSV path for worker processes."""
+        self.csv_path = csv_path
+    
+    def process_pos(self, po_list: List[dict]) -> Tuple[int, int, Dict[str, Any]]:
+        """Process list of POs with automatic mode selection."""
+        try:
+            self.status = SessionStatus.RUNNING
+            self.start_time = datetime.now()
+            self.total_tasks = len(po_list)
+            self.last_results = []
+            
+            # Determine processing mode
+            self.processing_mode = self.get_processing_mode(len(po_list))
+            
+            print(f"🚀 Starting {self.processing_mode} processing of {len(po_list)} POs")
+            
+            if self.processing_mode == "parallel":
+                return self._process_parallel(po_list)
+            else:
+                return self._process_sequential(po_list)
+                
+        except Exception as e:
+            self.status = SessionStatus.FAILED
+            print(f"❌ Processing failed: {e}")
+            return 0, len(po_list), {"error": str(e)}
+        
+        finally:
+            self.end_time = datetime.now()
+            if self.status == SessionStatus.RUNNING:
+                self.status = SessionStatus.COMPLETED
+    
+    def get_processing_mode(self, po_count: int) -> str:
+        """Determine processing mode based on configuration and PO count."""
+        # Decision criteria for parallel processing
+        if not self.enable_parallel:
+            return "sequential"
+        
+        if po_count <= 1:
+            return "sequential"
+        
+        # Check system resources (simplified check)
+        if self._check_system_resources():
+            return "parallel"
+        
+        return "sequential"
+    
+    def get_progress(self) -> Dict[str, Any]:
+        """Get current processing progress and status."""
+        with self._progress_lock:
+            elapsed_time = 0.0
+            if self.start_time:
+                end_time = self.end_time or datetime.now()
+                elapsed_time = (end_time - self.start_time).total_seconds()
+            
+            # Calculate estimated remaining time
+            estimated_remaining = None
+            if self.completed_tasks > 0 and self.total_tasks > self.completed_tasks:
+                avg_time_per_task = elapsed_time / self.completed_tasks
+                remaining_tasks = self.total_tasks - self.completed_tasks
+                estimated_remaining = avg_time_per_task * remaining_tasks
+            
+            progress = {
+                'session_status': self.status.value,
+                'total_tasks': self.total_tasks,
+                'completed_tasks': self.completed_tasks,
+                'failed_tasks': self.failed_tasks,
+                'active_tasks': self.active_tasks,
+                'elapsed_time': elapsed_time,
+                'estimated_remaining': estimated_remaining,
+                'processing_mode': self.processing_mode,
+                'worker_details': []
+            }
+            
+            # Add worker details if parallel processing
+            if self.worker_pool and self.processing_mode == "parallel":
+                status = self.worker_pool.get_status()
+                progress['worker_details'] = status.get('workers', {})
+            
+            return progress
+    
+    def stop_processing(self) -> bool:
+        """Stop current processing session."""
+        if self.status != SessionStatus.RUNNING:
+            return True
+        
+        try:
+            if self.worker_pool:
+                # Run async shutdown in sync context
+                import asyncio
+                try:
+                    loop = asyncio.get_event_loop()
+                    if loop.is_running():
+                        # Create task for shutdown
+                        import concurrent.futures
+                        with concurrent.futures.ThreadPoolExecutor() as executor:
+                            future = executor.submit(asyncio.run, self.worker_pool.shutdown())
+                            future.result(timeout=60)  # 1 minute timeout
+                    else:
+                        loop.run_until_complete(self.worker_pool.shutdown())
+                except RuntimeError:
+                    asyncio.run(self.worker_pool.shutdown())
+                
+                self.worker_pool = None
+                return True
+            
+            self.status = SessionStatus.COMPLETED
+            return True
+            
+        except Exception as e:
+            print(f"Error stopping processing: {e}")
+            self.status = SessionStatus.FAILED
+            return False
+    
+    # Private helper methods
+    
+    def _process_parallel(self, po_list: List[dict]) -> Tuple[int, int, Dict[str, Any]]:
+        """Process POs using parallel worker pool."""
+        # Check if profiles are disabled - if so, fall back to ProcessPoolExecutor
+        from .lib.config import Config as _Cfg
+        if not _Cfg.USE_PROFILE:
+            print("🔄 Profiles disabled, using ProcessPoolExecutor instead of PersistentWorkerPool")
+            return self._process_parallel_with_processpool(po_list)
+        
+        import asyncio
+        
+        async def _async_process():
+            try:
+                # Create PoolConfig with profile support
+                base_profile_path = _Cfg.EDGE_PROFILE_DIR or ""
+                if not base_profile_path:
+                    raise ValueError("Profile path required for PersistentWorkerPool, but none configured")
+                
+                download_root = os.path.abspath(os.path.expanduser(_Cfg.DOWNLOAD_FOLDER))
+                print(f"🏗️ Creating worker pool with download_root: {download_root}")
+
+                config = PoolConfig(
+                    worker_count=min(self.max_workers, len(po_list)),
+                    headless_mode=self.headless_config.get_effective_headless_mode(),
+                    base_profile_path=base_profile_path,
+                    base_profile_name=ExperimentalConfig.EDGE_PROFILE_NAME or "Default",
+                    hierarchy_columns=self.hierarchy_columns,
+                    has_hierarchy_data=self.has_hierarchy_data,
+                    download_root=download_root,
+                )
+                
+                print(f"🔧 PoolConfig created with download_root: {config.download_root}")
+                
+                # Create and start worker pool
+                csv_handler = None
+                if hasattr(self, 'csv_path') and self.csv_path:
+                    try:
+                        from csv_handler import CSVHandler
+                        from pathlib import Path
+                        csv_handler = CSVHandler(Path(self.csv_path))
+                        print(f"[PersistentWorkerPool] CSV handler created for: {self.csv_path}")
+                    except Exception as e:
+                        print(f"[PersistentWorkerPool] Failed to create CSV handler: {e}")
+                self.worker_pool = PersistentWorkerPool(config, csv_handler=csv_handler)
+                await self.worker_pool.start()
+                
+                # Start progress monitoring thread
+                import threading
+                monitor_thread = threading.Thread(target=self._monitor_parallel_progress, daemon=True)
+                monitor_thread.start()
+                
+                # Submit tasks
+                po_numbers = [po['po_number'] for po in po_list]
+                handles = self.worker_pool.submit_tasks(po_list)
+
+                # Wait for completion
+                await self.worker_pool.wait_for_completion(timeout=600)  # 10 minute timeout
+
+                # Collect results
+                successful = 0
+                failed = 0
+                collected_results: List[Dict[str, Any]] = []
+
+                for handle in handles:
+                    try:
+                        result = handle.wait_for_completion(timeout=120)
+                        if not isinstance(result, dict):
+                            result = {'success': False, 'status_code': 'FAILED', 'message': str(result)}
+                        if 'po_number' not in result:
+                            result['po_number'] = handle.po_number
+                        if 'po_number_display' not in result:
+                            result['po_number_display'] = result.get('po_number', handle.po_number)
+
+                        collected_results.append(result)
+
+                        status_code = result.get('status_code', 'FAILED')
+                        if status_code in {'COMPLETED', 'NO_ATTACHMENTS'}:
+                            successful += 1
+                        else:
+                            failed += 1
+                    except Exception as e:
+                        print(f"Error getting result for {handle.po_number}: {e}")
+                        collected_results.append({
+                            'po_number': handle.po_number,
+                            'po_number_display': handle.po_number,
+                            'status_code': 'FAILED',
+                            'message': str(e),
+                            'errors': [{'filename': '', 'reason': str(e)}],
+                            'success': False,
+                            'attachment_names': [],
+                            'attachments_found': 0,
+                            'attachments_downloaded': 0,
+                            'final_folder': '',
+                        })
+                        failed += 1
+
+                # Get performance data from status
+                status = self.worker_pool.get_status()
+                performance_data = {
+                    'memory_usage': status.get('memory', {}),
+                    'worker_stats': status.get('workers', {}),
+                    'task_queue_stats': status.get('task_queue', {})
+                }
+
+                # Shutdown
+                await self.worker_pool.shutdown()
+                self.worker_pool = None
+
+                # Process results for CSV persistence (workers should handle this individually)
+                # Note: CSV persistence is handled by individual workers in process_po_worker function
+
+                session_report = {
+                    'processing_mode': 'parallel',
+                    'worker_count': config.worker_count,
+                    'performance_data': performance_data,
+                    'session_duration': (self.end_time - self.start_time).total_seconds() if self.end_time and self.start_time else 0,
+                    'results': collected_results,
+                }
+
+                self.last_results = collected_results
+                
+                return successful, failed, session_report
+                
+            except Exception as e:
+                if self.worker_pool:
+                    try:
+                        await self.worker_pool.shutdown()
+                    except:
+                        pass
+                    self.worker_pool = None
+                raise e
+        
+        # Run async processing in sync context
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                # If there's already a running loop, we need to handle this differently
+                # For now, create a new thread with its own event loop
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor() as executor:
+                    future = executor.submit(asyncio.run, _async_process())
+
+                    return future.result(timeout=900)  # 15 minute timeout
+            else:
+                return loop.run_until_complete(_async_process())
+        except RuntimeError:
+            # No event loop, create one
+            return asyncio.run(_async_process())
+    
+    def _process_sequential(self, po_list: List[dict]) -> Tuple[int, int, Dict[str, Any]]:
+        """Process POs using sequential processing with real downloads (single WebDriver)."""
+        from .lib.browser import BrowserManager
+        from .lib.po_processing import process_single_po
+
+        successful = 0
+        failed = 0
+        results: List[Dict[str, Any]] = []
+
+        browser_manager = BrowserManager()
+        driver = None
+    # Folder manager usage is encapsulated inside process_single_po
+
+        try:
+            # Initialize a single browser instance for all POs
+            browser_manager.initialize_driver(headless=self.headless_config.get_effective_headless_mode())
+            driver = browser_manager.driver
+
+            for i, po in enumerate(po_list):
+                po_number = po.get('po_number', '')
+                display_po = po_number
+                folder_path = ''
+                try:
+                    # Progress bookkeeping
+                    self.completed_tasks = i  # completed so far
+                    self.active_tasks = 1
+                    self._update_progress()
+
+                    # Process single PO using shared utility
+                    result_entry = process_single_po(
+                        po_number=po_number,
+                        po_data=po,
+                        driver=driver,
+                        browser_manager=browser_manager,
+                        hierarchy_columns=self.hierarchy_columns or [],
+                        has_hierarchy_data=bool(self.has_hierarchy_data),
+                    )
+                    results.append(result_entry)
+
+                    if result_entry['success']:
+                        successful += 1
+                    else:
+                        failed += 1
+
+                except Exception as e:
+                    # On error, mark failed and continue
+                    results.append({
+                        'po_number': po_number,
+                        'po_number_display': display_po or po_number,
+                        'status_code': 'FAILED',
+                        'message': str(e),
+                        'final_folder': '',
+                        'errors': [{'filename': '', 'reason': str(e)}],
+                        'success': False,
+                        'attachment_names': [],
+                        'attachments_found': 0,
+                        'attachments_downloaded': 0,
+                    })
+                    failed += 1
+
+                finally:
+                    # Update per-item progress
+                    self.completed_tasks = i + 1
+                    self.active_tasks = 0
+                    self._update_progress()
+
+        finally:
+            try:
+                if driver is not None:
+                    browser_manager.cleanup()
+            except Exception:
+                pass
+
+        session_report = {
+            'processing_mode': 'sequential',
+            'worker_count': 1,
+            'session_duration': (datetime.now() - self.start_time).total_seconds() if self.start_time else 0,
+            'results': results,
+        }
+
+        self.last_results = results
+        return successful, failed, session_report
+    
+    def _process_parallel_with_processpool(self, po_list: List[dict]) -> Tuple[int, int, Dict[str, Any]]:
+        """Process POs using ProcessPoolExecutor when profiles are disabled."""
+        successful = 0
+        failed = 0
+        results: List[Dict[str, Any]] = []
+        
+        # Use ProcessPoolExecutor similar to MainApp._process_po_entries
+        import multiprocessing as mp
+        from concurrent.futures import ProcessPoolExecutor, as_completed
+        
+        # Calculate workers
+        default_workers = min(2, len(po_list))
+        proc_workers = max(1, min(self.max_workers, len(po_list)))
+        print(f"📊 Using {proc_workers} ProcessPoolExecutor worker(s) (profiles disabled)")
+        
+        # Get download root for workers
+        from .lib.config import Config
+        download_root = os.path.abspath(os.path.expanduser(getattr(Config, 'DOWNLOAD_FOLDER', ExperimentalConfig.DOWNLOAD_FOLDER)))
+        
+        with ProcessPoolExecutor(max_workers=proc_workers, mp_context=mp.get_context("spawn")) as executor:
+            future_map: dict = {}
+            
+            # Convert po_list to expected format and submit tasks
+            for po_data in po_list:
+                # Determine CSV path for worker (ProcessingSession doesn't have direct CSV handler access)
+                csv_path = None
+                # Try to get CSV path from environment or current working directory
+                try:
+                    if hasattr(self, 'csv_path') and self.csv_path:
+                        csv_path = str(self.csv_path)
+                except:
+                    pass
+                
+                # Ensure po_data has the right format for process_po_worker
+                task_args = (
+                    po_data, 
+                    self.hierarchy_columns or [], 
+                    bool(self.has_hierarchy_data), 
+                    self.headless_config,
+                    download_root,
+                    csv_path
+                )
+                
+                future = executor.submit(process_po_worker, task_args)
+                future_map[future] = po_data
+                
+                # Update progress
+                self.total_tasks = len(po_list)
+                self._update_progress()
+            
+            # Collect results
+            for future in as_completed(future_map):
+                po_data = future_map[future]
+                po_number = po_data.get('po_number', '')
+                
+                try:
+                    result = future.result()
+                    results.append(result)
+                    
+                    if result.get('success', False) or result.get('status_code') in {'COMPLETED', 'NO_ATTACHMENTS'}:
+                        successful += 1
+                    else:
+                        failed += 1
+                        
+                except Exception as exc:
+                    # Handle worker exceptions
+                    error_result = {
+                        'po_number': po_number,
+                        'po_number_display': po_number,
+                        'status_code': 'FAILED',
+                        'message': str(exc),
+                        'final_folder': '',
+                        'errors': [{'filename': '', 'reason': str(exc)}],
+                        'success': False,
+                        'attachment_names': [],
+                        'attachments_found': 0,
+                        'attachments_downloaded': 0,
+                    }
+                    results.append(error_result)
+                    failed += 1
+                
+                # Update progress after each completion
+                self.completed_tasks = successful + failed
+                self._update_progress()
+        
+        # Create session report
+        session_report = {
+            'processing_mode': 'parallel_processpool',
+            'worker_count': proc_workers,
+            'session_duration': (datetime.now() - self.start_time).total_seconds() if self.start_time else 0,
+            'results': results,
+        }
+        
+        self.last_results = results
+        return successful, failed, session_report
+    
+    def _monitor_parallel_progress(self):
+        """Monitor progress of parallel processing."""
+        while self.status == SessionStatus.RUNNING and self.worker_pool:
+            try:
+                # Get status from task queue
+                queue_stats = self.worker_pool.task_queue.get_queue_status()
+                
+                self.completed_tasks = queue_stats.get('completed_tasks', 0)
+                self.failed_tasks = queue_stats.get('failed_tasks', 0)
+                self.active_tasks = queue_stats.get('processing_tasks', 0)
+                
+                self._update_progress()
+                
+                # Check if processing is complete
+                total_processed = self.completed_tasks + self.failed_tasks
+                if total_processed >= self.total_tasks:
+                    break
+                
+                time.sleep(1)  # Update every second
+                
+            except Exception as e:
+                print(f"Error monitoring progress: {e}")
+                break
+    
+    def _update_progress(self):
+        """Update progress via callback if configured."""
+        if self.progress_callback:
+            try:
+                progress = self.get_progress()
+                self.progress_callback(progress)
+            except Exception as e:
+                print(f"Error in progress callback: {e}")
+    
+    def _check_system_resources(self) -> bool:
+        """Check if system has adequate resources for parallel processing."""
+        # Simplified resource check
+        try:
+            cpu_count = mp.cpu_count()
+            # Use parallel processing if we have enough CPU cores
+            return cpu_count >= 2
+        except:
+            return False
+
+
 # ---------- Profile clone helpers (mirrors tools/test_three_profile_clones.py) ----------
 _SKIP_DIRS = {
     'Cache', 'Code Cache', 'GPUCache', 'Service Worker', 'Session Storage',
@@ -203,6 +750,20 @@ def process_po_worker(args):
     Args tuple: (po_data, hierarchy_cols, has_hierarchy_data, headless_config[, download_root, csv_path])
     Returns: dict with keys: po_number_display, status_code, message, final_folder
     """
+    from pathlib import Path
+
+    # Add the project root to Python path for spawned processes
+    project_root = Path(__file__).resolve().parents[2]
+    project_root_str = str(project_root)
+    if project_root_str not in sys.path:
+        sys.path.insert(0, project_root_str)
+
+    # Add EXPERIMENTAL directory to path
+    experimental_root = Path(__file__).resolve().parents[1]
+    experimental_root_str = str(experimental_root)
+    if experimental_root_str not in sys.path:
+        sys.path.insert(0, experimental_root_str)
+
     if len(args) == 4:
         po_data, hierarchy_cols, has_hierarchy_data, headless_config = args
         download_root = os.environ.get('DOWNLOAD_FOLDER', ExperimentalConfig.DOWNLOAD_FOLDER)
@@ -234,8 +795,7 @@ def process_po_worker(args):
     csv_handler = None
     if csv_path:
         try:
-            from pathlib import Path
-            from csv_handler import CSVHandler
+            from .core.csv_handler import CSVHandler
             csv_handler = CSVHandler(Path(csv_path))
             print(f"[worker] 📊 CSV handler initialized for {csv_path}", flush=True)
         except Exception as e:
