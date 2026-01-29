@@ -29,6 +29,7 @@ experimental_root_str = str(experimental_root)
 if experimental_root_str not in sys.path:
     sys.path.insert(0, experimental_root_str)
 
+from rich.live import Live
 from .lib.browser import BrowserManager
 from .lib.config import Config as ExperimentalConfig
 from .lib.downloader import Downloader
@@ -552,18 +553,18 @@ class MainApp:
                 ok = self.process_single_po(po_data, hierarchy_cols, has_hierarchy_data, i, len(po_data_list))
                 if ok:
                     successful += 1
-                    self.global_stats["completed"] += 1
+                    self.ui_controller.global_stats["completed"] += 1
                 else:
                     failed += 1
-                    self.global_stats["failed"] += 1
+                    self.ui_controller.global_stats["failed"] += 1
                 # Update active count (decrement as we complete)
-                self.global_stats["active"] = max(0, len(po_data_list) - (successful + failed))
+                self.ui_controller.global_stats["active"] = max(0, len(po_data_list) - (successful + failed))
                 
                 # Calculate elapsed time and ETA
                 if self._run_start_time:
                     elapsed_seconds = time.perf_counter() - self._run_start_time
                     minutes, seconds = divmod(int(elapsed_seconds), 60)
-                    self.global_stats["elapsed"] = f"{minutes}m {seconds}s"
+                    self.ui_controller.global_stats["elapsed"] = f"{minutes}m {seconds}s"
                     
                     # Estimate ETA global
                     if successful > 0:
@@ -571,16 +572,16 @@ class MainApp:
                         remaining_pos = len(po_data_list) - successful - failed
                         eta_seconds = avg_time_per_po * remaining_pos
                         eta_minutes, eta_seconds = divmod(int(eta_seconds), 60)
-                        self.global_stats["eta_global"] = f"{eta_minutes}m {eta_seconds}s"
+                        self.ui_controller.global_stats["eta_global"] = f"{eta_minutes}m {eta_seconds}s"
                     else:
-                        self.global_stats["eta_global"] = "⏳"
+                        self.ui_controller.global_stats["eta_global"] = "⏳"
                     
                     # Calculate global efficiency
                     if elapsed_seconds > 0:
                         global_efficiency = (successful / elapsed_seconds) * 60  # POs per minute
-                        self.global_stats["global_efficiency"] = f"{global_efficiency:.1f} POs/min"
+                        self.ui_controller.global_stats["global_efficiency"] = f"{global_efficiency:.1f} POs/min"
                     else:
-                        self.global_stats["global_efficiency"] = "⏳"
+                        self.ui_controller.global_stats["global_efficiency"] = "⏳"
                 
                 # Update worker progress for single worker
                 self.ui_controller.worker_states[0]["progress"] = f"{successful + failed}/{len(po_data_list)} POs"
@@ -702,6 +703,7 @@ class MainApp:
                         # Update worker elapsed
                         for worker in self.ui_controller.worker_states:
                             worker["elapsed"] = self.ui_controller.global_stats["elapsed"]
+                        # Update display with new elapsed time
                         try:
                             self.ui_controller.update_display()
                         except:
