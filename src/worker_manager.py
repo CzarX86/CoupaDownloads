@@ -15,7 +15,7 @@ import time
 import threading
 import multiprocessing as mp
 from datetime import datetime, timedelta
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, as_completed, ThreadPoolExecutor
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Tuple, Callable
 from enum import Enum
@@ -959,6 +959,263 @@ def process_po_worker(args):
                 pass
 
 
+def process_reusable_worker(args):
+    """Run a reusable worker that processes multiple POs from a shared queue, with persistent Edge driver.
+
+    Args tuple: (po_queue, hierarchy_cols, has_hierarchy_data, headless_config, download_root, csv_path, worker_id, communication_manager)
+    Returns: list of results for all processed POs
+    """
+    from pathlib import Path
+
+    # Add the project root to Python path for spawned processes
+    project_root = Path(__file__).resolve().parents[2]
+    project_root_str = str(project_root)
+    if project_root_str not in sys.path:
+        sys.path.insert(0, project_root_str)
+
+    # Add EXPERIMENTAL directory to path
+    experimental_root = Path(__file__).resolve().parents[1]
+    experimental_root_str = str(experimental_root)
+    if experimental_root_str not in sys.path:
+        sys.path.insert(0, experimental_root_str)
+
+    po_queue, hierarchy_cols, has_hierarchy_data, headless_config, download_root, csv_path, worker_id, communication_manager = args
+
+    download_root = os.path.abspath(os.path.expanduser(download_root)) if download_root else os.path.abspath(os.path.expanduser(ExperimentalConfig.DOWNLOAD_FOLDER))
+    os.environ['DOWNLOAD_FOLDER'] = download_root
+    try:
+        ExperimentalConfig.DOWNLOAD_FOLDER = download_root
+        from .lib.config import Config
+        Config.DOWNLOAD_FOLDER = download_root
+    except Exception:
+        pass
+
+    folder_manager = FolderHierarchyManager()
+    browser_manager = BrowserManager()
+    driver = None
+    clone_dir = ''
+
+    # Initialize CSV handler if path provided
+    csv_handler = None
+    if csv_path:
+        try:
+            from .core.csv_handler import CSVHandler
+            csv_handler = CSVHandler(Path(csv_path))
+            print(f"[reusable_worker_{worker_id}] 📊 CSV handler initialized for {csv_path}", flush=True)
+        except Exception as e:
+            print(f"[reusable_worker_{worker_id}] ⚠️ Failed to initialize CSV handler: {e}", flush=True)
+
+    # Log headless configuration for this worker
+    print(f"[reusable_worker_{worker_id}] 🎯 Headless configuration: {headless_config}", flush=True)
+
+    results = []  # Store all results from this worker
+
+    try:
+        # Start browser for this worker once and reuse for multiple POs
+        print(f"[reusable_worker_{worker_id}] 🚀 Initializing persistent WebDriver...", flush=True)
+        # Clone and load the selected profile for this worker (isolated user-data-dir)
+        try:
+            base_ud = os.path.expanduser(ExperimentalConfig.EDGE_PROFILE_DIR)
+            profile_name = ExperimentalConfig.EDGE_PROFILE_NAME or 'Default'
+            session_root = os.path.join(tempfile.gettempdir(), 'edge_profile_clones')
+            _ensure_dir(session_root)
+            clone_dir = os.path.join(session_root, f"proc_{worker_id}_{os.getpid()}_{int(time.time()*1000)}")
+            _create_profile_clone(base_ud, profile_name, clone_dir)
+            # Point config to the clone so BrowserManager uses it
+            ExperimentalConfig.USE_PROFILE = True
+            ExperimentalConfig.EDGE_PROFILE_DIR = clone_dir
+            ExperimentalConfig.EDGE_PROFILE_NAME = profile_name
+        except Exception as e:
+            print(f"[reusable_worker_{worker_id}] ⚠️ Profile clone failed, continuing without profile: {e}")
+            try:
+                # Ensure we don't point to a broken dir
+                ExperimentalConfig.EDGE_PROFILE_DIR = ''
+            except Exception:
+                pass
+
+        browser_manager.initialize_driver(headless=headless_config.get_effective_headless_mode())
+        driver = browser_manager.driver
+        print(f"[reusable_worker_{worker_id}] ⚙️ Persistent WebDriver initialized", flush=True)
+
+        # Process POs from the shared queue until it's empty
+        po_count = 0
+        while True:
+            try:
+                # Get next PO from queue (non-blocking)
+                po_data = po_queue.get_nowait()
+                po_count += 1
+                display_po = po_data['po_number']
+
+                print(f"[reusable_worker_{worker_id}] ▶ Processing PO {display_po} (#{po_count})", flush=True)
+
+                # Create folder without suffix
+                folder_path = folder_manager.create_folder_path(po_data, hierarchy_cols, has_hierarchy_data)
+                print(f"[reusable_worker_{worker_id}] 📁 Folder ready: {folder_path}", flush=True)
+
+                # Set download directory for this PO
+                browser_manager.update_download_directory(folder_path)
+                print(f"[reusable_worker_{worker_id}] 📥 Download dir set for {display_po}", flush=True)
+
+                # Send "starting" metric
+                if communication_manager:
+                    try:
+                        metric_data = {
+                            'worker_id': worker_id,
+                            'po_id': display_po,
+                            'status': 'STARTED',
+                            'timestamp': time.time(),
+                            'duration': 0.0,
+                            'attachments_found': 0,
+                            'attachments_downloaded': 0,
+                            'message': f'Starting processing for {display_po}'
+                        }
+                        communication_manager.send_metric(metric_data)
+                    except Exception as e:
+                        print(f"[reusable_worker_{worker_id}] ⚠️ Failed to send STARTED metric: {e}")
+
+                # Download
+                downloader = Downloader(driver, browser_manager)
+                po_number = po_data['po_number']
+                print(f"[reusable_worker_{worker_id}] 🌐 Starting download for {po_number}", flush=True)
+
+                # Record start time for metrics
+                start_time = time.time()
+
+                result_payload = downloader.download_attachments_for_po(po_number)
+                message = result_payload.get('message', '')
+                print(f"[reusable_worker_{worker_id}] ✅ Download routine finished for {po_number}", flush=True)
+
+                # Wait for downloads to finish
+                _wait_for_downloads_complete(folder_path)
+                print(f"[reusable_worker_{worker_id}] ⏳ Downloads settled for {po_number}", flush=True)
+
+                # Calculate duration
+                duration = time.time() - start_time
+
+                # Send completion metric
+                if communication_manager:
+                    try:
+                        metric_data = {
+                            'worker_id': worker_id,
+                            'po_id': display_po,
+                            'status': result_payload.get('status_code', 'COMPLETED'),
+                            'timestamp': time.time(),
+                            'duration': duration,
+                            'attachments_found': result_payload.get('attachments_found', 0),
+                            'attachments_downloaded': result_payload.get('attachments_downloaded', 0),
+                            'message': message
+                        }
+                        communication_manager.send_metric(metric_data)
+                    except Exception as e:
+                        print(f"[reusable_worker_{worker_id}] ⚠️ Failed to send completion metric: {e}")
+
+                status_code = _derive_status_label(result_payload)
+                try:
+                    final_folder = folder_manager.finalize_folder(folder_path, status_code)
+                except Exception:
+                    final_folder = _legacy_rename_folder_with_status(folder_path, status_code)
+
+                result = {
+                    'po_number_display': display_po,
+                    'status_code': status_code,
+                    'message': message,
+                    'final_folder': final_folder,
+                    'supplier_name': result_payload.get('supplier_name', ''),
+                    'attachments_found': result_payload.get('attachments_found', 0),
+                    'attachments_downloaded': result_payload.get('attachments_downloaded', 0),
+                    'coupa_url': result_payload.get('coupa_url', ''),
+                    'attachment_names': result_payload.get('attachment_names', []),
+                    'status_reason': result_payload.get('status_reason', ''),
+                    'errors': result_payload.get('errors', []),
+                    'success': result_payload.get('success', False),
+                    'fallback_attempted': result_payload.get('fallback_attempted', False),
+                    'fallback_used': result_payload.get('fallback_used', False),
+                    'fallback_details': result_payload.get('fallback_details', {}),
+                    'fallback_trigger_reason': result_payload.get('fallback_trigger_reason', ''),
+                    'source_page': result_payload.get('source_page', 'PO'),
+                    'initial_url': result_payload.get('initial_url', result_payload.get('coupa_url', '')),
+                }
+
+                # Send metrics to communication manager
+                if communication_manager:
+                    try:
+                        metric_data = {
+                            'worker_id': worker_id,
+                            'po_id': display_po,
+                            'status': status_code,
+                            'timestamp': time.time(),
+                            'duration': duration,
+                            'attachments_found': result_payload.get('attachments_found', 0),
+                            'attachments_downloaded': result_payload.get('attachments_downloaded', 0),
+                            'message': message
+                        }
+                        communication_manager.send_metric(metric_data)
+                    except Exception as e:
+                        print(f"[reusable_worker_{worker_id}] ⚠️ Failed to send metric: {e}")
+
+                # Persist to CSV incrementally (new handler API) if available
+                if csv_handler:
+                    try:
+                        attachment_names_list = result_payload.get('attachment_names', []) or []
+                        attachment_names_str = ', '.join(attachment_names_list)
+                        updates = {
+                            'STATUS': result_payload.get('status_code', status_code),
+                            'SUPPLIER': result_payload.get('supplier_name', ''),
+                            'ATTACHMENTS_FOUND': result_payload.get('attachments_found', 0),
+                            'ATTACHMENTS_DOWNLOADED': result_payload.get('attachments_downloaded', 0),
+                            'AttachmentName': attachment_names_str,
+                            'ERROR_MESSAGE': message,
+                            'DOWNLOAD_FOLDER': final_folder,
+                            'COUPA_URL': result_payload.get('coupa_url', ''),
+                        }
+                        csv_handler.update_record(display_po, updates)
+                        print(f"[reusable_worker_{worker_id}] 💾 Incremental CSV update for {display_po}", flush=True)
+                    except Exception as e:
+                        print(f"[reusable_worker_{worker_id}] ⚠️ Failed incremental CSV update: {e}", flush=True)
+
+                print(f"[reusable_worker_{worker_id}] 🏁 Done {display_po} → {status_code}", flush=True)
+
+                # Add result to list
+                results.append(result)
+
+                # Clear session between POs to prevent contamination
+                if hasattr(browser_manager, 'clear_session'):
+                    browser_manager.clear_session()
+
+            except Exception as queue_empty:
+                # Queue is empty, break the loop
+                print(f"[reusable_worker_{worker_id}] Queue empty, worker finishing after processing {po_count} POs", flush=True)
+                break
+
+    except Exception as e:
+        print(f"[reusable_worker_{worker_id}] ❌ Worker failed: {e}")
+        # Add error result if we have a specific PO that caused the error
+        if 'display_po' in locals():
+            results.append({
+                'po_number_display': display_po,
+                'status_code': 'FAILED',
+                'message': str(e),
+                'final_folder': '',
+                'status_reason': 'UNEXPECTED_EXCEPTION',
+                'errors': [{'filename': '', 'reason': str(e)}],
+                'success': False,
+            })
+
+    finally:
+        try:
+            browser_manager.cleanup()
+        except Exception:
+            pass
+        # Best-effort cleanup of clone directory
+        if clone_dir:
+            try:
+                shutil.rmtree(clone_dir, ignore_errors=True)
+            except Exception:
+                pass
+
+    return results
+
+
 class WorkerManager:
     """
     Manages PO processing workers and execution modes.
@@ -1053,6 +1310,100 @@ class WorkerManager:
         except Exception as e:
             print(f"⚠️  ProcessingSession failed: {e}")
             raise
+
+    def process_parallel_with_reusable_workers(
+        self,
+        po_queue: mp.Queue,
+        hierarchy_cols: list[str],
+        has_hierarchy_data: bool,
+        headless_config: HeadlessConfiguration,
+        communication_manager,
+        csv_handler: Optional[CSVHandler] = None,
+        folder_hierarchy: Optional[FolderHierarchyManager] = None,
+    ) -> tuple[int, int, dict]:
+        """
+        Process PO entries using reusable workers that compete for POs from a shared queue.
+        Each worker initializes a driver once and processes multiple POs.
+
+        Args:
+            po_queue: Shared queue containing PO data to process
+            hierarchy_cols: Hierarchy columns for folder structure
+            has_hierarchy_data: Whether hierarchy data is available
+            headless_config: Headless configuration
+            communication_manager: Communication manager for metrics
+            csv_handler: CSV handler for incremental updates
+            folder_hierarchy: Folder hierarchy manager
+
+        Returns:
+            tuple: (successful_count, failed_count, session_report)
+        """
+        from .core.communication_manager import CommunicationManager
+
+        successful = 0
+        failed = 0
+        results: List[Dict[str, Any]] = []
+
+        # Calculate number of workers
+        num_workers = min(self.max_workers, po_queue.qsize()) if hasattr(po_queue, 'qsize') else self.max_workers
+        print(f"📊 Using {num_workers} reusable worker(s), each with persistent driver")
+
+        # Use the ExperimentalConfig.DOWNLOAD_FOLDER that was updated during setup
+        from .lib.config import Config as ExperimentalConfig
+        download_root = os.path.abspath(os.path.expanduser(ExperimentalConfig.DOWNLOAD_FOLDER))
+
+        with ProcessPoolExecutor(max_workers=num_workers, mp_context=mp.get_context("spawn")) as executor:
+            # Submit initial tasks for each worker
+            future_map: dict = {}
+
+            # Submit initial tasks equal to number of workers
+            for i in range(num_workers):
+                # Determine CSV path for worker
+                csv_path = None
+                if csv_handler and hasattr(csv_handler, 'csv_path'):
+                    csv_path = str(csv_handler.csv_path)
+
+                task_args = (
+                    po_queue,
+                    hierarchy_cols,
+                    has_hierarchy_data,
+                    headless_config,
+                    download_root,
+                    csv_path,
+                    i,  # worker_id
+                    communication_manager
+                )
+
+                future = executor.submit(process_reusable_worker, task_args)
+                future_map[future] = i  # Track worker ID
+
+            # Collect results as workers complete tasks
+            for future in as_completed(future_map):
+                worker_id = future_map[future]
+
+                try:
+                    worker_results = future.result()
+
+                    # Process results from this worker
+                    for result in worker_results:
+                        results.append(result)
+
+                        if result.get('success', False) or result.get('status_code') in {'COMPLETED', 'NO_ATTACHMENTS'}:
+                            successful += 1
+                        else:
+                            failed += 1
+
+                except Exception as exc:
+                    print(f"❌ Worker {worker_id} failed: {exc}")
+                    failed += 1
+
+        session_report = {
+            'processing_mode': 'parallel_reusable_workers',
+            'worker_count': num_workers,
+            'session_duration': (datetime.now() - datetime.now()).total_seconds(),  # Placeholder
+            'results': results,
+        }
+
+        return successful, failed, session_report
 
     def process_parallel_legacy(
         self,
