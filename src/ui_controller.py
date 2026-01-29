@@ -44,7 +44,7 @@ class UIController:
             )
         return table
 
-    def _update_header(self) -> Group:
+    def _update_header(self) -> Columns:
         """Update the header with KPI cards."""
         time_card = Panel(
             f"⏱️ Tempo Global\n{self.global_stats['elapsed']}\nETA: {self.global_stats['eta_global']}",
@@ -68,7 +68,7 @@ class UIController:
         )
 
         # All cards in a single row
-        return Columns([time_card, total_card, efficiency_card, completed_card, failed_card], equal=True, expand=True)
+        return Columns([time_card, total_card, efficiency_card, completed_card, failed_card])
 
     def get_initial_renderable(self) -> Group:
         """Get the initial renderable for Live display."""
