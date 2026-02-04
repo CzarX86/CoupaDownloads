@@ -73,6 +73,7 @@ class ProcessingSession:
         progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
         hierarchy_columns: Optional[List[str]] = None,
         has_hierarchy_data: bool = False,
+        stagger_delay: float = 0.5,
     ):
         """Initialize processing session for PO batch processing."""
         # Validate parameters
@@ -89,6 +90,7 @@ class ProcessingSession:
         self.progress_callback = progress_callback
         self.hierarchy_columns = hierarchy_columns
         self.has_hierarchy_data = has_hierarchy_data
+        self.stagger_delay = stagger_delay
         
         # Session state
         self.status = SessionStatus.IDLE
@@ -108,12 +110,17 @@ class ProcessingSession:
         self._last_progress_update = datetime.now()
         self.last_results: List[Dict[str, Any]] = []
         
-        # CSV handler support
+        # CSV/SQLite handler support
         self.csv_path: Optional[str] = None
+        self.sqlite_db_path: Optional[str] = None
     
     def set_csv_path(self, csv_path: str) -> None:
         """Set CSV path for worker processes."""
         self.csv_path = csv_path
+
+    def set_sqlite_db_path(self, sqlite_db_path: str) -> None:
+        """Set SQLite DB path for worker processes."""
+        self.sqlite_db_path = sqlite_db_path
     
     def process_pos(self, po_list: List[dict]) -> Tuple[int, int, Dict[str, Any]]:
         """Process list of POs with automatic mode selection."""
@@ -192,9 +199,14 @@ class ProcessingSession:
             
             return progress
     
-    def stop_processing(self) -> bool:
-        """Stop current processing session."""
-        if self.status != SessionStatus.RUNNING:
+    def stop_processing(self, emergency: bool = False) -> bool:
+        """
+        Stop current processing session.
+        
+        Args:
+            emergency: If True, accelerated shutdown with minimal timeouts.
+        """
+        if self.status != SessionStatus.RUNNING and not emergency:
             return True
         
         try:
@@ -202,22 +214,33 @@ class ProcessingSession:
                 # Run async shutdown in sync context
                 import asyncio
                 try:
-                    loop = asyncio.get_event_loop()
-                    if loop.is_running():
-                        # Create task for shutdown
+                    # Check if an event loop is already running in this thread
+                    try:
+                        loop = asyncio.get_running_loop()
+                        is_running = True
+                    except RuntimeError:
+                        loop = asyncio.get_event_loop()
+                        is_running = loop.is_running()
+
+                    if is_running:
+                        # Create task for shutdown and wait for it
                         import concurrent.futures
                         with concurrent.futures.ThreadPoolExecutor() as executor:
-                            future = executor.submit(asyncio.run, self.worker_pool.shutdown())
-                            future.result(timeout=60)  # 1 minute timeout
+                            future = executor.submit(asyncio.run, self.worker_pool.shutdown(emergency=emergency))
+                            future.result(timeout=15 if emergency else 60)
                     else:
-                        loop.run_until_complete(self.worker_pool.shutdown())
-                except RuntimeError:
-                    asyncio.run(self.worker_pool.shutdown())
+                        loop.run_until_complete(self.worker_pool.shutdown(emergency=emergency))
+                except Exception as e:
+                    # Fallback to a fresh loop if needed
+                    try:
+                        asyncio.run(self.worker_pool.shutdown(emergency=emergency))
+                    except Exception as fallback_err:
+                        print(f"Failed final shutdown attempt: {fallback_err}")
                 
                 self.worker_pool = None
                 return True
             
-            self.status = SessionStatus.COMPLETED
+            self.status = SessionStatus.COMPLETED if self.status == SessionStatus.RUNNING else self.status
             return True
             
         except Exception as e:
@@ -247,14 +270,16 @@ class ProcessingSession:
                 download_root = os.path.abspath(os.path.expanduser(_Cfg.DOWNLOAD_FOLDER))
                 print(f"🏗️ Creating worker pool with download_root: {download_root}")
 
-                config = PoolConfig(
-                    worker_count=min(self.max_workers, len(po_list)),
-                    headless_mode=self.headless_config.get_effective_headless_mode(),
+                config = PoolConfig.create_default(
                     base_profile_path=base_profile_path,
+                    worker_count=self.max_workers,
+                    headless_mode=self.headless_config.get_effective_headless_mode(),
                     base_profile_name=ExperimentalConfig.EDGE_PROFILE_NAME or "Default",
                     hierarchy_columns=self.hierarchy_columns,
                     has_hierarchy_data=self.has_hierarchy_data,
                     download_root=download_root,
+                    sqlite_db_path=self.sqlite_db_path,
+                    stagger_delay=self.stagger_delay
                 )
                 
                 print(f"🔧 PoolConfig created with download_root: {config.download_root}")
@@ -498,7 +523,8 @@ class ProcessingSession:
                     bool(self.has_hierarchy_data), 
                     self.headless_config,
                     download_root,
-                    csv_path
+                    csv_path,
+                    self.sqlite_db_path
                 )
                 
                 future = executor.submit(process_po_worker, task_args)
@@ -761,7 +787,7 @@ def _legacy_rename_folder_with_status(folder_path: str, status_code: str) -> str
 def process_po_worker(args):
     """Run a single PO in its own process, with its own Edge driver.
 
-    Args tuple: (po_data, hierarchy_cols, has_hierarchy_data, headless_config[, download_root, csv_path])
+    Args tuple: (po_data, hierarchy_cols, has_hierarchy_data, headless_config[, download_root, csv_path, sqlite_db_path])
     Returns: dict with keys: po_number_display, status_code, message, final_folder
     """
     from pathlib import Path
@@ -778,6 +804,7 @@ def process_po_worker(args):
     if experimental_root_str not in sys.path:
         sys.path.insert(0, experimental_root_str)
 
+    sqlite_db_path = None # Default to None
     if len(args) == 4:
         po_data, hierarchy_cols, has_hierarchy_data, headless_config = args
         download_root = os.environ.get('DOWNLOAD_FOLDER', ExperimentalConfig.DOWNLOAD_FOLDER)
@@ -785,8 +812,10 @@ def process_po_worker(args):
     elif len(args) == 5:
         po_data, hierarchy_cols, has_hierarchy_data, headless_config, download_root = args
         csv_path = None
-    elif len(args) >= 6:
-        po_data, hierarchy_cols, has_hierarchy_data, headless_config, download_root, csv_path = args[:6]
+    elif len(args) == 6:
+        po_data, hierarchy_cols, has_hierarchy_data, headless_config, download_root, csv_path = args
+    elif len(args) >= 7:
+        po_data, hierarchy_cols, has_hierarchy_data, headless_config, download_root, csv_path, sqlite_db_path = args[:7]
     else:
         raise ValueError("process_po_worker expects at least 4 arguments")
 
@@ -804,14 +833,15 @@ def process_po_worker(args):
     driver = None
     folder_path = ''
     clone_dir = ''
+    output_handle = None # Initialize output_handle for finally block
 
     # Initialize CSV handler if path provided
     csv_handler = None
     if csv_path:
         try:
             from .core.csv_handler import CSVHandler
-            csv_handler = CSVHandler(Path(csv_path))
-            print(f"[worker] 📊 CSV handler initialized for {csv_path}", flush=True)
+            csv_handler = CSVHandler(Path(csv_path), sqlite_db_path=sqlite_db_path)
+            print(f"[worker] 📊 CSV handler initialized for {csv_path} (SQLite: {sqlite_db_path})", flush=True)
         except Exception as e:
             print(f"[worker] ⚠️ Failed to initialize CSV handler: {e}", flush=True)
 
@@ -978,7 +1008,7 @@ def process_po_worker(args):
 def process_reusable_worker(args):
     """Run a reusable worker that processes multiple POs from a shared queue, with persistent Edge driver.
 
-    Args tuple: (po_queue, hierarchy_cols, has_hierarchy_data, headless_config, download_root, csv_path, worker_id, communication_manager)
+    Args tuple: (po_queue, hierarchy_cols, has_hierarchy_data, headless_config, download_root, csv_path, worker_id, communication_manager, sqlite_db_path)
     Returns: list of results for all processed POs
     """
     from pathlib import Path
@@ -995,7 +1025,7 @@ def process_reusable_worker(args):
     if experimental_root_str not in sys.path:
         sys.path.insert(0, experimental_root_str)
 
-    po_queue, hierarchy_cols, has_hierarchy_data, headless_config, download_root, csv_path, worker_id, communication_manager = args
+    po_queue, hierarchy_cols, has_hierarchy_data, headless_config, download_root, csv_path, worker_id, communication_manager, sqlite_db_path = args
 
     output_handle = None
     suppress_output = os.environ.get('SUPPRESS_WORKER_OUTPUT', '').strip().lower() in {'1', 'true', 'yes'}
@@ -1029,8 +1059,8 @@ def process_reusable_worker(args):
     if csv_path:
         try:
             from .core.csv_handler import CSVHandler
-            csv_handler = CSVHandler(Path(csv_path))
-            print(f"[reusable_worker_{worker_id}] 📊 CSV handler initialized for {csv_path}", flush=True)
+            csv_handler = CSVHandler(Path(csv_path), sqlite_db_path=sqlite_db_path)
+            print(f"[reusable_worker_{worker_id}] 📊 CSV handler initialized for {csv_path} (SQLite: {sqlite_db_path})", flush=True)
         except Exception as e:
             print(f"[reusable_worker_{worker_id}] ⚠️ Failed to initialize CSV handler: {e}", flush=True)
 
@@ -1274,7 +1304,7 @@ class WorkerManager:
     Handles both parallel (process pool) and sequential processing.
     """
 
-    def __init__(self, enable_parallel: bool = True, max_workers: int = 4):
+    def __init__(self, enable_parallel: bool = True, max_workers: int = 4, stagger_delay: float = 0.5):
         """
         Initialize WorkerManager with optional parallel processing support.
 
@@ -1292,6 +1322,7 @@ class WorkerManager:
         # Parallel processing configuration
         self.enable_parallel = enable_parallel
         self.max_workers = max_workers
+        self.stagger_delay = stagger_delay
         self._processing_session: Optional[ProcessingSession] = None
         self._last_parallel_report: Optional[Dict[str, Any]] = None
 
@@ -1303,6 +1334,7 @@ class WorkerManager:
         headless_config: HeadlessConfiguration,
         csv_handler: Optional[CSVHandler] = None,
         folder_hierarchy: Optional[FolderHierarchyManager] = None,
+        sqlite_db_path: Optional[str] = None,
     ) -> tuple[int, int, dict]:
         """
         Process PO entries using ProcessingSession for intelligent parallel processing.
@@ -1321,11 +1353,19 @@ class WorkerManager:
                 progress_callback=None,  # Will be set by caller if needed
                 hierarchy_columns=hierarchy_cols,
                 has_hierarchy_data=has_hierarchy_data,
+                stagger_delay=self.stagger_delay,
             )
 
             # Configure CSV path for workers if CSV handler is available
             if csv_handler and hasattr(csv_handler, 'csv_path'):
                 self._processing_session.set_csv_path(str(csv_handler.csv_path))
+            
+            # Configure SQLite DB path for workers if available
+            effective_sqlite_db_path = sqlite_db_path
+            if not effective_sqlite_db_path and csv_handler and hasattr(csv_handler, 'sqlite_db_path') and csv_handler.sqlite_db_path:
+                effective_sqlite_db_path = str(csv_handler.sqlite_db_path)
+            if effective_sqlite_db_path:
+                self._processing_session.set_sqlite_db_path(effective_sqlite_db_path)
 
             # Convert po_data_list to the format expected by ProcessingSession
             processed_po_list = []
@@ -1373,6 +1413,7 @@ class WorkerManager:
         queue_size: Optional[int] = None,
         csv_handler: Optional[CSVHandler] = None,
         folder_hierarchy: Optional[FolderHierarchyManager] = None,
+        sqlite_db_path: Optional[str] = None,
     ) -> tuple[int, int, dict]:
         """
         Process PO entries using reusable workers that compete for POs from a shared queue.
@@ -1386,6 +1427,7 @@ class WorkerManager:
             communication_manager: Communication manager for metrics
             csv_handler: CSV handler for incremental updates
             folder_hierarchy: Folder hierarchy manager
+            sqlite_db_path: Optional SQLite DB path for persistence
 
         Returns:
             tuple: (successful_count, failed_count, session_report)
@@ -1411,6 +1453,11 @@ class WorkerManager:
         from .lib.config import Config as ExperimentalConfig
         download_root = os.path.abspath(os.path.expanduser(ExperimentalConfig.DOWNLOAD_FOLDER))
 
+        # Use incoming sqlite_db_path or derive from handler
+        effective_sqlite_db_path = sqlite_db_path
+        if not effective_sqlite_db_path and csv_handler and hasattr(csv_handler, 'sqlite_db_path'):
+            effective_sqlite_db_path = csv_handler.sqlite_db_path
+
         with ProcessPoolExecutor(max_workers=num_workers, mp_context=mp.get_context("spawn")) as executor:
             # Submit initial tasks for each worker
             future_map: dict = {}
@@ -1421,7 +1468,7 @@ class WorkerManager:
                 csv_path = None
                 if csv_handler and hasattr(csv_handler, 'csv_path'):
                     csv_path = str(csv_handler.csv_path)
-
+                
                 task_args = (
                     po_queue,
                     hierarchy_cols,
@@ -1430,7 +1477,8 @@ class WorkerManager:
                     download_root,
                     csv_path,
                     i,  # worker_id
-                    communication_manager
+                    communication_manager,
+                    effective_sqlite_db_path
                 )
 
                 future = executor.submit(process_reusable_worker, task_args)
@@ -1473,7 +1521,8 @@ class WorkerManager:
         headless_config: HeadlessConfiguration,
         csv_handler: Optional[CSVHandler] = None,
         folder_hierarchy: Optional[FolderHierarchyManager] = None,
-    ) -> tuple[int, int]:
+        sqlite_db_path: Optional[str] = None,
+    ) -> tuple[int, int, tuple]:
         """
         Process PO entries using legacy ProcessPoolExecutor approach.
 
@@ -1507,7 +1556,7 @@ class WorkerManager:
 
                     future = executor.submit(
                         process_po_worker,
-                        (po_data, hierarchy_cols, has_hierarchy_data, headless_config, download_root, csv_path),
+                        (po_data, hierarchy_cols, has_hierarchy_data, headless_config, download_root, csv_path, sqlite_db_path),
                     )
                     future_map[future] = po_data
 

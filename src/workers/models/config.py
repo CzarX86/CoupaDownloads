@@ -34,6 +34,7 @@ class PoolConfig:
     hierarchy_columns: Optional[List[str]] = None
     has_hierarchy_data: bool = False
     download_root: str = ""
+    sqlite_db_path: Optional[str] = None
     
     # Resource management
     memory_threshold: float = 0.85  # 85% of system RAM
@@ -42,6 +43,7 @@ class PoolConfig:
     shutdown_timeout: float = 60.0  # 1 minute graceful shutdown
     task_timeout: float = 300.0     # 5 minutes per PO
     worker_startup_timeout: float = 30.0  # 30 seconds worker startup
+    stagger_delay: float = 0.5            # seconds between starting workers
     
     # Retry configuration
     max_restart_attempts: int = 3
@@ -162,6 +164,7 @@ class PoolConfig:
             'hierarchy_columns': self.hierarchy_columns,
             'has_hierarchy_data': self.has_hierarchy_data,
             'download_root': self.download_root,
+            'sqlite_db_path': self.sqlite_db_path,
             'memory_threshold': self.memory_threshold,
             'shutdown_timeout': self.shutdown_timeout,
             'task_timeout': self.task_timeout,
@@ -190,6 +193,8 @@ class PoolConfig:
         hierarchy_columns: Optional[List[str]] = None,
         has_hierarchy_data: bool = False,
         download_root: str = "",
+        sqlite_db_path: Optional[str] = None,
+        stagger_delay: float = 0.5,
     ) -> 'PoolConfig':
         """Create default configuration with required parameters."""
         return cls(
@@ -200,6 +205,8 @@ class PoolConfig:
             hierarchy_columns=hierarchy_columns,
             has_hierarchy_data=has_hierarchy_data,
             download_root=download_root,
+            sqlite_db_path=sqlite_db_path,
+            stagger_delay=stagger_delay,
         )
 
 

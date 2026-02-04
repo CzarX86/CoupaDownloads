@@ -676,41 +676,44 @@ class WorkerProcess:
         self._stop_event.set()
         self._running = False
         
-        # Force cleanup
+        # Force cleanup using the robust cleanup method with emergency flag
         try:
-            if self.browser_session and self.browser_session.driver:
-                self.browser_session.driver.quit()
-        except:
-            pass  # Best effort cleanup
+            self._cleanup_browser_session(emergency=True)
+        except Exception as e:
+             logger.debug("Force cleanup failed error during force_stop", error=str(e))
         
         self.worker.status = WorkerStatus.CRASHED
         self.worker.last_error = "Force stopped"
     
-    def _cleanup_browser_session(self) -> None:
+    def _cleanup_browser_session(self, emergency: bool = False) -> None:
         """Cleanup browser session and resources."""
         try:
             if not (self.browser_session and self.browser_session.driver):
                 return
 
             driver = self.browser_session.driver
-            logger.debug("Cleaning up browser session", worker_id=self.worker_id)
+            logger.debug("Cleaning up browser session", worker_id=self.worker_id, emergency=emergency)
 
-            # First, try to save current state for debugging
-            try:
-                current_url = driver.current_url
-                title = driver.title
-                logger.debug("Browser state before cleanup", worker_id=self.worker_id, 
-                           url=current_url, title=title)
-            except Exception as state_err:
-                logger.debug("Could not capture browser state", worker_id=self.worker_id, error=str(state_err))
-
-            # Defensive: collect handles snapshot early
-            try:
-                handles = list(driver.window_handles)
-                logger.debug("Window handles before cleanup", worker_id=self.worker_id, handles=handles)
-            except Exception as e:
-                logger.warning("Failed to enumerate window handles", worker_id=self.worker_id, error=str(e))
+            # If emergency, skip state capture and window enumeration to save time and avoid hangs
+            if emergency:
                 handles = []
+            else:
+                # First, try to save current state for debugging
+                try:
+                    current_url = driver.current_url
+                    title = driver.title
+                    logger.debug("Browser state before cleanup", worker_id=self.worker_id, 
+                               url=current_url, title=title)
+                except Exception as state_err:
+                    logger.debug("Could not capture browser state", worker_id=self.worker_id, error=str(state_err))
+
+                # Defensive: collect handles snapshot early
+                try:
+                    handles = list(driver.window_handles)
+                    logger.debug("Window handles before cleanup", worker_id=self.worker_id, handles=handles)
+                except Exception as e:
+                    logger.warning("Failed to enumerate window handles", worker_id=self.worker_id, error=str(e))
+                    handles = []
 
             # Try graceful close of non-main windows with short timeout semantics
             for handle in handles:

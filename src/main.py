@@ -14,6 +14,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Tuple, Callable
 from enum import Enum
+import pandas as pd
 from selenium.common.exceptions import (
     InvalidSessionIdException,
     NoSuchWindowException,
@@ -46,6 +47,7 @@ from .ui_controller import UIController
 from .core.communication_manager import CommunicationManager
 from .processing_controller import ProcessingController
 from .csv_manager import CSVManager
+from .core.resource_assessor import ResourceAssessor
 
 # Enable interactive UI mode (set to True to enable interactive prompts)
 ENABLE_INTERACTIVE_UI = os.environ.get('ENABLE_INTERACTIVE_UI', 'True').strip().lower() == 'true'
@@ -490,6 +492,14 @@ class MainApp:
         csv_input_path = Path(excel_path)
         if csv_input_path.suffix.lower() == '.csv':
             self.csv_manager.initialize_csv_handler(csv_input_path)
+            
+            # Seed SQLite if used (high performance persistence for parallel processes)
+            if self.csv_manager.sqlite_handler:
+                try:
+                    df_seed = pd.DataFrame(po_entries)
+                    self.csv_manager.seed_sqlite(df_seed)
+                except Exception as e:
+                    print(f"⚠️ Failed to seed SQLite database: {e}")
 
         # Convert to list of PO data
         po_data_list = []
@@ -511,11 +521,29 @@ class MainApp:
             configured_workers_raw = int(requested_workers)
         except (TypeError, ValueError):
             configured_workers_raw = self.max_workers
-        cap = int(getattr(ExperimentalConfig, 'PROC_WORKERS_CAP', 0) or 0)
-        if cap > 0:
-            configured_workers = max(1, min(configured_workers_raw, cap))
+
+        # Resource-Aware Scaling Assessment
+        if getattr(ExperimentalConfig, 'RESOURCE_AWARE_SCALING', True):
+            print(f"🔍 Performing Resource-Aware Risk Assessment (Target: {configured_workers_raw} workers)...")
+            min_free_ram = float(getattr(ExperimentalConfig, 'MIN_FREE_RAM_GB', 0.3))
+            configured_workers, report = ResourceAssessor.calculate_safe_worker_count(configured_workers_raw, min_free_ram_gb=min_free_ram)
+            print(ResourceAssessor.get_risk_message(report))
+            
+            if report["is_throttled"]:
+                print(f"⚠️ Worker count adjusted: {configured_workers_raw} -> {configured_workers}")
+            
+            # Use suggested stagger delay to mitigate startup spikes
+            stagger_delay = report.get("stagger_delay", 0.5)
+            if hasattr(self.worker_manager, 'stagger_delay'):
+                self.worker_manager.stagger_delay = stagger_delay
         else:
-            configured_workers = max(1, configured_workers_raw)
+            cap = int(getattr(ExperimentalConfig, 'PROC_WORKERS_CAP', 0) or 0)
+            if cap > 0:
+                configured_workers = max(1, min(configured_workers_raw, cap))
+            else:
+                configured_workers = max(1, configured_workers_raw)
+            print(f"ℹ️ Resource-Aware Scaling disabled. Using configured cap: {configured_workers}")
+
         self.max_workers = configured_workers
         self.worker_manager.max_workers = self.max_workers
 
@@ -586,6 +614,7 @@ class MainApp:
                     self._prepare_progress_tracking,
                     self.process_single_po,
                     communication_manager=self.communication_manager if use_process_pool and self.enable_parallel else None,
+                    sqlite_db_path=self.csv_manager.sqlite_db_path,
                 )
             finally:
                 if use_process_pool and self.enable_parallel:
@@ -600,14 +629,41 @@ class MainApp:
         print(f"❌ Failed: {failed}")
         print(f"📊 Total: {successful + failed}")
 
-    def close(self):
-        """Close the browser properly."""
-        # Shutdown CSV handler first
-        self.csv_manager.shutdown_csv_handler()
+    def close(self, emergency: bool = False):
+        """Close the browser properly and stop all active components."""
+        if emergency:
+            print("\n🚨 Accelerated shutdown initiated...")
+
+        # 1. Stop UI live updates if running
+        if hasattr(self, 'ui_controller'):
+            try:
+                self.ui_controller.stop_live_updates()
+            except Exception:
+                pass
+
+        # 2. Stop worker manager sessions
+        if hasattr(self, 'worker_manager'):
+            try:
+                if hasattr(self.worker_manager, 'active_session') and self.worker_manager.active_session:
+                    print(f"🔄 Stopping active processing session (emergency={emergency})...")
+                    self.worker_manager.active_session.stop_processing(emergency=emergency)
+            except Exception as e:
+                print(f"⚠️ Error stopping worker session: {e}")
+
+        # 3. Shutdown CSV handler to ensure all data is persisted
+        if hasattr(self, 'csv_manager'):
+            try:
+                self.csv_manager.shutdown_csv_handler()
+            except Exception:
+                pass
             
+        # 4. Cleanup browser manager
         if self.driver:
             print("🔄 Closing browser...")
-            self.browser_manager.cleanup()
+            try:
+                self.browser_manager.cleanup()
+            except Exception:
+                pass
             self.driver = None
             print("✅ Browser closed successfully")
 
@@ -623,6 +679,8 @@ class SessionStatus(Enum):
 
 def main() -> None:
     """Run the experimental UI workflow."""
+    import signal
+    
     try:
         configured_workers = int(ExperimentalConfig.MAX_PARALLEL_WORKERS)
     except (TypeError, ValueError):
@@ -631,10 +689,47 @@ def main() -> None:
     max_workers = max(1, configured_workers)
 
     app = MainApp(enable_parallel=True, max_workers=max_workers)
+    
+    # Interrupt handling state to allow for graceful then forced exit
+    shutdown_initiated = False
+    
+    def signal_handler(sig, frame):
+        nonlocal shutdown_initiated
+        if shutdown_initiated:
+            print("\n🚨 Second interrupt received. Force quitting...")
+            os._exit(1)
+            
+        print("\n🛑 Interrupt received! Initiating graceful shutdown...")
+        shutdown_initiated = True
+        
+        # Trigger the app shutdown
+        try:
+            app.close(emergency=True)
+        except Exception as e:
+            print(f"⚠️ Error during app shutdown: {e}")
+            
+        print("✅ Shutdown sequence completed. Exiting.")
+        # Standard exit code for SIGINT is 130
+        os._exit(130)
+
+    # Register for SIGINT (Ctrl+C) and SIGTERM
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+
     try:
         app.run()
+    except KeyboardInterrupt:
+        # Fallback for some thread/environment cases
+        if not shutdown_initiated:
+            signal_handler(signal.SIGINT, None)
+    except Exception as e:
+        print(f"❌ Application error: {e}")
+        import traceback
+        traceback.print_exc()
     finally:
-        app.close()
+        # Standard cleanup if finished normally
+        if not shutdown_initiated:
+            app.close()
 
 
 if __name__ == "__main__":

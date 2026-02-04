@@ -40,8 +40,8 @@ def simulate_continuous_processing():
     
     # Setup configuration
     headless_config = HeadlessConfiguration(
-        headless_mode=False,
-        interactive_setup_session=None
+        enabled=False,
+        source="interactive_setup"
     )
     
     # Initialize communication manager
@@ -54,7 +54,8 @@ def simulate_continuous_processing():
     worker_manager = WorkerManager(enable_parallel=True, max_workers=2)
     
     # Create a shared queue for POs
-    po_queue = mp.Queue()
+    manager = mp.Manager()
+    po_queue = manager.Queue()
     for po_data in sample_pos:
         po_queue.put(po_data)
     

@@ -128,6 +128,7 @@ class ProcessingController:
         prepare_progress_tracking: callable,
         process_single_po: callable,
         communication_manager: Optional[Any] = None,
+        sqlite_db_path: Optional[str] = None,
     ) -> Tuple[int, int]:
         """
         Process PO entries with automatic parallel mode selection.
@@ -153,6 +154,7 @@ class ProcessingController:
                         queue_size=len(po_data_list),
                         csv_handler=csv_handler,
                         folder_hierarchy=folder_hierarchy,
+                        sqlite_db_path=sqlite_db_path,
                     )
                     return successful, failed
                 finally:
@@ -164,7 +166,8 @@ class ProcessingController:
                 # Use WorkerManager for ProcessingSession approach
                 successful, failed, session_report = self.worker_manager.process_parallel_with_session(
                     po_data_list, hierarchy_cols, has_hierarchy_data, headless_config,
-                    csv_handler=csv_handler, folder_hierarchy=folder_hierarchy
+                    csv_handler=csv_handler, folder_hierarchy=folder_hierarchy,
+                    sqlite_db_path=sqlite_db_path
                 )
                 
                 # self._last_parallel_report = session_report  # TODO: handle this
@@ -179,7 +182,8 @@ class ProcessingController:
             # Use WorkerManager for legacy ProcessPoolExecutor approach
             successful, failed = self.worker_manager.process_parallel_legacy(
                 po_data_list, hierarchy_cols, has_hierarchy_data, headless_config,
-                csv_handler=csv_handler, folder_hierarchy=folder_hierarchy
+                csv_handler=csv_handler, folder_hierarchy=folder_hierarchy,
+                sqlite_db_path=sqlite_db_path
             )
             return successful, failed
         else:

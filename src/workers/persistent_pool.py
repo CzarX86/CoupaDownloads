@@ -310,6 +310,12 @@ class PersistentWorkerPool:
         for i in range(self.config.worker_count):
             worker_id = f"worker-{i+1}"
             await self._start_worker(worker_id)
+            
+            # Apply stagger delay between worker starts (except for the last one)
+            if i < self.config.worker_count - 1 and self.config.stagger_delay > 0:
+                logger.debug(f"Waiting {self.config.stagger_delay}s before starting next worker", 
+                             worker_id=worker_id)
+                await asyncio.sleep(self.config.stagger_delay)
         
         # Wait for all workers to be ready
         max_wait = self.config.worker_startup_timeout
@@ -914,17 +920,20 @@ class PersistentWorkerPool:
         
         return False
     
-    async def shutdown(self) -> None:
+    async def shutdown(self, emergency: bool = False) -> None:
         """
         Gracefully shutdown the worker pool.
         
         Stops accepting new tasks, completes current tasks, and cleans up resources.
+        
+        Args:
+            emergency: If True, accelerated shutdown with minimal timeouts.
         """
         if not self._running:
             logger.warning("Worker pool is not running")
             return
         
-        logger.info("Initiating graceful shutdown...")
+        logger.info("Initiating shutdown...", emergency=emergency)
         self._shutdown_initiated = True
         
         try:
@@ -932,15 +941,19 @@ class PersistentWorkerPool:
             self.task_queue.stop()
             
             # Wait for current tasks to complete (with timeout)
-            completion_timeout = min(self.config.shutdown_timeout * 0.7, 120)
+            if emergency:
+                completion_timeout = 5.0  # Just a few seconds for very quick tasks
+            else:
+                completion_timeout = min(self.config.shutdown_timeout * 0.7, 120)
+                
             completed = await self.wait_for_completion(completion_timeout)
             
             if not completed:
                 logger.warning("Some tasks did not complete before shutdown timeout")
             
             # Stop workers
-            logger.info("Stopping workers...")
-            await self._stop_workers()
+            logger.info("Stopping workers...", emergency=emergency)
+            await self._stop_workers(emergency=emergency)
             
             # Cleanup components
             await self._cleanup_components()
@@ -959,14 +972,24 @@ class PersistentWorkerPool:
             await self._emergency_cleanup()
             raise
     
-    async def _stop_workers(self) -> None:
+    async def _stop_workers(self, emergency: bool = False) -> None:
         """Stop all worker processes gracefully."""
         # Signal all workers to stop
         for worker in self.workers.values():
-            worker.stop()
+            if emergency:
+                try:
+                    worker.force_stop()
+                except Exception:
+                    pass
+            else:
+                worker.stop()
         
         # Wait for worker threads to finish
-        worker_timeout = self.config.shutdown_timeout * 0.3
+        if emergency:
+            worker_timeout = 5.0
+        else:
+            worker_timeout = self.config.shutdown_timeout * 0.3
+            
         end_time = time.time() + worker_timeout
         
         for worker_id, thread in self.worker_threads.items():
