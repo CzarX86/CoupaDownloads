@@ -9,6 +9,7 @@ from typing import Optional, List, Dict, Any, Tuple
 from pathlib import Path
 import time
 import threading
+import multiprocessing as mp
 
 from .worker_manager import WorkerManager
 from .ui_controller import UIController
@@ -126,6 +127,7 @@ class ProcessingController:
         initialize_browser_once: callable,
         prepare_progress_tracking: callable,
         process_single_po: callable,
+        communication_manager: Optional[Any] = None,
     ) -> Tuple[int, int]:
         """
         Process PO entries with automatic parallel mode selection.
@@ -135,6 +137,29 @@ class ProcessingController:
         """
         # Check if parallel processing is enabled and beneficial
         if enable_parallel and len(po_data_list) > 1 and use_process_pool:
+            if communication_manager:
+                manager = mp.Manager()
+                try:
+                    po_queue = manager.Queue()
+                    for po_data in po_data_list:
+                        po_queue.put(po_data)
+
+                    successful, failed, _session_report = self.worker_manager.process_parallel_with_reusable_workers(
+                        po_queue=po_queue,
+                        hierarchy_cols=hierarchy_cols,
+                        has_hierarchy_data=has_hierarchy_data,
+                        headless_config=headless_config,
+                        communication_manager=communication_manager,
+                        queue_size=len(po_data_list),
+                        csv_handler=csv_handler,
+                        folder_hierarchy=folder_hierarchy,
+                    )
+                    return successful, failed
+                finally:
+                    try:
+                        manager.shutdown()
+                    except Exception:
+                        pass
             try:
                 # Use WorkerManager for ProcessingSession approach
                 successful, failed, session_report = self.worker_manager.process_parallel_with_session(

@@ -6,6 +6,7 @@ layouts e atualizações em tempo real durante o processamento.
 """
 
 from typing import Optional, List, Dict, Any
+import time
 from rich.table import Table
 from rich.panel import Panel
 from rich.columns import Columns
@@ -19,6 +20,7 @@ class UIController:
         """Initialize UI controller with Rich components."""
         self.console = Console()
         self.live: Optional[Live] = None
+        self._run_start_time: Optional[float] = None
 
         # Global stats for header
         self.global_stats = {
@@ -111,36 +113,78 @@ class UIController:
                 worker_metrics[worker_id] = []
             worker_metrics[worker_id].append(metric)
 
+        def _normalize_worker_id(raw_worker_id: Any) -> str:
+            try:
+                idx = int(raw_worker_id)
+            except (TypeError, ValueError):
+                return str(raw_worker_id)
+            return f"Worker {idx + 1}"
+
         # Update worker states - preserve existing states and update with new metrics
-        current_worker_states = {ws['worker_id']: ws for ws in self.worker_states}
+        current_worker_states = {ws['worker_id']: ws for ws in self.worker_states if 'worker_id' in ws}
 
         for worker_id, worker_metric_list in worker_metrics.items():
             # Get the most recent metric for this worker
             latest_metric = worker_metric_list[-1] if worker_metric_list else {}
 
             # Get existing state if available, otherwise create new
-            existing_state = current_worker_states.get(worker_id, {})
+            worker_key = _normalize_worker_id(worker_id)
+            existing_state = current_worker_states.get(worker_key, {})
+
+            started_at = existing_state.get('started_at')
+            if latest_metric.get('status') in {'STARTED', 'PROCESSING'} and not started_at:
+                started_at = latest_metric.get('timestamp', time.time())
 
             # Update the worker state with the latest metric
             worker_state = {
-                'worker_id': worker_id,
+                'worker_id': worker_key,
                 'current_po': latest_metric.get('po_id', existing_state.get('current_po', 'Unknown')),
                 'status': latest_metric.get('status', existing_state.get('status', 'Unknown')),
                 'attachments_found': latest_metric.get('attachments_found', existing_state.get('attachments_found', 0)),
                 'attachments_downloaded': latest_metric.get('attachments_downloaded', existing_state.get('attachments_downloaded', 0)),
                 'duration': latest_metric.get('duration', existing_state.get('duration', 0.0)),
+                'started_at': started_at,
             }
             # Update the current worker states dict
-            current_worker_states[worker_id] = worker_state
+            current_worker_states[worker_key] = worker_state
 
         # Update the instance variable
         self.worker_states = list(current_worker_states.values())
 
+        # Update live durations for active workers even without new metrics
+        now = time.time()
+        for worker_state in self.worker_states:
+            status = worker_state.get('status')
+            started_at = worker_state.get('started_at')
+            if status in {'STARTED', 'PROCESSING'} and started_at:
+                worker_state['duration'] = max(0.0, now - started_at)
+
         # Update global stats based on aggregated metrics
         agg_metrics = communication_manager.get_aggregated_metrics()
-        self.global_stats['total'] = agg_metrics.get('total_processed', 0)
+        if not self.global_stats.get('total'):
+            self.global_stats['total'] = agg_metrics.get('total_processed', 0)
         self.global_stats['completed'] = agg_metrics.get('total_successful', 0)
         self.global_stats['failed'] = agg_metrics.get('total_failed', 0)
+        total = self.global_stats.get('total', 0)
+        self.global_stats['active'] = max(0, total - self.global_stats['completed'] - self.global_stats['failed'])
+
+        # Update efficiency and ETA from elapsed time
+        if self._run_start_time:
+            elapsed_seconds = max(0.0, time.time() - self._run_start_time)
+            if elapsed_seconds > 0 and self.global_stats['completed'] > 0:
+                global_efficiency = (self.global_stats['completed'] / elapsed_seconds) * 60
+                self.global_stats['global_efficiency'] = f"{global_efficiency:.1f} POs/min"
+
+                remaining = max(0, total - self.global_stats['completed'] - self.global_stats['failed'])
+                if remaining > 0:
+                    avg_time_per_po = elapsed_seconds / max(1, self.global_stats['completed'])
+                    eta_seconds = avg_time_per_po * remaining
+                    eta_minutes, eta_seconds = divmod(int(eta_seconds), 60)
+                    self.global_stats['eta_global'] = f"{eta_minutes}m {eta_seconds}s"
+                else:
+                    self.global_stats['eta_global'] = "0m 0s"
+            elif elapsed_seconds > 0:
+                self.global_stats['global_efficiency'] = "⏳"
 
         # Update display
         self.update_display()
@@ -155,6 +199,9 @@ class UIController:
         """
         import threading
         import time
+
+        if self._run_start_time is None:
+            self._run_start_time = time.time()
 
         def update_loop():
             while getattr(self, '_updating', False):

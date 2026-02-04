@@ -344,8 +344,6 @@ class PersistentWorkerPool:
                 self.profile_manager.cleanup_profile(worker_id)
                 profile_path = self.profile_manager.create_profile(worker_id, force=True)
             
-            # Create Profile object
-            from workers.models.profile import Profile
             profile = Profile(
                 base_profile_path=self.config.base_profile_path,
                 worker_profile_path=profile_path,

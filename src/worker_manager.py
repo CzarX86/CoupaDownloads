@@ -957,6 +957,11 @@ def process_po_worker(args):
                 shutil.rmtree(clone_dir, ignore_errors=True)
             except Exception:
                 pass
+        if output_handle:
+            try:
+                output_handle.close()
+            except Exception:
+                pass
 
 
 def process_reusable_worker(args):
@@ -980,6 +985,19 @@ def process_reusable_worker(args):
         sys.path.insert(0, experimental_root_str)
 
     po_queue, hierarchy_cols, has_hierarchy_data, headless_config, download_root, csv_path, worker_id, communication_manager = args
+
+    output_handle = None
+    suppress_output = os.environ.get('SUPPRESS_WORKER_OUTPUT', '').strip().lower() in {'1', 'true', 'yes'}
+    if suppress_output:
+        try:
+            log_dir = os.path.join(tempfile.gettempdir(), 'coupadownloads_logs')
+            _ensure_dir(log_dir)
+            log_path = os.path.join(log_dir, f"worker_{worker_id}_{os.getpid()}.log")
+            output_handle = open(log_path, 'a', buffering=1)
+            sys.stdout = output_handle
+            sys.stderr = output_handle
+        except Exception:
+            output_handle = None
 
     download_root = os.path.abspath(os.path.expanduser(download_root)) if download_root else os.path.abspath(os.path.expanduser(ExperimentalConfig.DOWNLOAD_FOLDER))
     os.environ['DOWNLOAD_FOLDER'] = download_root
@@ -1074,7 +1092,26 @@ def process_reusable_worker(args):
                         print(f"[reusable_worker_{worker_id}] ⚠️ Failed to send STARTED metric: {e}")
 
                 # Download
-                downloader = Downloader(driver, browser_manager)
+                def _emit_progress(payload: Dict[str, Any]) -> None:
+                    if not communication_manager:
+                        return
+                    try:
+                        duration = time.time() - start_time if start_time else 0.0
+                        metric_data = {
+                            'worker_id': worker_id,
+                            'po_id': display_po,
+                            'status': payload.get('status', 'PROCESSING'),
+                            'timestamp': time.time(),
+                            'duration': duration,
+                            'attachments_found': payload.get('attachments_found', 0),
+                            'attachments_downloaded': payload.get('attachments_downloaded', 0),
+                            'message': payload.get('message', ''),
+                        }
+                        communication_manager.send_metric(metric_data)
+                    except Exception:
+                        pass
+
+                downloader = Downloader(driver, browser_manager, progress_callback=_emit_progress)
                 po_number = po_data['po_number']
                 print(f"[reusable_worker_{worker_id}] 🌐 Starting download for {po_number}", flush=True)
 
@@ -1318,6 +1355,7 @@ class WorkerManager:
         has_hierarchy_data: bool,
         headless_config: HeadlessConfiguration,
         communication_manager,
+        queue_size: Optional[int] = None,
         csv_handler: Optional[CSVHandler] = None,
         folder_hierarchy: Optional[FolderHierarchyManager] = None,
     ) -> tuple[int, int, dict]:
@@ -1344,7 +1382,14 @@ class WorkerManager:
         results: List[Dict[str, Any]] = []
 
         # Calculate number of workers
-        num_workers = min(self.max_workers, po_queue.qsize()) if hasattr(po_queue, 'qsize') else self.max_workers
+        if queue_size is not None:
+            num_workers = min(self.max_workers, max(1, queue_size))
+        else:
+            try:
+                queue_len = po_queue.qsize() if hasattr(po_queue, 'qsize') else None
+            except (NotImplementedError, OSError):
+                queue_len = None
+            num_workers = min(self.max_workers, queue_len) if queue_len else self.max_workers
         print(f"📊 Using {num_workers} reusable worker(s), each with persistent driver")
 
         # Use the ExperimentalConfig.DOWNLOAD_FOLDER that was updated during setup

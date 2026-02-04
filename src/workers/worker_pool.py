@@ -19,15 +19,15 @@ from dataclasses import dataclass, field
 try:
     # Prefer absolute package imports when EXPERIMENTAL is a package
     from ..lib.models import HeadlessConfiguration
-    from workers.exceptions import (
+    from .exceptions import (
         WorkerPoolError,
         WorkerCreationError,
         WorkerTimeoutError,
         ProfileConflictError,
     )
-    from workers.profile_manager import ProfileManager
-    from workers.task_queue import TaskQueue
-    from workers.resource_monitor import (
+    from .profile_manager import ProfileManager
+    from .task_queue import TaskQueue
+    from .resource_monitor import (
         create_default_monitor,
         ResourceMonitor,
     )
@@ -53,15 +53,15 @@ except ImportError:
         from pathlib import Path
         sys.path.insert(0, str(Path(__file__).parent.parent))
         from ..lib.models import HeadlessConfiguration
-        from workers.exceptions import (
+        from .exceptions import (
             WorkerPoolError,
             WorkerCreationError,
             WorkerTimeoutError,
             ProfileConflictError,
         )
-        from workers.profile_manager import ProfileManager
-        from workers.task_queue import TaskQueue
-        from workers.resource_monitor import (
+        from .profile_manager import ProfileManager
+        from .task_queue import TaskQueue
+        from .resource_monitor import (
             create_default_monitor,
             ResourceMonitor,
         )

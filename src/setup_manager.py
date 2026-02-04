@@ -93,6 +93,10 @@ class SetupManager:
         mode_str = "headless" if headless_preference else "visible"
         print(f"🎯 Browser mode configured: {mode_str}")
 
+        # 6) Suppress worker output (avoid Live UI duplication)
+        suppress_output = self._prompt_bool("Suppress worker output during execution?", default=True)
+        os.environ['SUPPRESS_WORKER_OUTPUT'] = '1' if suppress_output else '0'
+
         # Store setup session for later use (replace env var dependency)
         global _current_setup_session
         _current_setup_session = setup_session
@@ -154,7 +158,11 @@ class SetupManager:
         if prof_name:
             self.experimental_config.EDGE_PROFILE_NAME = prof_name
 
-        return {"headless_preference": headless_pref}
+        suppress_output = os.environ.get('SUPPRESS_WORKER_OUTPUT', '1').strip().lower() in {'1', 'true', 'yes'}
+        return {
+            "headless_preference": headless_pref,
+            "suppress_worker_output": suppress_output,
+        }
 
     def scan_local_drivers(self) -> list[str]:
         """Return a list of plausible local driver paths under 'drivers/' directory."""

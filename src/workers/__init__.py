@@ -74,16 +74,16 @@ try:
 except ImportError:
     # Handle direct script execution
     try:
-        from workers.exceptions import (
+        from .exceptions import (
             ParallelProcessingError,
             WorkerError,
             ProfileError,
             TaskQueueError,
         )
 
-        from workers.profile_manager import ProfileManager as LegacyProfileManager
-        from workers.task_queue import TaskQueue as LegacyTaskQueue, ProcessingTask
-        from workers.worker_pool import WorkerPool, WorkerInstance
+        from .profile_manager import ProfileManager as LegacyProfileManager
+        from .task_queue import TaskQueue as LegacyTaskQueue, ProcessingTask
+        from .worker_pool import WorkerPool, WorkerInstance
         
         LEGACY_IMPLEMENTATION_AVAILABLE = True
     except ImportError:

@@ -5,13 +5,13 @@ This is a temporary implementation until the full CSVHandler is implemented.
 """
 
 from pathlib import Path
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Tuple, ClassVar
 from datetime import datetime
 import logging
 
 # Import the working ExcelProcessor
 try:
-    from .lib.excel_processor import ExcelProcessor
+    from ..lib.excel_processor import ExcelProcessor
     EXCEL_PROCESSOR_AVAILABLE = True
 except ImportError:
     EXCEL_PROCESSOR_AVAILABLE = False
@@ -34,18 +34,50 @@ class WriteQueue:
 
 class CSVHandler:
     """CSV Handler implementation using ExcelProcessor."""
-    
+
+    _last_backup_path: ClassVar[Optional[Path]] = None
+
     def __init__(self, csv_path: Path, backup_dir: Optional[Path] = None):
         self.csv_path = csv_path
-        self.backup_dir = backup_dir
+        self.backup_dir = backup_dir or (csv_path.parent / "backups")
         self.logger = logging.getLogger(__name__)
         
         if not EXCEL_PROCESSOR_AVAILABLE:
             self.logger.error("ExcelProcessor not available - CSV updates disabled")
+
+    @classmethod
+    def create_handler(
+        cls,
+        csv_path: Path,
+        enable_incremental_updates: bool = True,
+        backup_dir: Optional[Path] = None,
+    ) -> Tuple["CSVHandler", "WriteQueue", str]:
+        """Factory helper to match CSVManager expectations."""
+        handler = cls(csv_path, backup_dir=backup_dir)
+        session_id = datetime.now().strftime("%Y%m%d-%H%M%S")
+        if enable_incremental_updates:
+            try:
+                backup_path = handler.create_session_backup(session_id)
+                cls._last_backup_path = backup_path
+            except Exception:
+                cls._last_backup_path = None
+        write_queue = WriteQueue(handler)
+        return handler, write_queue, session_id
+
+    @staticmethod
+    def get_backup_path(csv_path: Path, backup_dir: Optional[Path] = None) -> Path:
+        """Return the most recent backup path when available."""
+        if CSVHandler._last_backup_path:
+            return CSVHandler._last_backup_path
+        backup_root = backup_dir or (csv_path.parent / "backups")
+        backup_root.mkdir(parents=True, exist_ok=True)
+        session_id = datetime.now().strftime("%Y%m%d-%H%M%S")
+        return backup_root / f"backup_{session_id}.csv"
     
     def create_session_backup(self, session_id: str) -> Path:
         """Create a backup - stub implementation."""
         if self.backup_dir:
+            self.backup_dir.mkdir(parents=True, exist_ok=True)
             backup_path = self.backup_dir / f"backup_{session_id}.csv"
             # Copy the file if it exists
             if self.csv_path.exists():

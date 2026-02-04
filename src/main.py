@@ -43,6 +43,7 @@ from .lib.models import HeadlessConfiguration, InteractiveSetupSession
 from .setup_manager import SetupManager
 from .worker_manager import WorkerManager, ProcessingSession, _wait_for_downloads_complete, _legacy_rename_folder_with_status, _derive_status_label
 from .ui_controller import UIController
+from .core.communication_manager import CommunicationManager
 from .processing_controller import ProcessingController
 from .csv_manager import CSVManager
 
@@ -80,6 +81,7 @@ class MainApp:
         self.ui_controller = UIController()
         self.processing_controller = ProcessingController(self.worker_manager, self.ui_controller)
         self.csv_manager = CSVManager()
+        self.communication_manager = CommunicationManager()
         self.driver = None
         self.lock = threading.Lock()  # Thread safety for browser operations
         self._run_start_time: float | None = None
@@ -271,6 +273,34 @@ class MainApp:
             )
             print(f"   📁 Folder: {folder_path}")
 
+            def _update_seq_worker(status: str, attachments_found: int = 0, attachments_downloaded: int = 0) -> None:
+                if not self.ui_controller.worker_states:
+                    self.ui_controller.worker_states = [{
+                        "worker_id": "Worker 1",
+                        "current_po": "Idle",
+                        "status": "Idle",
+                        "attachments_found": 0,
+                        "attachments_downloaded": 0,
+                        "duration": 0.0,
+                    }]
+                worker_state = self.ui_controller.worker_states[0]
+                worker_state["current_po"] = display_po
+                worker_state["status"] = status
+                worker_state["attachments_found"] = attachments_found
+                worker_state["attachments_downloaded"] = attachments_downloaded
+                if self._current_po_start_time:
+                    worker_state["duration"] = max(0.0, time.perf_counter() - self._current_po_start_time)
+                self.ui_controller.update_display()
+
+            def _emit_progress(payload: Dict[str, Any]) -> None:
+                _update_seq_worker(
+                    status=payload.get("status", "PROCESSING"),
+                    attachments_found=payload.get("attachments_found", 0),
+                    attachments_downloaded=payload.get("attachments_downloaded", 0),
+                )
+
+            _update_seq_worker("STARTED")
+
             # Process entirely under lock to avoid Selenium races (single window)
             with self.lock:
                 # Ensure driver exists and is responsive
@@ -284,7 +314,7 @@ class MainApp:
                 self.browser_manager.update_download_directory(folder_path)
 
                 # Create downloader and attempt processing
-                downloader = Downloader(self.driver, self.browser_manager)
+                downloader = Downloader(self.driver, self.browser_manager, progress_callback=_emit_progress)
                 try:
                     result_payload = downloader.download_attachments_for_po(po_number)
                 except (InvalidSessionIdException, NoSuchWindowException) as e:
@@ -293,7 +323,7 @@ class MainApp:
                     self.browser_manager.cleanup()
                     self.browser_manager.initialize_driver(headless=self._get_headless_setting())
                     self.driver = self.browser_manager.driver
-                    downloader = Downloader(self.driver, self.browser_manager)
+                    downloader = Downloader(self.driver, self.browser_manager, progress_callback=_emit_progress)
                     result_payload = downloader.download_attachments_for_po(po_number)
 
                 message = result_payload.get('message', '')
@@ -342,6 +372,11 @@ class MainApp:
                 }.get(status_code, 'ℹ️')
                 log_message = message or status_reason or status_code
                 print(f"   {emoji} {display_po}: {log_message}")
+                _update_seq_worker(
+                    status=status_code,
+                    attachments_found=result_payload.get('attachments_found', 0),
+                    attachments_downloaded=result_payload.get('attachments_downloaded', 0),
+                )
                 return status_code in {'COMPLETED', 'NO_ATTACHMENTS'}
 
         except Exception as e:
@@ -482,6 +517,7 @@ class MainApp:
         else:
             configured_workers = max(1, configured_workers_raw)
         self.max_workers = configured_workers
+        self.worker_manager.max_workers = self.max_workers
 
         if use_process_pool and not self.enable_parallel:
             self.enable_parallel = True
@@ -495,10 +531,11 @@ class MainApp:
         self.ui_controller.worker_states = [
             {
                 "worker_id": f"Worker {i+1}",
-                "progress": "0/0 POs",
-                "elapsed": "0m 0s",
-                "eta": "⏳",
-                "efficiency": "⏳"
+                "current_po": "Idle",
+                "status": "Idle",
+                "attachments_found": 0,
+                "attachments_downloaded": 0,
+                "duration": 0.0
             } for i in range(self.max_workers)
         ]
 
@@ -526,25 +563,33 @@ class MainApp:
             
             timer_thread = threading.Thread(target=update_timer, daemon=True)
             timer_thread.start()
+
+            if use_process_pool and self.enable_parallel:
+                self.ui_controller.start_live_updates(self.communication_manager, update_interval=0.5)
             
             # Process POs directly without UI
             if self._headless_config is None:
                 raise RuntimeError("Headless configuration not set.")
                 
-            successful, failed = self.processing_controller.process_po_entries(
-                po_data_list,
-                hierarchy_cols,
-                has_hierarchy_data,
-                use_process_pool,
-                self._headless_config,
-                self.enable_parallel,
-                self.max_workers,
-                self.csv_manager.csv_handler,
-                self.folder_hierarchy,
-                self.initialize_browser_once,
-                self._prepare_progress_tracking,
-                self.process_single_po,
-            )
+            try:
+                successful, failed = self.processing_controller.process_po_entries(
+                    po_data_list,
+                    hierarchy_cols,
+                    has_hierarchy_data,
+                    use_process_pool,
+                    self._headless_config,
+                    self.enable_parallel,
+                    self.max_workers,
+                    self.csv_manager.csv_handler,
+                    self.folder_hierarchy,
+                    self.initialize_browser_once,
+                    self._prepare_progress_tracking,
+                    self.process_single_po,
+                    communication_manager=self.communication_manager if use_process_pool and self.enable_parallel else None,
+                )
+            finally:
+                if use_process_pool and self.enable_parallel:
+                    self.ui_controller.stop_live_updates()
 
         # Shutdown CSV handler to ensure all data is persisted
         self.csv_manager.shutdown_csv_handler()
