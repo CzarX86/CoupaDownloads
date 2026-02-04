@@ -641,6 +641,13 @@ def _copy_profile_folder(src_profile: str, dst_profile: str) -> None:
 def _create_profile_clone(base_user_data_dir: str, profile_name: str, clone_root: str) -> str:
     _ensure_dir(clone_root)
     _copy_root_essentials(base_user_data_dir, clone_root)
+    
+    # NEW: Actually copy the profile folder content
+    src_profile = os.path.join(base_user_data_dir, profile_name)
+    dst_profile = os.path.join(clone_root, profile_name)
+    if os.path.exists(src_profile):
+        _copy_profile_folder(src_profile, dst_profile)
+    return clone_root
 
 
 def _has_active_downloads(folder_path: str) -> bool:
@@ -839,7 +846,11 @@ def process_po_worker(args):
             except Exception:
                 pass
 
-        browser_manager.initialize_driver(headless=headless_config.get_effective_headless_mode())
+        browser_manager.initialize_driver_with_profile(
+            headless=headless_config.get_effective_headless_mode(),
+            profile_dir=clone_dir,
+            download_dir=folder_path
+        )
         driver = browser_manager.driver
         print("[worker] ⚙️ WebDriver initialized", flush=True)
         browser_manager.update_download_directory(folder_path)
@@ -1051,7 +1062,11 @@ def process_reusable_worker(args):
             except Exception:
                 pass
 
-        browser_manager.initialize_driver(headless=headless_config.get_effective_headless_mode())
+        browser_manager.initialize_driver_with_profile(
+            headless=headless_config.get_effective_headless_mode(),
+            profile_dir=clone_dir,
+            download_dir=download_root
+        )
         driver = browser_manager.driver
         print(f"[reusable_worker_{worker_id}] ⚙️ Persistent WebDriver initialized", flush=True)
 
