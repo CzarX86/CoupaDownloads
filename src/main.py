@@ -171,6 +171,10 @@ class MainApp:
         else:
             self._completed_po_count += 1
         self._current_po_start_time = None
+        
+        # Sync with UI
+        self.ui_controller.global_stats["completed"] = self._completed_po_count
+        self.ui_controller.update_display()
 
 
     @staticmethod
@@ -569,8 +573,16 @@ class MainApp:
 
         # Start Live display with initial Group
         initial_renderable = self.ui_controller.get_initial_renderable()
-        with Live(initial_renderable, console=self.ui_controller.console, refresh_per_second=1) as live:
+        with Live(
+            initial_renderable, 
+            console=self.ui_controller.console, 
+            refresh_per_second=4,
+            screen=True,  # Full screen mode for proper rendering
+            auto_refresh=False  # Manual refresh for proper resize handling
+        ) as live:
             self.ui_controller.live = live
+            self.ui_controller._updating = True
+            self.ui_controller.add_log("🚀 System initialized and ready")
             
             # Start a thread to update elapsed time every second
             def update_timer():
@@ -593,7 +605,10 @@ class MainApp:
             timer_thread.start()
 
             if use_process_pool and self.enable_parallel:
+                self.ui_controller.add_log(f"🔥 Starting parallel processing with {self.max_workers} workers")
                 self.ui_controller.start_live_updates(self.communication_manager, update_interval=0.5)
+            else:
+                self.ui_controller.add_log("📺 Starting sequential processing")
             
             # Process POs directly without UI
             if self._headless_config is None:

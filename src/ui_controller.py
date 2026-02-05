@@ -7,6 +7,7 @@ layouts e atualizações em tempo real durante o processamento.
 
 from typing import Optional, List, Dict, Any
 import time
+import threading
 import psutil
 from datetime import datetime
 from rich.table import Table
@@ -16,15 +17,35 @@ from rich.live import Live
 from rich.console import Console, Group
 from rich.text import Text
 from rich.align import Align
+from rich.progress import Progress, BarColumn, TextColumn, SpinnerColumn, TaskProgressColumn
+from rich.columns import Columns
+from rich.style import Style
 
 
 class UIController:
+    # Premium Color Palette (HEX)
+    COLORS = {
+        "primary": "#6200EE",     # Deep Purple
+        "secondary": "#03DAC6",   # Teal / Neon Cyan
+        "success": "#00C853",     # Emerald Green
+        "warning": "#FFD600",     # Vivid Yellow
+        "error": "#CF6679",       # Soft Red/Coral
+        "background": "#121212",  # Dark Surface
+        "surface": "#1E1E1E",     # Elevated Surface
+        "text_primary": "#FFFFFF",
+        "text_secondary": "#B0B0B0",
+        "accent": "#BB86FC"       # Light Purple
+    }
+
     def __init__(self):
         """Initialize UI controller with Rich components."""
         self.console = Console()
         self.live: Optional[Live] = None
         self._run_start_time: Optional[float] = None
         self._updating = False
+        self._render_lock = threading.Lock()
+        self._live_owned = False
+        self.update_thread: Optional[threading.Thread] = None
 
         # Global stats for header
         self.global_stats = {
@@ -42,152 +63,237 @@ class UIController:
         
         # Recent logs for footer feed
         self.recent_logs: List[str] = []
-        self._max_logs = 5
+        self._max_logs = 10  # Increased for new layout
+        
+        # Performance history for line graph
+        self.perf_history: List[float] = []
+        self._max_perf_history = 20  # Visible window
+        self._last_perf_update = 0.0
 
     def _create_layout(self) -> Layout:
-        """Create the screen layout with dynamic sizing."""
+        """Create the screen layout with dynamic sizing and sidebar."""
         layout = Layout()
         layout.split_column(
-            Layout(name="header", size=6, minimum_size=6),   # Priority: always 6 lines
-            Layout(name="main", ratio=1, minimum_size=3),    # Flexible, min 3
-            Layout(name="footer", size=6),                   # Reduced from 8 to 6
+            Layout(name="header", size=3),
+            Layout(name="middle"),
+            Layout(name="footer", size=6),
+        )
+        layout["middle"].split_row(
+            Layout(name="main", ratio=3),
+            Layout(name="sidebar", ratio=1),
         )
         return layout
 
     def _build_progress_table(self) -> Table:
         """Build the worker progress table."""
         table = Table(
-            title="[bold blue]Worker Progress[/bold blue]", 
             expand=True,
-            border_style="bright_black",
-            header_style="bold cyan",
-            show_lines=False
+            border_style=f"bold {self.COLORS['accent']}",
+            header_style=f"bold {self.COLORS['secondary']}",
+            show_lines=True,
+            box=None,
+            padding=(0, 1)
         )
-        table.add_column("Worker", style="blue", no_wrap=True, width=10)
-        table.add_column("PO", style="cyan", no_wrap=True, width=15)
-        table.add_column("Status", style="yellow", width=12)
-        # Progress column takes remaining space
-        table.add_column("Progress", ratio=1, justify="center")
-        table.add_column("Time", justify="right", style="red", width=8)
+        table.add_column("Worker", style=self.COLORS["secondary"], no_wrap=True, width=12)
+        table.add_column("PO Number", style=self.COLORS["primary"], no_wrap=True, width=15)
+        table.add_column("Status", justify="center", width=14)
+        table.add_column("Progress Visualization", ratio=1)
+        table.add_column("Runtime", justify="right", style=self.COLORS["warning"], width=10)
 
         if not self.worker_states:
-            table.add_row("[dim]No workers active[/dim]", "", "", "", "")
+            table.add_row("[dim]Searching for tasks...[/dim]", "", "", "[dim]Waiting for assignment[/dim]", "")
             return table
 
         for worker in self.worker_states:
             found = worker.get("attachments_found", 0)
             downloaded = worker.get("attachments_downloaded", 0)
             
-            # Create progress bar
+            # Premium Progress Visualization
             if found > 0:
                 progress_pct = min(100, int((downloaded / found) * 100))
-                # Dynamic bar length based on simple math, but in a ratio column likely fine
-                # We'll use a slightly safer fixed visualization or just text if it's too small
-                # Simple ASCII bar
-                bar_len = 20
-                filled = int((progress_pct / 100) * bar_len)
-                color = "green" if downloaded == found else "magenta"
-                bar = "━" * filled + "─" * (bar_len - filled)
-                progress_bar = f"[{color}]{downloaded}/{found}[/{color}]  [{color}]{bar}[/{color}]"
+                filled_len = int((progress_pct / 100) * 20)
+                bar = "█" * filled_len + "░" * (20 - filled_len)
+                color = self.COLORS["success"] if downloaded == found else self.COLORS["accent"]
+                progress_viz = f"[{color}]{bar}[/] [dim]{downloaded}/{found}[/]"
             else:
-                progress_bar = "[dim]Waiting...[/dim]"
+                progress_viz = "[dim]No attachments yet[/dim]"
 
             table.add_row(
-                str(worker.get("worker_id", "N/A")),
+                worker.get("worker_id", "N/A"),
                 str(worker.get("current_po", "Idle"))[:15],
                 self._format_status(worker.get("status", "Idle")),
-                progress_bar,
+                progress_viz,
                 f"{worker.get('duration', 0.0):.1f}s"
             )
         return table
 
     def _format_status(self, status: str) -> str:
-        """Apply colors and icons to status strings."""
+        """Apply colors and icons to status strings with capsule style."""
         status_upper = str(status).upper()
         if status_upper in {"COMPLETED", "SUCCESS", "DONE"}:
-            return "[green]✅ DONE[/green]"
+            return f"[black on {self.COLORS['success']}] SUCCESS [/]"
         if status_upper in {"PROCESSING", "STARTED", "WORKING"}:
-            return "[yellow]⚙️  WORK[/yellow]"
+            return f"[black on {self.COLORS['warning']}] WORKING [/]"
         if status_upper in {"FAILED", "ERROR"}:
-            return "[red]❌ FAIL[/red]"
+            return f"[white on {self.COLORS['error']}]  ERROR  [/]"
         if status_upper == "IDLE":
-            return "[dim]⏸️  IDLE[/dim]"
+            return f"[dim white on #333333]  IDLE   [/]"
         return f"[dim]{status}[/dim]"
 
     def _update_header(self) -> Panel:
-        """Update the header with a single unified dashboard panel."""
-        # Create a grid for the content inside the single panel
-        grid = Table.grid(expand=True, padding=(0, 2))
-        grid.add_column(justify="center", ratio=1, no_wrap=True)
-        grid.add_column(justify="center", ratio=1, no_wrap=True)
-        grid.add_column(justify="center", ratio=1, no_wrap=True)
-        grid.add_column(justify="center", ratio=1, no_wrap=True)
-        grid.add_column(justify="center", ratio=1, no_wrap=True)
-
-        grid.add_row(
-            f"[bold blue]{self.global_stats['elapsed']}[/bold blue]\n[dim]ETA: {self.global_stats['eta_global']}[/dim]",
-            f"[bold cyan]{self.global_stats['total']}[/bold cyan]\n[dim]Ativos: {self.global_stats['active']}[/dim]",
-            f"[bold yellow]{self.global_stats['global_efficiency']}[/bold yellow]",
-            f"[bold green]{self.global_stats['completed']}[/bold green]",
-            f"[bold red]{self.global_stats['failed']}[/bold red]"
+        """Update the header with a modern, clean design."""
+        title = Text.assemble(
+            ("COUPA", f"bold {self.COLORS['primary']}"),
+            ("DOWNLOADS", f"bold {self.COLORS['secondary']}"),
+            (" ∞ ", f"bold {self.COLORS['accent']}"),
+            ("v2.0", "dim")
         )
         
-        # Add labels row
-        grid.add_row(
-            "[dim]⏱️ Tempo[/dim]",
-            "[dim]📊 Total[/dim]",
-            "[dim]⚡ Performance[/dim]",
-            "[dim]✅ Sucesso[/dim]",
-            "[dim]❌ Falhas[/dim]"
+        info = Text.assemble(
+            ("Runtime: ", f"bold {self.COLORS['text_secondary']}"),
+            (f"{self.global_stats['elapsed']}", self.COLORS["secondary"]),
+            (" | ", "dim"),
+            ("Status: ", f"bold {self.COLORS['text_secondary']}"),
+            ("ACTIVE", self.COLORS["success"] if self._updating else "dim red")
         )
+
+        grid = Table.grid(expand=True)
+        grid.add_column(justify="left")
+        grid.add_column(justify="right")
+        grid.add_row(title, info)
 
         return Panel(
             grid,
-            title="[bold]Dashboard[/bold]",
-            border_style="bright_blue",
+            border_style=self.COLORS["primary"],
+            padding=(0, 1)
+        )
+
+    def _draw_perf_sparkline(self, data: List[float]) -> Text:
+        """Draw a single-line Braille sparkline for performance history."""
+        if not data:
+            return Text("N/A", style="dim")
+        
+        # Braille dots mapping (2x4 grid per char)
+        # We'll use a simpler version: 1-dot wide, 4-dot high resolution per char
+        # to show a smooth line in 1 text line.
+        # Braille dots 1-2-3-7 (left) and 4-5-6-8 (right)
+        # For a single column (left side of char), we use dots 1, 2, 3, 7
+        braille_levels = [0x00, 0x40, 0x04, 0x02, 0x01] # Empty, dot 7, dot 3, dot 2, dot 1 (bottom to top)
+        # Actually, let's just use the standard vertical blocks for simplicity 
+        # but if we want a LINE look, we can use:
+        # Dots 1, 2, 3, 7 are the vertical column.
+        # But wait, Braille is 2 columns. We can pack 2 data points per character!
+        
+        width = 24 # characters (48 data points)
+        display_data = data[-(width*2):]
+        # Pad with 0s if needed to make it even
+        if len(display_data) % 2 != 0:
+            display_data = [display_data[0]] + display_data
+            
+        min_v = min(data)
+        max_v = max(data)
+        range_v = max_v - min_v
+        
+        def get_dot_mask(val, col_type): # col_type 0=left, 1=right
+            if range_v == 0:
+                level = 2 # middle
+            else:
+                level = int((val - min_v) / range_v * 3) # 0 to 3 (4 levels)
+            
+            # Braille dots: 1(L1), 2(L2), 3(L3), 4(R1), 5(R2), 6(R3), 7(L4), 8(R4)
+            # We use 4 vertical levels. 
+            # Level 0 (bottom): Dot 7 (L) or 8 (R)
+            # Level 1: Dot 3 (L) or 6 (R)
+            # Level 2: Dot 2 (L) or 5 (R)
+            # Level 3 (top): Dot 1 (L) or 4 (R)
+            if col_type == 0: # Left column
+                masks = [0x40, 0x04, 0x02, 0x01]
+            else: # Right column
+                masks = [0x80, 0x20, 0x10, 0x08]
+            return masks[level]
+
+        spark_chars = []
+        for i in range(0, len(display_data), 2):
+            v_left = display_data[i]
+            v_right = display_data[i+1]
+            
+            char_code = 0x2800 # Base Braille
+            char_code |= get_dot_mask(v_left, 0)
+            char_code |= get_dot_mask(v_right, 1)
+            spark_chars.append(chr(char_code))
+            
+        avg_v = sum(data) / len(data)
+        last_v = data[-1]
+        color = self.COLORS["success"] if last_v >= avg_v else self.COLORS["warning"]
+        
+        return Text("".join(spark_chars), style=color)
+
+    def _update_sidebar(self) -> Panel:
+        """Update the sidebar with system health and global stats."""
+        try:
+            cpu = psutil.cpu_percent(interval=None)
+            mem = psutil.virtual_memory().percent
+        except:
+            cpu, mem = 0, 0
+
+        def _get_metric_color(val, threshold1, threshold2):
+            if val < threshold1: return self.COLORS["success"]
+            if val < threshold2: return self.COLORS["warning"]
+            return self.COLORS["error"]
+
+        cpu_color = _get_metric_color(cpu, 60, 85)
+        mem_color = _get_metric_color(mem, 70, 90)
+
+        stats_group = Group(
+            Text("[STATS]", style=f"bold {self.COLORS['accent']}"),
+            Text(f"CPU: {cpu}% | MEM: {mem}%", style=self.COLORS["secondary"]),
+            Text(f"Progress: {self.global_stats['completed']}/{self.global_stats['total']}", style=self.COLORS["secondary"]),
+            Text(f"Rem: {self.global_stats['active']} | ETA: {self.global_stats.get('eta_global', '...')}", style=self.COLORS["warning"]),
+            Text(f"S: {self.global_stats['completed']} | F: {self.global_stats['failed']}", style=self.COLORS["success"]),
+            
+            Text(f"\n[PERFORMANCE]", style=f"bold {self.COLORS['accent']}"),
+            Text(f"Eff: {self.global_stats['global_efficiency']}", style=self.COLORS["secondary"]),
+            self._draw_perf_sparkline(self.perf_history),
+            Text("Eixo X: tempo (5s/ponto)", style="dim italic")
+        )
+
+        return Panel(
+            stats_group,
+            title="[bold]Metrics[/bold]",
+            border_style=f"bold {self.COLORS['secondary']}",
             padding=(0, 1)
         )
 
     def _update_footer(self) -> Panel:
-        """Update the footer with system metrics and recent logs."""
-        try:
-            cpu = psutil.cpu_percent(interval=None)  # Non-blocking
-            mem = psutil.virtual_memory().percent
-        except:
-            cpu, mem = 0, 0
-        
-        metrics_text = Text.assemble(
-            ("System: ", "dim"),
-            (f"CPU {cpu:.0f}%", "green" if cpu < 70 else "red"),
-            (" | ", "dim"),
-            (f"MEM {mem:.0f}%", "green" if mem < 80 else "red"),
-            (" | ", "dim"),
-            (f"{datetime.now().strftime('%H:%M:%S')}", "cyan")
-        )
-
-        # Show more logs if space permits, but footer is fixed height
-        # Keeping 5 lines is safe
+        """Update the footer with a clean high-density log feed."""
         log_lines = self.recent_logs[-self._max_logs:] if self.recent_logs else []
-        log_content = "\n".join([f"[dim]›[/dim] {log}" for log in log_lines])
         
-        content = Group(
-            metrics_text,
-            "",
-            Panel(
-                log_content if log_content else "[dim]Aguardando atividade...[/dim]", 
-                title="[bright_black]Atividade Recente[/bright_black]", 
-                border_style="bright_black",
-                padding=(0, 1)
-            )
+        styled_logs = []
+        for log in log_lines:
+            if "❌" in log or "FAIL" in log or "Error" in log:
+                style = self.COLORS["error"]
+            elif "✅" in log or "SUCCESS" in log:
+                style = self.COLORS["success"]
+            elif "WORKING" in log or "STARTED" in log:
+                style = self.COLORS["secondary"]
+            else:
+                style = self.COLORS["text_secondary"]
+            
+            styled_logs.append(Text(f"› {log}", style=style))
+
+        return Panel(
+            Group(*styled_logs) if styled_logs else Text("Awaiting system signals...", style="dim"),
+            title="[bold blue]Recent Activity[/bold blue]",
+            border_style=f"dim {self.COLORS['primary']}",
+            padding=(0, 1)
         )
-        
-        return Panel(content, border_style="bright_black", padding=(0, 1))
 
     def _build_renderable(self) -> Layout:
-        """Build the complete renderable layout."""
+        """Build the complete renderable layout with sidebar integration."""
         layout = self._create_layout()
         layout["header"].update(self._update_header())
         layout["main"].update(self._build_progress_table())
+        layout["sidebar"].update(self._update_sidebar())
         layout["footer"].update(self._update_footer())
         return layout
 
@@ -197,7 +303,13 @@ class UIController:
 
     def update_display(self) -> None:
         """Update the live display if active."""
-        if self.live and self._updating:
+        if not (self.live and self._updating):
+            return
+            
+        # Recalculate efficiency and history before rendering
+        self._update_efficiency_stats()
+        
+        with self._render_lock:
             try:
                 # Use refresh=True to force re-render with current terminal dimensions
                 self.live.update(self._build_renderable(), refresh=True)
@@ -212,6 +324,49 @@ class UIController:
         # Keep only recent logs
         if len(self.recent_logs) > self._max_logs * 2:
             self.recent_logs = self.recent_logs[-self._max_logs:]
+
+    def _update_efficiency_stats(self) -> None:
+        """Update global efficiency and performance history based on current stats."""
+        if not self._run_start_time:
+            return
+
+        elapsed_seconds = max(0.0, time.time() - self._run_start_time)
+        minutes, seconds = divmod(int(elapsed_seconds), 60)
+        self.global_stats['elapsed'] = f"{minutes}m {seconds}s"
+        
+        if elapsed_seconds > 0:
+            # Always calculate current efficiency for the text readout
+            efficiency = 0.0
+            if self.global_stats['completed'] > 0:
+                efficiency = (self.global_stats['completed'] / elapsed_seconds) * 60
+            
+            self.global_stats['global_efficiency'] = f"{efficiency:.1f} POs/min"
+            
+            # Sampling logic: Update history every 5 seconds for the time-series graph
+            now = time.time()
+            if now - self._last_perf_update >= 5.0:
+                self.perf_history.append(efficiency)
+                if len(self.perf_history) > self._max_perf_history:
+                    self.perf_history.pop(0)
+                self._last_perf_update = now
+
+            total = self.global_stats.get('total', 0)
+            completed_failed = self.global_stats.get('completed', 0) + self.global_stats.get('failed', 0)
+            self.global_stats['active'] = max(0, total - completed_failed)
+            
+            remaining = self.global_stats['active']
+            # Only show ETA after at least 2 POs or 30s to have a stable baseline
+            if remaining > 0 and (self.global_stats['completed'] >= 2 or elapsed_seconds >= 30):
+                avg_time = elapsed_seconds / self.global_stats['completed']
+                eta_sec = avg_time * remaining
+                em, es = divmod(int(eta_sec), 60)
+                self.global_stats['eta_global'] = f"{em}m {es}s"
+            elif remaining == 0:
+                self.global_stats['eta_global'] = "0m 0s"
+            else:
+                self.global_stats['eta_global'] = "Calculando..."
+        elif elapsed_seconds > 10:
+            self.global_stats['global_efficiency'] = "Calculando..."
 
     def update_with_metrics(self, communication_manager) -> None:
         """Update display with metrics from communication manager."""
@@ -278,62 +433,58 @@ class UIController:
             self.global_stats['total'] = agg_metrics.get('total_processed', 0)
         self.global_stats['completed'] = agg_metrics.get('total_successful', 0)
         self.global_stats['failed'] = agg_metrics.get('total_failed', 0)
-        total = self.global_stats.get('total', 0)
-        self.global_stats['active'] = max(0, total - self.global_stats['completed'] - self.global_stats['failed'])
-
-        if self._run_start_time:
-            elapsed_seconds = max(0.0, time.time() - self._run_start_time)
-            minutes, seconds = divmod(int(elapsed_seconds), 60)
-            self.global_stats['elapsed'] = f"{minutes}m {seconds}s"
-            
-            if elapsed_seconds > 0 and self.global_stats['completed'] > 0:
-                efficiency = (self.global_stats['completed'] / elapsed_seconds) * 60
-                self.global_stats['global_efficiency'] = f"{efficiency:.1f} POs/min"
-                
-                remaining = self.global_stats['active']
-                if remaining > 0:
-                    avg_time = elapsed_seconds / self.global_stats['completed']
-                    eta_sec = avg_time * remaining
-                    em, es = divmod(int(eta_sec), 60)
-                    self.global_stats['eta_global'] = f"{em}m {es}s"
-                else:
-                    self.global_stats['eta_global'] = "0m 0s"
-            elif elapsed_seconds > 10:
-                self.global_stats['global_efficiency'] = "Calculando..."
-
+        
         self.update_display()
 
     def start_live_updates(self, communication_manager, update_interval: float = 0.5):
         """Start live updates from communication manager."""
-        import threading
-        
         if self._run_start_time is None:
             self._run_start_time = time.time()
 
-        def update_loop():
+        if self.update_thread and self.update_thread.is_alive():
+            return
+
+        def update_loop_existing():
+            while self._updating and self.live:
+                try:
+                    self.update_with_metrics(communication_manager)
+                except Exception:
+                    pass
+                time.sleep(update_interval)
+
+        def update_loop_owned():
             # Use screen=True for full window mode
             with Live(
-                self.get_initial_renderable(), 
-                console=self.console, 
+                self.get_initial_renderable(),
+                console=self.console,
                 refresh_per_second=4,
                 screen=True,  # Full screen mode
                 auto_refresh=False  # Manual refresh for proper resize handling
             ) as live:
+                self._live_owned = True
                 self.live = live
                 while self._updating:
                     try:
                         self.update_with_metrics(communication_manager)
-                        time.sleep(update_interval)
                     except Exception:
-                        time.sleep(update_interval)
+                        pass
+                    time.sleep(update_interval)
+            self._live_owned = False
+            self.live = None
 
         self._updating = True
-        self.update_thread = threading.Thread(target=update_loop, daemon=True)
+        if self.live:
+            self.update_thread = threading.Thread(target=update_loop_existing, daemon=True)
+        else:
+            self.update_thread = threading.Thread(target=update_loop_owned, daemon=True)
         self.update_thread.start()
 
     def stop_live_updates(self):
         """Stop live updates."""
         self._updating = False
-        if hasattr(self, 'update_thread'):
+        if self.update_thread:
             self.update_thread.join(timeout=2.0)
-        self.live = None
+            self.update_thread = None
+        if self._live_owned:
+            self.live = None
+            self._live_owned = False
