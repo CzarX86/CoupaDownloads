@@ -1,10 +1,16 @@
+[project]
+name = "coupadownloads"
+version = "0.1.0"
+requires-python = ">=3.12"
+
 [tool.poetry]
 name = "coupadownloads"
 version = "0.1.0"
 description = ""
 authors = ["CzarX86 <julio.cezar@outlook.com>"]
 readme = "README.md"
-package-mode = false
+package-mode = true
+packages = [{include = "src"}]
 
 [tool.poetry.dependencies]
 python = ">=3.12,<3.13"
@@ -13,23 +19,12 @@ requests = ">=2.31.0"
 pandas = ">=2.0.0"
 openpyxl = ">=3.1.0"
 psutil = ">=5.9.0"  # System resource monitoring for worker scaling
-extract-msg = ">=0.41.0"
 webdriver-manager = "^4.0.2"
-rich = "^14.1.0"
-textual = "^0.58.0"
+textual = "^0.58.0"  # Premium TUI
 playwright = "^1.40.0"
-tenacity = "^8.2.0"  # Retry logic for worker failure handling
 structlog = "^23.0.0"  # Structured logging for parallel processing
 httpx = "^0.27.0"
-aiofiles = "^23.0.0"
-pydantic = "^2.5.0"
-beautifulsoup4 = "^4.12.0"
-lxml = "^4.9.0"
-pydantic-settings = "^2.10.1"
-xlsx2csv = "^0.8.4"
-customtkinter = "^5.2.2"
-typer = "^0.19.2"
-typing-extensions = "^4.15.0"
+pydantic-settings = "^2.10.1"  # Settings management in config.py
 
 [tool.poetry.scripts]
 coupa-downloader = "src.cli.main:main"

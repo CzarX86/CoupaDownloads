@@ -17,6 +17,8 @@ class CSVManager:
         self._csv_session_id: Optional[str] = None
         self._sqlite_handler: Optional[SQLiteHandler] = None
         self._sqlite_db_path: Optional[str] = None
+        self._input_csv_path: Optional[Path] = None
+        self._output_copy_path: Optional[Path] = None
 
     @property
     def csv_handler(self) -> Optional[CSVHandler]:
@@ -42,17 +44,21 @@ class CSVManager:
         """Initialize CSV handler if input is CSV."""
         if csv_input_path.suffix.lower() == '.csv' and not self.csv_handler:
             try:
+                from .lib.config import Config
                 # 1. Prepare SQLite session DB path
                 session_id = datetime.now().strftime("%Y%m%d-%H%M%S")
                 backup_dir = csv_input_path.parent / "backups"
                 backup_dir.mkdir(parents=True, exist_ok=True)
                 db_path = backup_dir / f"session_{session_id}.db"
                 self._sqlite_db_path = str(db_path)
+                self._input_csv_path = csv_input_path
+                self._output_copy_path = self._build_output_copy_path(csv_input_path)
 
                 # 2. Initialize Handler (which now handles its own SQLite sub-handler)
                 self.csv_handler, self._csv_write_queue, self._csv_session_id = CSVHandler.create_handler(
                     csv_input_path, 
                     enable_incremental_updates=True,
+                    enable_legacy_updates=not getattr(Config, "SQLITE_ONLY_PERSISTENCE", True),
                     sqlite_db_path=self._sqlite_db_path
                 )
                 
@@ -61,6 +67,10 @@ class CSVManager:
                 
                 print(f"🛡️ CSV backup created at: {CSVHandler.get_backup_path(csv_input_path)}")
                 print(f"🚀 SQLite persistence enabled: {self._sqlite_db_path}")
+                if getattr(Config, "SQLITE_ONLY_PERSISTENCE", True):
+                    print("🧠 SQLite-only persistence enabled: CSV will be updated only after completion.")
+                if self._output_copy_path:
+                    print(f"🧾 Output copy will be generated at: {self._output_copy_path}")
                 
                 return self._csv_session_id
             except Exception as e:
@@ -74,6 +84,18 @@ class CSVManager:
         """Initialize SQLite handler."""
         self._sqlite_db_path = db_path
         self._sqlite_handler = SQLiteHandler(db_path)
+
+    def _build_output_copy_path(self, input_path: Path) -> Path:
+        """Build output copy path for final export, keeping input file untouched."""
+        from .lib.config import Config
+        suffix = getattr(Config, "CSV_OUTPUT_SUFFIX", "_processed")
+        include_ts = bool(getattr(Config, "CSV_OUTPUT_INCLUDE_TIMESTAMP", True))
+        output_dir = getattr(Config, "CSV_OUTPUT_DIR", None)
+        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S") if include_ts else ""
+        ts_part = f"_{timestamp}" if timestamp else ""
+        out_dir = Path(output_dir).expanduser() if output_dir else input_path.parent
+        filename = f"{input_path.stem}{suffix}{ts_part}{input_path.suffix}"
+        return out_dir / filename
 
     def seed_sqlite(self, df: pd.DataFrame):
         """Seed SQLite with initial data."""
@@ -132,26 +154,31 @@ class CSVManager:
                 print("⚠️ CSV handler has no path for export.")
                 return
 
-            file_path = self.csv_handler.csv_path
-            if not file_path.exists():
-                print(f"⚠️ File path {file_path} does not exist for export.")
+            input_path = self.csv_handler.csv_path
+            if not input_path.exists():
+                print(f"⚠️ File path {input_path} does not exist for export.")
                 return
+            
+            output_path = self._output_copy_path or self._build_output_copy_path(input_path)
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            import shutil
+            shutil.copy2(input_path, output_path)
 
-            print(f"💾 Merging {len(results_df)} records from SQLite back to {file_path.name}...")
+            print(f"💾 Merging {len(results_df)} records from SQLite into {output_path.name}...")
             
             # Read original file using ExcelProcessor logic to maintain compatibility
             from .lib.excel_processor import ExcelProcessor
             processor = ExcelProcessor()
-            _, ext = os.path.splitext(str(file_path).lower())
+            _, ext = os.path.splitext(str(output_path).lower())
             
             # We need to know the original structure to merge correctly
             if ext == '.csv':
-                df, sep, enc = processor._read_csv_auto(str(file_path))
+                df, sep, enc = processor._read_csv_auto(str(output_path))
             else:
                 # Excel: read specific sheet
-                xl = pd.ExcelFile(file_path)
+                xl = pd.ExcelFile(output_path)
                 sheet_name = 'PO_Data' if 'PO_Data' in xl.sheet_names else xl.sheet_names[0]
-                df = pd.read_excel(file_path, sheet_name=sheet_name, engine='openpyxl')
+                df = pd.read_excel(output_path, sheet_name=sheet_name, engine='openpyxl')
 
             # Find the actual PO_NUMBER column
             po_col = processor._find_column(df, 'PO_NUMBER')
@@ -195,12 +222,12 @@ class CSVManager:
                 
                 # Save back to disk
                 if ext == '.csv':
-                    df.to_csv(file_path, index=False, sep=sep, encoding=enc)
+                    df.to_csv(output_path, index=False, sep=sep, encoding=enc)
                 else:
-                    with pd.ExcelWriter(file_path, engine='openpyxl') as writer:
+                    with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
                         df.to_excel(writer, sheet_name=sheet_name, index=False)
                 
-                print(f"✅ Final export completed successfully to {file_path}")
+                print(f"✅ Final export completed successfully to {output_path}")
             else:
                 print("ℹ️ No processed records to export (all still PENDING).")
                 

@@ -1,10 +1,10 @@
-# Tkinter UI module for CoupaDownloads
+# UI module for CoupaDownloads
 
 """
-Graphical User Interface components for CoupaDownloads.
+User Interface components for CoupaDownloads.
 
-This module provides a Tkinter-based GUI for configuring and controlling
-download operations without requiring command-line knowledge.
+This module provides a Textual-based TUI for real-time monitoring
+and control of download operations.
 """
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"

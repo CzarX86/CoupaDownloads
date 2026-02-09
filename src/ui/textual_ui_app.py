@@ -71,14 +71,14 @@ class PerformanceGraph(Static):
 class WorkerStatusGrid(Static):
     """Widget to display detailed worker status."""
     
-    workers = reactive([])
+    worker_entries = reactive([])
 
     def render(self) -> str:
-        if not self.workers:
+        if not self.worker_entries:
             return "[dim]Waiting for workers...[/]"
         
         lines = ["[bold blue]WORKER STATUS[/]"]
-        for w in self.workers:
+        for w in self.worker_entries:
             wid = w.get("worker_id", "N/A")
             po = w.get("current_po", "Idle")
             status = w.get("status", "Idle")
@@ -239,10 +239,28 @@ class CoupaTextualUI(App):
             worker_states = agg.get("workers_status", {})
             
             displayed_workers = []
-            # Sort by worker_id (int) for consistent UI
-            for wid in sorted(worker_states.keys()):
+            # Sort by worker_id (handle both int and str)
+            def sort_key(k):
+                if isinstance(k, int): return k
+                if isinstance(k, str) and k.startswith('worker-'):
+                    try: return int(k.split('-')[1])
+                    except: return float('inf')
+                return str(k)
+            
+            for wid in sorted(worker_states.keys(), key=sort_key):
                 m = worker_states[wid]
-                display_id = f"Worker {wid + 1}"
+                
+                # Robust display ID generation
+                display_id = str(wid)
+                if isinstance(wid, int):
+                    display_id = f"Worker {wid + 1}"
+                elif isinstance(wid, str) and wid.startswith('worker-'):
+                    try:
+                        num = wid.split('-')[1]
+                        display_id = f"Worker {num}"
+                    except:
+                        pass
+                
                 displayed_workers.append({
                     "worker_id": display_id,
                     "current_po": m.get("po_id", "Idle"),
@@ -253,7 +271,7 @@ class CoupaTextualUI(App):
                 })
             
             if displayed_workers:
-                worker_grid.workers = displayed_workers
+                worker_grid.worker_entries = displayed_workers
             
             # Update logs from recent metrics
             log_feed = self.query_one("#log-feed", LogFeed)
@@ -275,8 +293,7 @@ class CoupaTextualUI(App):
                     log_feed.logs = log_feed.logs + unique_new_logs
                     if len(log_feed.logs) > 50:
                         log_feed.logs = log_feed.logs[-50:]
-                    # Notify Textual that reactive state changed (sometimes needed if update is complex)
-                    log_feed.mutate() 
+ 
 
             # Update Efficiency / Perf Graph
             elapsed = time.time() - self.start_time
@@ -287,7 +304,8 @@ class CoupaTextualUI(App):
                 
                 # Fallback if metrics aren't populated yet
                 if efficiency == 0.0:
-                    efficiency = (agg.get("total_successful", 0) / elapsed) * 60
+                    processed_count = agg.get("total_successful", 0) + agg.get("total_failed", 0)
+                    efficiency = (processed_count / elapsed) * 60
                 
                 if time.time() - self.last_perf_update >= 5:
                     perf_graph = self.query_one("#perf-graph", PerformanceGraph)
@@ -302,12 +320,19 @@ class CoupaTextualUI(App):
             success = agg.get("total_successful", 0)
             failed = agg.get("total_failed", 0)
             processed = success + failed
+            active = agg.get("active_count", 0)
+            started = agg.get("total_seen", 0)
             
             runtime = f"{int(elapsed // 60)}m {int(elapsed % 60)}s"
+            progress_display = f"{processed}/{total_goal}"
+            if active > 0:
+                progress_display = f"{processed}/{total_goal} (+{active} active)"
+            elif started > processed:
+                progress_display = f"{processed}/{total_goal} (+{started - processed} started)"
             
             header_stats.update(
                 f" [stat-label]Runtime:[/] [stat-value]{runtime}[/] | "
-                f"[stat-label]Progress:[/] [stat-value]{processed}/{total_goal}[/] | "
+                f"[stat-label]Progress:[/] [stat-value]{progress_display}[/] | "
                 f"[stat-label]Success:[/] [stat-value]{success}[/] | "
                 f"[stat-label]Failed:[/] [stat-value]{failed}[/] | "
                 f"[stat-label]Efficiency:[/] [stat-value]{efficiency:.1f} POs/min[/]"

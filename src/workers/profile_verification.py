@@ -4,7 +4,7 @@ Provides ProfileVerifier that runs enabled verification methods with
 per-method timeouts and basic retry semantics.
 """
 
-from .__future__ import annotations
+from __future__ import annotations
 
 import time
 from typing import Dict, Any, List

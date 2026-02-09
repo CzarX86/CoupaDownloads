@@ -1,7 +1,7 @@
 """
 Módulo ProcessingController.
 
-Coordena o processamento de entradas de PO, integrando WorkerManager, UIController e CSVHandler
+Coordena o processamento de entradas de PO, integrando WorkerManager e CSVHandler
 para execução paralela e feedback em tempo real.
 """
 
@@ -12,7 +12,6 @@ import threading
 import multiprocessing as mp
 
 from .worker_manager import WorkerManager
-from .ui_controller import UIController
 from .core.csv_handler import CSVHandler, WriteQueue
 from .lib.models import HeadlessConfiguration
 
@@ -20,9 +19,8 @@ from .lib.models import HeadlessConfiguration
 class ProcessingController:
     """Controller for PO processing logic, extracted from MainApp."""
 
-    def __init__(self, worker_manager: WorkerManager, ui_controller: UIController):
+    def __init__(self, worker_manager: WorkerManager):
         self.worker_manager = worker_manager
-        self.ui_controller = ui_controller
         self.csv_handler: Optional[CSVHandler] = None
         self._csv_write_queue: Optional[WriteQueue] = None
         self._csv_session_id: Optional[str] = None
@@ -42,76 +40,8 @@ class ProcessingController:
             self._csv_write_queue = None
 
     def _parallel_progress_callback(self, progress: Dict[str, Any]) -> None:
-        """Progress callback for ProcessingSession parallel processing."""
-        try:
-            total = progress.get('total_tasks', 0)
-            completed = progress.get('completed_tasks', 0)
-            failed = progress.get('failed_tasks', 0)
-            active = progress.get('active_tasks', 0)
-
-            # Update global stats
-            self.ui_controller.global_stats["total"] = total
-            self.ui_controller.global_stats["completed"] = completed
-            self.ui_controller.global_stats["failed"] = failed
-            self.ui_controller.global_stats["active"] = active
-
-            # Calculate elapsed time
-            if self._run_start_time:
-                elapsed_seconds = time.perf_counter() - self._run_start_time
-                minutes, seconds = divmod(int(elapsed_seconds), 60)
-                self.ui_controller.global_stats["elapsed"] = f"{minutes}m {seconds}s"
-
-                # Estimate ETA global
-                if completed > 0:
-                    avg_time_per_po = elapsed_seconds / completed
-                    remaining_pos = total - completed - failed
-                    eta_seconds = avg_time_per_po * remaining_pos
-                    eta_minutes, eta_seconds = divmod(int(eta_seconds), 60)
-                    self.ui_controller.global_stats["eta_global"] = f"{eta_minutes}m {eta_seconds}s"
-                else:
-                    self.ui_controller.global_stats["eta_global"] = "⏳"
-
-                # Calculate global efficiency
-                if elapsed_seconds > 0:
-                    global_efficiency = (completed / elapsed_seconds) * 60  # POs per minute
-                    self.ui_controller.global_stats["global_efficiency"] = f"{global_efficiency:.1f} POs/min"
-                else:
-                    self.ui_controller.global_stats["global_efficiency"] = "⏳"
-
-            # Update worker states with individual efficiency estimates
-            completed_per_worker = completed // self.worker_manager.max_workers
-            failed_per_worker = failed // self.worker_manager.max_workers
-            active_per_worker = active // self.worker_manager.max_workers
-            total_per_worker = total // self.worker_manager.max_workers
-            self.ui_controller.worker_states = []
-            for i in range(self.worker_manager.max_workers):
-                worker_id = f"Worker {i+1}"
-                progress_str = f"{completed_per_worker}/{total_per_worker} POs"
-                elapsed_worker = self.ui_controller.global_stats["elapsed"]
-                eta_worker = self.ui_controller.global_stats["eta_global"]
-
-                # Estimate individual worker efficiency based on distributed workload
-                # Assuming even distribution of completed tasks among workers
-                worker_completed_estimate = completed_per_worker
-                if elapsed_seconds > 0 and worker_completed_estimate > 0:
-                    worker_efficiency = (worker_completed_estimate / elapsed_seconds) * 60
-                    efficiency = f"{worker_efficiency:.1f} POs/min"
-                else:
-                    efficiency = "⏳"
-
-                self.ui_controller.worker_states.append({
-                    "worker_id": worker_id,
-                    "progress": progress_str,
-                    "elapsed": elapsed_worker,
-                    "eta": eta_worker,
-                    "efficiency": efficiency
-                })
-
-            # Update live with Group
-            self.ui_controller.update_display()
-
-        except Exception as e:
-            print(f"Error in progress callback: {e}")
+        """Progress callback (minimal version)."""
+        pass
 
     def process_po_entries(
         self,
@@ -139,10 +69,8 @@ class ProcessingController:
         """
         from .lib.models import ExecutionMode
         execution_mode = execution_mode or ExecutionMode.STANDARD
-        if self.ui_controller:
-            self.ui_controller.execution_mode = execution_mode
-            mode_val = execution_mode.value if hasattr(execution_mode, 'value') else str(execution_mode)
-            self.ui_controller.add_log(f"🚀 Execution Mode: {mode_val.upper()}")
+        mode_val = execution_mode.value if hasattr(execution_mode, 'value') else str(execution_mode)
+        print(f"🚀 Execution Mode: {mode_val.upper()}")
 
 
         # Use unified processing engine for all parallel cases
@@ -171,52 +99,32 @@ class ProcessingController:
             mode_display = getattr(execution_mode, 'value', str(execution_mode)).upper()
             print(f"📊 Using in-process mode (single WebDriver, sequential) - Mode: {mode_display}")
             initialize_browser_once()
-            prepare_progress_tracking(len(po_data_list))
+            if prepare_progress_tracking:
+                prepare_progress_tracking(len(po_data_list))
             successful = 0
             failed = 0
             for i, po_data in enumerate(po_data_list):
                 ok = process_single_po(po_data, hierarchy_cols, has_hierarchy_data, i, len(po_data_list), execution_mode=execution_mode)
                 if ok:
                     successful += 1
-                    self.ui_controller.global_stats["completed"] += 1
                 else:
                     failed += 1
-                    self.ui_controller.global_stats["failed"] += 1
-                # Update active count (decrement as we complete)
-                self.ui_controller.global_stats["active"] = max(0, len(po_data_list) - (successful + failed))
+                if communication_manager:
+                    try:
+                        communication_manager.send_metric({
+                            'worker_id': 0,
+                            'po_id': po_data.get('po_number', ''),
+                            'status': 'COMPLETED' if ok else 'FAILED',
+                            'timestamp': time.time(),
+                            'attachments_found': 0,
+                            'attachments_downloaded': 0,
+                            'message': '',
+                        })
+                    except Exception:
+                        pass
                 
-                # Calculate elapsed time and ETA
-                if self._run_start_time:
-                    elapsed_seconds = time.perf_counter() - self._run_start_time
-                    minutes, seconds = divmod(int(elapsed_seconds), 60)
-                    self.ui_controller.global_stats["elapsed"] = f"{minutes}m {seconds}s"
-                    
-                    # Estimate ETA global
-                    if successful > 0:
-                        avg_time_per_po = elapsed_seconds / successful
-                        remaining_pos = len(po_data_list) - successful - failed
-                        eta_seconds = avg_time_per_po * remaining_pos
-                        eta_minutes, eta_seconds = divmod(int(eta_seconds), 60)
-                        self.ui_controller.global_stats["eta_global"] = f"{eta_minutes}m {eta_seconds}s"
-                    else:
-                        self.ui_controller.global_stats["eta_global"] = "⏳"
-                    
-                    # Calculate global efficiency
-                    if elapsed_seconds > 0:
-                        global_efficiency = (successful / elapsed_seconds) * 60  # POs per minute
-                        self.ui_controller.global_stats["global_efficiency"] = f"{global_efficiency:.1f} POs/min"
-                    else:
-                        self.ui_controller.global_stats["global_efficiency"] = "⏳"
-                
-                # Update worker progress for single worker
-                self.ui_controller.worker_states[0]["progress"] = f"{successful + failed}/{len(po_data_list)} POs"
-                self.ui_controller.worker_states[0]["elapsed"] = self.ui_controller.global_stats["elapsed"]
-                self.ui_controller.worker_states[0]["eta"] = self.ui_controller.global_stats["eta_global"]
-                efficiency = f"{(successful / max(1, elapsed_seconds)) * 60:.1f} POs/min" if elapsed_seconds > 0 else "⏳"
-                self.ui_controller.worker_states[0]["efficiency"] = efficiency
-                
-                # Update live display
-                self.ui_controller.update_display()
+                # Sequential logging
+                print(f"📊 Progress: {successful + failed}/{len(po_data_list)} (Success: {successful}, Failed: {failed})")
 
         return successful, failed
 

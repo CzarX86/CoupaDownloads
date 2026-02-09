@@ -111,60 +111,8 @@ def _suffix_for_status(status_code: str) -> str:
     return mapping.get(status_code, f'_{status_code}')
 
 
-def _legacy_rename_folder_with_status(folder_path: str, status_code: str) -> str:
-    """Rename a __WORK folder to its final status folder.
-    
-    Properly handles __WORK folders created during processing by:
-    1. Stripping __WORK suffix
-    2. Removing any existing status suffixes  
-    3. Applying the final status suffix
-    """
-    import shutil
-    try:
-        if not folder_path or not os.path.exists(folder_path):
-            return folder_path
-            
-        parent = os.path.dirname(folder_path)
-        base = os.path.basename(folder_path)
-        status_upper = (status_code or 'FAILED').upper().strip()
-        
-        # Remove __WORK suffix (including malformed duplicates)
-        clean_base = re.sub(r'(?:__WORK)+$', '', base)
-        
-        # Remove old status suffixes - bracket format _[STATUS] and plain _STATUS
-        clean_base = re.sub(
-            r'_?\[?(COMPLETED|FAILED|PARTIAL|NO_ATTACHMENTS|PO_NOT_FOUND|TIMEOUT)\]?$',
-            '',
-            clean_base,
-            flags=re.IGNORECASE
-        )
-        
-        # Normalize underscores
-        clean_base = re.sub(r'_+', '_', clean_base).rstrip('_')
-        
-        # Apply new status suffix (without brackets)
-        new_name = f"{clean_base}_{status_upper}"
-        new_path = os.path.join(parent, new_name)
-        
-        # Handle merge if target exists
-        if os.path.exists(new_path) and os.path.abspath(folder_path) != os.path.abspath(new_path):
-            for item in os.listdir(folder_path):
-                src_item = os.path.join(folder_path, item)
-                dst_item = os.path.join(new_path, item)
-                if not os.path.exists(dst_item):
-                    shutil.move(src_item, dst_item)
-            try:
-                if not os.listdir(folder_path):
-                    os.rmdir(folder_path)
-            except Exception:
-                pass
-            return new_path
-        
-        if folder_path != new_path:
-            os.rename(folder_path, new_path)
-        return new_path
-    except Exception:
-        return folder_path
+
+
 
 
 def _build_csv_updates(result: Dict[str, Any]) -> Dict[str, Any]:

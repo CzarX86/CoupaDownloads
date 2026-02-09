@@ -328,6 +328,14 @@ class WorkerProcess:
         # Create WebDriver - SIMPLIFIED CONFIGURATION
         dm = DriverManager()
         driver_path = dm.get_driver_path()
+        _debug_log(f"Worker {self.worker_id} using driver at: {driver_path}")
+        
+        # Verify driver before start
+        if not dm.verify_driver(driver_path):
+            msg = f"Worker {self.worker_id}: EdgeDriver verification failed for {driver_path}"
+            _debug_log(f"❌ {msg}")
+            raise RuntimeError(msg)
+        _debug_log(f"✅ Worker {self.worker_id}: EdgeDriver verified")
         
         # Create service with minimal configuration to avoid conflicts
         service = Service(
@@ -338,9 +346,17 @@ class WorkerProcess:
 
         # Add delay to prevent simultaneous driver starts
         import time
-        time.sleep(2)  # 2 second delay between driver initializations
+        init_delay = 2 + (abs(hash(self.worker_id)) % 3) # Jittered delay
+        _debug_log(f"Worker {self.worker_id} delaying start by {init_delay}s...")
+        time.sleep(init_delay)
         
-        driver = webdriver.Edge(service=service, options=edge_options)
+        try:
+            _debug_log(f"Worker {self.worker_id} spawning Edge process...")
+            driver = webdriver.Edge(service=service, options=edge_options)
+            _debug_log(f"✅ Worker {self.worker_id} Edge process spawned successfully")
+        except Exception as e:
+            _debug_log(f"❌ Worker {self.worker_id} failed to spawn Edge: {str(e)}")
+            raise
         
         # Force-set download directory via DevTools to override any profile defaults
         try:
@@ -367,10 +383,14 @@ class WorkerProcess:
         self.browser_session.ensure_keeper_tab()
 
         # Authenticate with Coupa
+        _debug_log(f"Worker {self.worker_id} starting authentication...")
         success = self.browser_session.authenticate()
         
         if not success:
+            _debug_log(f"❌ Worker {self.worker_id} failed to authenticate with Coupa")
             raise RuntimeError("Failed to authenticate with Coupa")
+        
+        _debug_log(f"✅ Worker {self.worker_id} authentication successful")
         
         logger.debug("Browser session initialized", worker_id=self.worker_id)
 
@@ -445,13 +465,6 @@ class WorkerProcess:
             logger.debug("Updated lib.Config.DOWNLOAD_FOLDER", worker_id=self.worker_id, path=normalized)
         except Exception as e:
             logger.warning("Failed to update lib.Config", worker_id=self.worker_id, error=str(e))
-
-        try:
-            import corelib.config as core_config  # type: ignore
-            core_config.Config.DOWNLOAD_FOLDER = normalized  # type: ignore[attr-defined]
-            logger.debug("Updated corelib.Config.DOWNLOAD_FOLDER", worker_id=self.worker_id, path=normalized)
-        except Exception as e:
-            logger.warning("Failed to update corelib.Config", worker_id=self.worker_id, error=str(e))
 
         # Also try to update any config objects that might be cached
         try:
@@ -807,9 +820,22 @@ class WorkerProcess:
 
             # Attempt quit; if it hangs Selenium may throw a timeout -> catch and force kill
             try:
-                logger.debug("Attempting graceful driver quit", worker_id=self.worker_id)
-                driver.quit()
-                logger.debug("Driver quit successful", worker_id=self.worker_id)
+                logger.debug("Attempting driver quit with timeout", worker_id=self.worker_id)
+                # Use a separate thread and event to avoid hanging forever on driver.quit()
+                def quit_driver():
+                    try:
+                        driver.quit()
+                    except Exception as e:
+                        logger.debug("driver.quit() exception", worker_id=self.worker_id, error=str(e))
+
+                quit_thread = threading.Thread(target=quit_driver, daemon=True)
+                quit_thread.start()
+                quit_thread.join(timeout=10 if not emergency else 3)
+                
+                if quit_thread.is_alive():
+                     logger.warning("driver.quit() timed out", worker_id=self.worker_id)
+                else:
+                     logger.debug("Driver quit successful", worker_id=self.worker_id)
             except Exception as quit_err:
                 logger.warning("Graceful quit failed; forcing shutdown", worker_id=self.worker_id, error=str(quit_err))
                 try:

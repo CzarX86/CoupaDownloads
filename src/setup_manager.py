@@ -85,12 +85,8 @@ class SetupManager:
         # 5) Headless mode (default: Yes) - NEW: Use HeadlessConfiguration instead of env var
         headless_preference = self._prompt_bool("Run browser in headless mode?", default=True)
 
-        # 5.1) UI Mode (NEW)
-        print("\nChoose UI Experience:")
-        print(" [1] Standard (Modern Rich UI)")
-        print(" [2] Premium (Alternative Textual UI with real-time graphs)")
-        ui_choice = input("Select UI mode [1]: ").strip()
-        ui_mode = "premium" if ui_choice == "2" else "standard"
+        # 5.1) UI Mode (Premium by default)
+        ui_mode = "premium"
 
         # 5.2) Execution Mode (NEW)
         print("\n🚀 Choose Execution Mode:")
@@ -164,7 +160,7 @@ class SetupManager:
         headless_pref = os.environ.get('HEADLESS', 'true').strip().lower() == 'true'
         
         # UI and output settings
-        ui_mode = os.environ.get('UI_MODE', 'standard').strip().lower()
+        ui_mode = os.environ.get('UI_MODE', 'premium').strip().lower()
         suppress_output = os.environ.get('SUPPRESS_WORKER_OUTPUT', '1').strip() == '1'
 
         # Download folder (apply timestamp prefix automatically)

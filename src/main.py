@@ -28,7 +28,6 @@ if project_root_str not in sys.path:
 
 # Project corelib imports are handled via relative imports within the src package.
 
-from rich.live import Live
 from .lib.browser import BrowserManager
 from .lib.config import Config as ExperimentalConfig
 from .lib.downloader import Downloader
@@ -39,7 +38,6 @@ from .lib.models import HeadlessConfiguration, InteractiveSetupSession
 # Import new managers
 from .setup_manager import SetupManager
 from .worker_manager import WorkerManager, ProcessingSession
-from .ui_controller import UIController
 from .core.communication_manager import CommunicationManager
 from .processing_controller import ProcessingController
 from .csv_manager import CSVManager
@@ -47,7 +45,7 @@ from .core.resource_assessor import ResourceAssessor
 from .core.telemetry import TelemetryProvider, ConsoleTelemetryListener
 from .core.status import StatusLevel
 from .services.processing_service import ProcessingService
-from .core.utils import _humanize_exception, _wait_for_downloads_complete, _derive_status_label, _legacy_rename_folder_with_status
+from .core.utils import _humanize_exception, _wait_for_downloads_complete, _derive_status_label
 
 # Enable interactive UI mode (set to True to enable interactive prompts)
 ENABLE_INTERACTIVE_UI = os.environ.get('ENABLE_INTERACTIVE_UI', 'True').strip().lower() == 'true'
@@ -80,8 +78,7 @@ class MainApp:
         self.folder_hierarchy = FolderHierarchyManager()
         self.setup_manager = SetupManager()
         self.worker_manager = WorkerManager(enable_parallel=self.enable_parallel, max_workers=self.max_workers)
-        self.ui_controller = UIController()
-        self.processing_controller = ProcessingController(self.worker_manager, self.ui_controller)
+        self.processing_controller = ProcessingController(self.worker_manager)
         self.csv_manager = CSVManager()
         self.telemetry = TelemetryProvider()
         # Add console listener by default for standard execution
@@ -93,7 +90,6 @@ class MainApp:
             folder_hierarchy=self.folder_hierarchy,
             storage_manager=self.csv_manager,
             telemetry=self.telemetry,
-            ui_controller=self.ui_controller
         )
         self.driver = None
         self.lock = threading.Lock()  # Thread safety for browser operations
@@ -123,70 +119,6 @@ class MainApp:
             self.browser_manager.initialize_driver(headless=self._headless_config.get_effective_headless_mode())
             self.driver = self.browser_manager.driver
             print("✅ Browser initialized successfully")
-
-    def _prepare_progress_tracking(self, total_pos: int) -> None:
-        """Reset telemetry accumulators before sequential PO processing."""
-        self._total_po_count = max(0, total_pos)
-        self._completed_po_count = 0
-        self._accumulated_po_seconds = 0.0
-        self._current_po_start_time = None
-        self._run_start_time = time.perf_counter()
-
-    def _format_duration(self, seconds: float | None) -> str:
-        """Format duration in seconds to HH:MM string."""
-        if seconds is None or seconds < 0:
-            return "--:--"
-        total_minutes = int(seconds // 60)
-        hours, minutes = divmod(total_minutes, 60)
-        return f"{hours:02d}:{minutes:02d}"
-
-    def _progress_snapshot(self) -> tuple[str, str, str]:
-        """Get current progress snapshot as (elapsed, remaining, eta)."""
-        if self._run_start_time is None:
-            return "--:--", "--:--", "--"
-
-        elapsed_seconds = max(0.0, time.perf_counter() - self._run_start_time)
-        elapsed = self._format_duration(elapsed_seconds)
-
-        if self._completed_po_count <= 0 or self._accumulated_po_seconds <= 0.0:
-            return elapsed, "--:--", "--"
-
-        remaining_pos = max(self._total_po_count - self._completed_po_count, 0)
-        if remaining_pos <= 0:
-            eta_time = datetime.now()
-            return elapsed, "00:00", eta_time.strftime("%Y-%m-%d %H:%M")
-
-        average = self._accumulated_po_seconds / self._completed_po_count
-        remaining_seconds = max(0.0, average * remaining_pos)
-        remaining = self._format_duration(remaining_seconds)
-        eta = (datetime.now() + timedelta(seconds=remaining_seconds)).strftime("%Y-%m-%d %H:%M")
-        return elapsed, remaining, eta
-
-    def _build_progress_line(self, index: int, total: int) -> str:
-        """Build progress line string for current PO processing."""
-        elapsed, remaining, eta = self._progress_snapshot()
-        return (
-            f"📋 Processing PO {index + 1}/{total} – "
-            f"Elapsed Time: {elapsed}, Remaining Time: {remaining}, "
-            f"Estimated Completion: {eta}"
-        )
-
-    def _register_po_completion(self) -> None:
-        """Register completion of a PO for timing statistics."""
-        if self._current_po_start_time is None:
-            return
-
-        duration = max(0.0, time.perf_counter() - self._current_po_start_time)
-        self._accumulated_po_seconds += duration
-        if self._total_po_count > 0:
-            self._completed_po_count = min(self._completed_po_count + 1, self._total_po_count)
-        else:
-            self._completed_po_count += 1
-        self._current_po_start_time = None
-        
-        # Sync with UI
-        self.ui_controller.global_stats["completed"] = self._completed_po_count
-        self.ui_controller.update_display()
 
 
     @staticmethod
@@ -292,7 +224,7 @@ class MainApp:
                 execution_mode=execution_mode
             )
         finally:
-            self._register_po_completion()
+            pass # _register_po_completion removed
 
 
     def run(self) -> None:
@@ -317,8 +249,6 @@ class MainApp:
                 self.ui_mode = config.get("ui_mode", "standard")
             if not hasattr(self, 'execution_mode') or self.execution_mode is None:
                 self.execution_mode = config.get("execution_mode", "standard")
-        
-        self.set_headless_configuration(headless_config)
         
         self.set_headless_configuration(headless_config)
 
@@ -406,36 +336,14 @@ class MainApp:
             self.enable_parallel = True
 
         # Set initial global stats
-        self.ui_controller.global_stats["total"] = len(po_data_list)
         self._run_start_time = time.perf_counter()
         self.processing_controller.set_run_start_time(self._run_start_time)
 
-        # Initialize worker states
-        self.ui_controller.worker_states = [
-            {
-                "worker_id": f"Worker {i+1}",
-                "current_po": "Idle",
-                "status": "Idle",
-                "attachments_found": 0,
-                "attachments_downloaded": 0,
-                "duration": 0.0
-            } for i in range(self.max_workers)
-        ]
+        # Prepare processing stats
+        processed_count = 0
 
-        if self.ui_mode == "premium":
-            self._run_premium_ui(
-                po_data_list,
-                hierarchy_cols,
-                has_hierarchy_data,
-                use_process_pool
-            )
-            # Final stats after UI closes
-            agg = self.communication_manager.get_aggregated_metrics(drain_all=True)
-            successful = agg.get("total_successful", 0)
-            failed = agg.get("total_failed", 0)
-        elif self.ui_mode == "none":
-            # Silent mode - no Rich UI
-            self.ui_controller._updating = False  # Disable Rich updates
+        if self.ui_mode == "none":
+            # Silent mode - no UI
             print(f"🚀 Starting silent processing with {len(po_data_list)} POs...")
             
             try:
@@ -450,9 +358,9 @@ class MainApp:
                     self.csv_manager.csv_handler,
                     self.folder_hierarchy,
                     self.initialize_browser_once,
-                    self._prepare_progress_tracking,
+                    None, # _prepare_progress_tracking removed
                     self.process_single_po,
-                    communication_manager=self.communication_manager if use_process_pool and self.enable_parallel else None,
+                    communication_manager=self.communication_manager,
                     sqlite_db_path=self.csv_manager.sqlite_db_path,
                     execution_mode=getattr(self, 'execution_mode', 'standard'),
                 )
@@ -460,71 +368,17 @@ class MainApp:
                 if use_process_pool and self.enable_parallel:
                     self.worker_manager.shutdown()
         else:
-            # Start Live display with initial Group (Standard UI)
-            initial_renderable = self.ui_controller.get_initial_renderable()
-            with Live(
-                initial_renderable, 
-                console=self.ui_controller.console, 
-                refresh_per_second=4,
-                screen=True,  # Full screen mode for proper rendering
-                auto_refresh=False  # Manual refresh for proper resize handling
-            ) as live:
-                self.ui_controller.live = live
-                self.ui_controller._updating = True
-                self.ui_controller.add_log("🚀 System initialized and ready")
-                
-                # Start a thread to update elapsed time every second
-                def update_timer():
-                    while self.ui_controller.live:
-                        time.sleep(1)
-                        if self._run_start_time:
-                            elapsed_seconds = time.perf_counter() - self._run_start_time
-                            minutes, seconds = divmod(int(elapsed_seconds), 60)
-                            self.ui_controller.global_stats["elapsed"] = f"{minutes}m {seconds}s"
-                            # Update worker elapsed
-                            for worker in self.ui_controller.worker_states:
-                                worker["elapsed"] = self.ui_controller.global_stats["elapsed"]
-                            # Update display with new elapsed time
-                            try:
-                                self.ui_controller.update_display()
-                            except:
-                                break  # Live closed
-                
-                timer_thread = threading.Thread(target=update_timer, daemon=True)
-                timer_thread.start()
-
-                if use_process_pool and self.enable_parallel:
-                    self.ui_controller.add_log(f"🔥 Starting parallel processing with {self.max_workers} workers")
-                    self.ui_controller.start_live_updates(self.communication_manager, update_interval=0.5)
-                else:
-                    self.ui_controller.add_log("📺 Starting sequential processing")
-                
-                # Process POs directly without UI
-                if self._headless_config is None:
-                    raise RuntimeError("Headless configuration not set.")
-                    
-                try:
-                    successful, failed = self.processing_controller.process_po_entries(
-                        po_data_list,
-                        hierarchy_cols,
-                        has_hierarchy_data,
-                        use_process_pool,
-                        self._headless_config,
-                        self.enable_parallel,
-                        self.max_workers,
-                        self.csv_manager.csv_handler,
-                        self.folder_hierarchy,
-                        self.initialize_browser_once,
-                        self._prepare_progress_tracking,
-                        self.process_single_po,
-                        communication_manager=self.communication_manager if use_process_pool and self.enable_parallel else None,
-                        sqlite_db_path=self.csv_manager.sqlite_db_path,
-                        # Pass the captured execution mode instead of default config
-                        execution_mode=getattr(self, 'execution_mode', getattr(ExperimentalConfig, 'EXECUTION_MODE', 'standard')),
-                    )
-                finally:
-                    if use_process_pool and self.enable_parallel:
-                        self.ui_controller.stop_live_updates()
+            # Default to Premium UI (Textual)
+            self._run_premium_ui(
+                po_data_list,
+                hierarchy_cols,
+                has_hierarchy_data,
+                use_process_pool
+            )
+            # Final stats after UI closes
+            agg = self.communication_manager.get_aggregated_metrics(drain_all=True)
+            successful = agg.get("total_successful", 0)
+            failed = agg.get("total_failed", 0)
 
         # Shutdown CSV handler to ensure all data is persisted
         self.csv_manager.shutdown_csv_handler()
@@ -551,13 +405,16 @@ class MainApp:
                     self.csv_manager.csv_handler,
                     self.folder_hierarchy,
                     self.initialize_browser_once,
-                    self._prepare_progress_tracking,
+                    None,  # _prepare_progress_tracking removed
                     self.process_single_po,
-                    communication_manager=self.communication_manager if use_process_pool and self.enable_parallel else None,
+                    communication_manager=self.communication_manager,
                     sqlite_db_path=self.csv_manager.sqlite_db_path,
+                    execution_mode=getattr(self, 'execution_mode', 'standard'),
                 )
             except Exception as e:
                 print(f"Error in background processing: {e}")
+                import traceback
+                traceback.print_exc()
 
         proc_thread = threading.Thread(target=run_processing, daemon=True)
         proc_thread.start()
@@ -571,12 +428,7 @@ class MainApp:
         if emergency:
             print("\n🚨 Accelerated shutdown initiated...")
 
-        # 1. Stop UI live updates if running
-        if hasattr(self, 'ui_controller'):
-            try:
-                self.ui_controller.stop_live_updates()
-            except Exception:
-                pass
+        # 1. Shutdown active sessions
 
         # 2. Stop worker manager sessions
         if hasattr(self, 'worker_manager'):

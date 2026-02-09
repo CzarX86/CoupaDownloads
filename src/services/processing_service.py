@@ -18,13 +18,11 @@ from ..lib.config import Config
 from ..core.telemetry import TelemetryProvider
 from ..core.status import StatusLevel
 from ..csv_manager import CSVManager
-from ..ui_controller import UIController
 
 # Utility functions from core.utils
 from ..core.utils import (
     _wait_for_downloads_complete,
     _derive_status_label,
-    _legacy_rename_folder_with_status,
     _humanize_exception,
     _compose_csv_message
 )
@@ -40,20 +38,18 @@ class ProcessingService:
     """
     Service that encapsulates the logic for processing POs.
     """
-    
     def __init__(
         self,
         browser_manager: BrowserProvider,
         folder_hierarchy: FolderManager,
         storage_manager: StorageManager,
-        telemetry: TelemetryEmitter,
-        ui_controller: Optional[UIController] = None
+        telemetry: TelemetryEmitter
     ):
         self.browser_manager = browser_manager
         self.folder_hierarchy = folder_hierarchy
         self.storage_manager = storage_manager
         self.telemetry = telemetry
-        self.ui_controller = ui_controller
+        self.ui_controller = None # Removed dependency
         self.lock = threading.Lock()
         self.driver = None
         self._headless_config: Optional[HeadlessConfiguration] = None
@@ -95,36 +91,10 @@ class ProcessingService:
                 po_data, hierarchy_cols, has_hierarchy_data
             )
 
-            # Define internal update helper for UI consistency
-            def _update_seq_worker(status: str, attachments_found: int = 0, attachments_downloaded: int = 0) -> None:
-                if not self.ui_controller:
-                    return
-                    
-                if not self.ui_controller.worker_states:
-                    self.ui_controller.worker_states = [{
-                        "worker_id": "Worker 1",
-                        "current_po": "Idle",
-                        "status": "Idle",
-                        "attachments_found": 0,
-                        "attachments_downloaded": 0,
-                        "duration": 0.0,
-                    }]
-                worker_state = self.ui_controller.worker_states[0]
-                worker_state["current_po"] = display_po
-                worker_state["status"] = status
-                worker_state["attachments_found"] = attachments_found
-                worker_state["attachments_downloaded"] = attachments_downloaded
-                worker_state["duration"] = max(0.0, time.perf_counter() - current_po_start_time)
-                self.ui_controller.update_display()
-
             def _emit_progress(payload: Dict[str, Any]) -> None:
-                _update_seq_worker(
-                    status=payload.get("status", "PROCESSING"),
-                    attachments_found=payload.get("attachments_found", 0),
-                    attachments_downloaded=payload.get("attachments_downloaded", 0),
-                )
+                pass
 
-            _update_seq_worker("STARTED")
+            # _update_seq_worker("STARTED") removed
 
             result_payload = None
 
@@ -200,11 +170,7 @@ class ProcessingService:
                     'COUPA_URL': result_payload.get('coupa_url', ''),
                 })
 
-            _update_seq_worker(
-                status=status_code,
-                attachments_found=result_payload.get('attachments_found', 0),
-                attachments_downloaded=result_payload.get('attachments_downloaded', 0),
-            )
+            # _update_seq_worker status update removed
             
             # Log result via telemetry
             emoji = {

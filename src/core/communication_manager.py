@@ -78,25 +78,21 @@ class CommunicationManager:
             # Avoid frequent printing in workers
             pass
             
-    def get_metrics(self, drain_all: bool = False) -> List[Dict[str, Any]]:
+    def get_metrics(self) -> List[Dict[str, Any]]:
         """
-        Consume available metrics from the queue.
-        
-        Args:
-            drain_all: If True, consumes all items in the queue. 
-                       If False, throttles to avoid UI freezing.
+        Consume all available metrics from the queue.
         
         Returns:
             List of metric dictionaries
         """
-        return self._drain_queue(drain_all=drain_all)
+        return self._drain_queue()
 
-    def _drain_queue(self, drain_all: bool = False) -> List[Dict[str, Any]]:
+    def _drain_queue(self) -> List[Dict[str, Any]]:
         """Drain available metrics into the buffer and return new items."""
         metrics: List[Dict[str, Any]] = []
 
         count = 0
-        while drain_all or count < 100:  # Throttle to avoid freezing UI unless drain_all is True
+        while count < 100:  # Throttle to avoid freezing UI
             try:
                 metric = self.metric_queue.get_nowait()
                 count += 1
@@ -145,17 +141,14 @@ class CommunicationManager:
 
         return metrics
         
-    def get_aggregated_metrics(self, drain_all: bool = False) -> Dict[str, Any]:
+    def get_aggregated_metrics(self) -> Dict[str, Any]:
         """
         Get aggregated metrics for UI display based on persistent state.
         
-        Args:
-            drain_all: If True, consumes all items in the queue before aggregating.
-            
         Returns:
             Dictionary with aggregated metrics
         """
-        self._drain_queue(drain_all=drain_all)
+        self._drain_queue()
 
         with self._metrics_lock:
             return {

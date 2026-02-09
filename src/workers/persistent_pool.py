@@ -30,7 +30,6 @@ from .worker_process import WorkerProcess
 from .task_queue import TaskQueue, ProcessingTask, TaskResult
 from .profile_manager import ProfileManager
 from .shutdown_handler import GracefulShutdown
-from ..core.protocols import StorageManager, Messenger
 
 logger = structlog.get_logger(__name__)
 
@@ -63,9 +62,9 @@ class PersistentWorkerPool:
     def __init__(
         self,
         config: PoolConfig,
-        storage_manager: Optional[StorageManager] = None,
+        csv_handler: Optional[Any] = None,
         result_callbacks: Optional[List[Callable[[POTask, Dict[str, Any]], None]]] = None,
-        messenger: Optional[Messenger] = None,
+        communication_manager: Optional[Any] = None,
     ):
         """
         Initialize the persistent worker pool.
@@ -122,11 +121,11 @@ class PersistentWorkerPool:
         # Thread pool for async operations
         self.executor = ThreadPoolExecutor(max_workers=config.worker_count + 2)
         
-        self.storage_manager = storage_manager
+        self.csv_handler = csv_handler
         self._result_callbacks: List[Callable[[POTask, Dict[str, Any]], None]] = []
         if result_callbacks:
             self._result_callbacks.extend(result_callbacks)
-        if storage_manager is not None:
+        if csv_handler is not None:
             self._result_callbacks.append(self._persist_result_to_csv)
 
         logger.info(
@@ -134,14 +133,14 @@ class PersistentWorkerPool:
             worker_count=config.worker_count,
             headless_mode=config.headless_mode,
             memory_threshold=config.memory_threshold,
-            storage_manager_attached=storage_manager is not None,
+            csv_handler_attached=csv_handler is not None,
             result_callback_count=len(self._result_callbacks),
         )
 
         # Pending finalization registry (PO_TASK, RESULT)
         self._pending_finalizations: List[tuple[POTask, Dict[str, Any]]] = []
         self._finalizer_lock = threading.Lock()
-        self.messenger = messenger
+        self.communication_manager = communication_manager
     
     def _validate_config(self) -> None:
         """Validate pool configuration."""
@@ -239,8 +238,8 @@ class PersistentWorkerPool:
                 )
 
     def _persist_result_to_csv(self, po_task: POTask, result: Dict[str, Any]) -> None:
-        """Persist worker result into storage manager if configured."""
-        if not self.storage_manager:
+        """Persist worker result into CSV handler if configured."""
+        if not self.csv_handler:
             return
 
         po_number = po_task.po_number or result.get("po_number")
@@ -274,14 +273,13 @@ class PersistentWorkerPool:
             }
             if rl_attempts:
                 try:
-                    # Note: Leaky abstraction check, keeping for compatibility during refactoring
-                    if hasattr(self.storage_manager, '_dataframe') and 'RATE_LIMIT_ATTEMPTS' in self.storage_manager._dataframe.columns:
+                    if 'RATE_LIMIT_ATTEMPTS' in getattr(self.csv_handler, '_dataframe', {}).columns:  # type: ignore[attr-defined]
                         updates['RATE_LIMIT_ATTEMPTS'] = rl_attempts
                 except Exception:
                     pass
             if to_attempts:
                 try:
-                    if hasattr(self.storage_manager, '_dataframe') and 'TIMEOUT_ATTEMPTS' in self.storage_manager._dataframe.columns:
+                    if 'TIMEOUT_ATTEMPTS' in getattr(self.csv_handler, '_dataframe', {}).columns:  # type: ignore[attr-defined]
                         updates['TIMEOUT_ATTEMPTS'] = to_attempts
                 except Exception:
                     pass
@@ -290,7 +288,7 @@ class PersistentWorkerPool:
             if supplier_name:
                 updates["SUPPLIER"] = supplier_name
 
-            self.storage_manager.update_record(po_number, updates)
+            self.csv_handler.update_record(po_number, updates)
         except Exception as csv_error:  # pragma: no cover - defensive logging
             logger.error(
                 "Failed to update CSV record",
@@ -387,8 +385,8 @@ class PersistentWorkerPool:
                 worker_id=worker_id,
                 profile=profile,
                 config=self.config,
-                storage_manager=self.storage_manager,
-                messenger=self.messenger,
+                storage_manager=self.csv_handler,
+                messenger=self.communication_manager,
             )
 
             logger.info(

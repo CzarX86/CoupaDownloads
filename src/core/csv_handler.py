@@ -40,10 +40,17 @@ class CSVHandler:
 
     _last_backup_path: ClassVar[Optional[Path]] = None
 
-    def __init__(self, csv_path: Path, backup_dir: Optional[Path] = None, sqlite_db_path: Optional[str] = None):
+    def __init__(
+        self,
+        csv_path: Path,
+        backup_dir: Optional[Path] = None,
+        sqlite_db_path: Optional[str] = None,
+        enable_legacy_updates: bool = True,
+    ):
         self.csv_path = csv_path
         self.backup_dir = backup_dir or (csv_path.parent / "backups")
         self.sqlite_db_path = sqlite_db_path
+        self.enable_legacy_updates = enable_legacy_updates
         self.logger = logging.getLogger(__name__)
         
         # Initialize SQLite handler if path provided
@@ -55,12 +62,14 @@ class CSVHandler:
             except Exception as e:
                 self.logger.error(f"⚠️ Failed to initialize SQLite in CSVHandler: {e}")
 
-        if not EXCEL_PROCESSOR_AVAILABLE and not self.sqlite_handler:
-            self.logger.error("No persistence engine available (ExcelProcessor and SQLite failed)")
+        if not self.sqlite_handler and (not EXCEL_PROCESSOR_AVAILABLE or not self.enable_legacy_updates):
+            self.logger.error("No persistence engine available (SQLite disabled or failed; legacy updates disabled)")
 
     def is_initialized(self) -> bool:
         """Check if any persistence engine is initialized."""
-        return (EXCEL_PROCESSOR_AVAILABLE and ExcelProcessor is not None) or self.sqlite_handler is not None
+        return self.sqlite_handler is not None or (
+            self.enable_legacy_updates and EXCEL_PROCESSOR_AVAILABLE and ExcelProcessor is not None
+        )
 
     @classmethod
     def create_handler(
@@ -68,10 +77,16 @@ class CSVHandler:
         csv_path: Path,
         enable_incremental_updates: bool = True,
         backup_dir: Optional[Path] = None,
-        sqlite_db_path: Optional[str] = None
+        sqlite_db_path: Optional[str] = None,
+        enable_legacy_updates: bool = True,
     ) -> Tuple["CSVHandler", "WriteQueue", str]:
         """Factory helper to match CSVManager expectations."""
-        handler = cls(csv_path, backup_dir=backup_dir, sqlite_db_path=sqlite_db_path)
+        handler = cls(
+            csv_path,
+            backup_dir=backup_dir,
+            sqlite_db_path=sqlite_db_path,
+            enable_legacy_updates=enable_legacy_updates,
+        )
         session_id = datetime.now().strftime("%Y%m%d-%H%M%S")
         if enable_incremental_updates:
             try:
@@ -121,6 +136,10 @@ class CSVHandler:
                 self.logger.error(f"SQLite update failed for {po_number}: {e}")
 
         # 2. Legacy / Low Performance: ExcelProcessor
+        if not self.enable_legacy_updates:
+            self.logger.debug("Legacy CSV updates disabled; skipping ExcelProcessor update")
+            return success
+
         if EXCEL_PROCESSOR_AVAILABLE and ExcelProcessor is not None:
             try:
                 self.logger.debug(f"Updating Legacy CSV record for PO: {po_number}")
