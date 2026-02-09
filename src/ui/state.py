@@ -36,6 +36,7 @@ class UIState:
     operation_running: bool = False
     status_text: str = "Ready"
     progress_percentage: int = 0
+    total_files: int = 0
     current_operation_status: OperationStatus = OperationStatus.NOT_STARTED
 
     @property

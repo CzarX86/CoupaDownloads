@@ -154,7 +154,10 @@ class UIController:
             (f"{self.global_stats['elapsed']}", self.COLORS["secondary"]),
             (" | ", "dim"),
             ("Status: ", f"bold {self.COLORS['text_secondary']}"),
-            ("ACTIVE", self.COLORS["success"] if self._updating else "dim red")
+            ("ACTIVE", self.COLORS["success"] if self._updating else "dim red"),
+            (" | ", "dim"),
+            ("Mode: ", f"bold {self.COLORS['text_secondary']}"),
+            (f"{getattr(self, 'execution_mode', 'N/A').upper()}", self.COLORS["accent"])
         )
 
         grid = Table.grid(expand=True)
@@ -384,11 +387,24 @@ class UIController:
 
         # Update worker states
         worker_metrics = {}
+        progress_updates = []
         for metric in metrics:
+            if metric.get('po_id') == 'PROGRESS_UPDATE':
+                # Special progress update
+                progress_updates.append(metric)
+                continue
             worker_id = metric.get('worker_id', 0)
             if worker_id not in worker_metrics:
                 worker_metrics[worker_id] = []
             worker_metrics[worker_id].append(metric)
+
+        # Process progress updates
+        if progress_updates:
+            latest_progress = progress_updates[-1]  # Get the most recent progress update
+            self.global_stats['total'] = latest_progress.get('total_tasks', self.global_stats.get('total', 0))
+            self.global_stats['completed'] = latest_progress.get('completed_tasks', 0)
+            self.global_stats['failed'] = latest_progress.get('failed_tasks', 0)
+            self.global_stats['active'] = latest_progress.get('active_tasks', 0)
 
         def _normalize_worker_id(raw_worker_id: Any) -> str:
             try:

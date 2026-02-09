@@ -30,9 +30,21 @@ from .worker_process import WorkerProcess
 from .task_queue import TaskQueue, ProcessingTask, TaskResult
 from .profile_manager import ProfileManager
 from .shutdown_handler import GracefulShutdown
+from ..core.protocols import StorageManager, Messenger
 
 logger = structlog.get_logger(__name__)
 
+
+
+# Debug helper
+def _debug_log(msg: str):
+    try:
+        with open('/tmp/worker_debug.log', 'a') as f:
+            import datetime
+            ts = datetime.datetime.now().isoformat()
+            f.write(f"[{ts}] [POOL] {msg}\n")
+    except:
+        pass
 
 class PersistentWorkerPool:
     """
@@ -51,8 +63,9 @@ class PersistentWorkerPool:
     def __init__(
         self,
         config: PoolConfig,
-        csv_handler: Optional[Any] = None,
+        storage_manager: Optional[StorageManager] = None,
         result_callbacks: Optional[List[Callable[[POTask, Dict[str, Any]], None]]] = None,
+        messenger: Optional[Messenger] = None,
     ):
         """
         Initialize the persistent worker pool.
@@ -109,11 +122,11 @@ class PersistentWorkerPool:
         # Thread pool for async operations
         self.executor = ThreadPoolExecutor(max_workers=config.worker_count + 2)
         
-        self.csv_handler = csv_handler
+        self.storage_manager = storage_manager
         self._result_callbacks: List[Callable[[POTask, Dict[str, Any]], None]] = []
         if result_callbacks:
             self._result_callbacks.extend(result_callbacks)
-        if csv_handler is not None:
+        if storage_manager is not None:
             self._result_callbacks.append(self._persist_result_to_csv)
 
         logger.info(
@@ -121,9 +134,14 @@ class PersistentWorkerPool:
             worker_count=config.worker_count,
             headless_mode=config.headless_mode,
             memory_threshold=config.memory_threshold,
-            csv_handler_attached=csv_handler is not None,
+            storage_manager_attached=storage_manager is not None,
             result_callback_count=len(self._result_callbacks),
         )
+
+        # Pending finalization registry (PO_TASK, RESULT)
+        self._pending_finalizations: List[tuple[POTask, Dict[str, Any]]] = []
+        self._finalizer_lock = threading.Lock()
+        self.messenger = messenger
     
     def _validate_config(self) -> None:
         """Validate pool configuration."""
@@ -152,6 +170,7 @@ class PersistentWorkerPool:
         
         try:
             logger.info("Starting PersistentWorkerPool...")
+            _debug_log(f"Starting pool. Config execution_mode: {getattr(self.config, 'execution_mode', 'UNKNOWN')}")
             # Extended startup diagnostics (previous version had bad indentation causing error)
             env_cap = os.environ.get('PERSISTENT_WORKERS_MAX')
             logger.info(
@@ -177,6 +196,11 @@ class PersistentWorkerPool:
             # Start background tasks
             asyncio.create_task(self._monitor_worker_health())
             asyncio.create_task(self._process_task_queue())
+            
+            # Start batch finalizer if enabled
+            from ..lib.config import Config
+            if getattr(Config, 'BATCH_FINALIZATION_ENABLED', False):
+                asyncio.create_task(self._batch_finalizer_loop())
             
             uptime = time.time() - self.start_time
             logger.info("PersistentWorkerPool started successfully", 
@@ -215,8 +239,8 @@ class PersistentWorkerPool:
                 )
 
     def _persist_result_to_csv(self, po_task: POTask, result: Dict[str, Any]) -> None:
-        """Persist worker result into CSV handler if configured."""
-        if not self.csv_handler:
+        """Persist worker result into storage manager if configured."""
+        if not self.storage_manager:
             return
 
         po_number = po_task.po_number or result.get("po_number")
@@ -250,13 +274,14 @@ class PersistentWorkerPool:
             }
             if rl_attempts:
                 try:
-                    if 'RATE_LIMIT_ATTEMPTS' in getattr(self.csv_handler, '_dataframe', {}).columns:  # type: ignore[attr-defined]
+                    # Note: Leaky abstraction check, keeping for compatibility during refactoring
+                    if hasattr(self.storage_manager, '_dataframe') and 'RATE_LIMIT_ATTEMPTS' in self.storage_manager._dataframe.columns:
                         updates['RATE_LIMIT_ATTEMPTS'] = rl_attempts
                 except Exception:
                     pass
             if to_attempts:
                 try:
-                    if 'TIMEOUT_ATTEMPTS' in getattr(self.csv_handler, '_dataframe', {}).columns:  # type: ignore[attr-defined]
+                    if hasattr(self.storage_manager, '_dataframe') and 'TIMEOUT_ATTEMPTS' in self.storage_manager._dataframe.columns:
                         updates['TIMEOUT_ATTEMPTS'] = to_attempts
                 except Exception:
                     pass
@@ -265,7 +290,7 @@ class PersistentWorkerPool:
             if supplier_name:
                 updates["SUPPLIER"] = supplier_name
 
-            self.csv_handler.update_record(po_number, updates)
+            self.storage_manager.update_record(po_number, updates)
         except Exception as csv_error:  # pragma: no cover - defensive logging
             logger.error(
                 "Failed to update CSV record",
@@ -362,7 +387,8 @@ class PersistentWorkerPool:
                 worker_id=worker_id,
                 profile=profile,
                 config=self.config,
-                csv_handler=self.csv_handler,
+                storage_manager=self.storage_manager,
+                messenger=self.messenger,
             )
 
             logger.info(
@@ -676,6 +702,67 @@ class PersistentWorkerPool:
             except Exception as e:
                 logger.error("Error in task queue processing", error=str(e))
                 await asyncio.sleep(1)
+
+    async def _batch_finalizer_loop(self) -> None:
+        """Background loop to process ready_to_finalize tasks in batches."""
+        from ..lib.config import Config
+        interval = getattr(Config, 'BATCH_FINALIZATION_INTERVAL', 30)
+        
+        logger.info("Batch finalizer loop started", interval=interval)
+        
+        while self._running:
+            try:
+                await asyncio.sleep(interval)
+                
+                # Snapshot pending tasks
+                with self._finalizer_lock:
+                    if not self._pending_finalizations:
+                        continue
+                    to_process = list(self._pending_finalizations)
+                    self._pending_finalizations.clear()
+                
+                logger.info("Batch finalization cycle starting", count=len(to_process))
+                
+                # Process each task in the executor to avoid blocking the loop
+                for po_task, result in to_process:
+                    await self._loop.run_in_executor(
+                        self.executor,
+                        self._finalize_task_folder,
+                        po_task,
+                        result
+                    )
+                    
+                logger.info("Batch finalization cycle completed", count=len(to_process))
+                
+            except Exception as e:
+                logger.error("Error in batch finalizer loop", error=str(e))
+
+    def _finalize_task_folder(self, po_task: POTask, result: Dict[str, Any]) -> None:
+        """Perform actual folder renaming for a task."""
+        from ..lib.po_processing import _rename_folder_with_status
+        
+        folder_path = result.get('final_folder')
+        status_code = result.get('status_code', 'FAILED')
+        po_number = po_task.po_number
+        
+        if not folder_path or not os.path.exists(folder_path):
+            logger.warning("Cannot finalize folder: path missing or non-existent", 
+                         po_number=po_number, path=folder_path)
+            # Finalize the POTask anyway
+            po_task.status = TaskStatus.COMPLETED
+            return
+
+        try:
+            logger.info("Finalizing folder for PO", po_number=po_number, old_path=folder_path)
+            new_path = _rename_folder_with_status(folder_path, status_code)
+            result['final_folder'] = new_path
+            
+            # Update POTask
+            po_task.status = TaskStatus.COMPLETED
+            logger.info("Folder finalized for PO", po_number=po_number, new_path=new_path)
+        except Exception as e:
+            logger.error("Failed to finalize folder for PO", po_number=po_number, error=str(e))
+            po_task.status = TaskStatus.FAILED
     
     def _handle_task_completion(self, task: ProcessingTask, result: Dict[str, Any], po_task: POTask) -> None:
         """Handle task completion and update tracking."""
@@ -684,10 +771,21 @@ class PersistentWorkerPool:
             handle._task_ref = po_task
 
         if result['success']:
+            # Determine if we should defer finalization
+            from ..lib.config import Config
+            batch_enabled = getattr(Config, 'BATCH_FINALIZATION_ENABLED', False)
+            
             po_task.complete_successfully(
                 result_data=result.get('data', {}),
                 downloaded_files=result.get('files', [])
             )
+            # If batching is enabled and it IS a work folder (might not be for NO_ATTACHMENTS)
+            if batch_enabled and result.get('final_folder', '').endswith('__WORK'):
+                po_task.status = TaskStatus.READY_TO_FINALIZE
+                with self._finalizer_lock:
+                    self._pending_finalizations.append((po_task, result))
+                logger.info("Task ready to finalize (deferred)", po_number=po_task.po_number)
+            
             po_task.metadata['result_payload'] = result
 
             task_result = TaskResult(
@@ -703,6 +801,20 @@ class PersistentWorkerPool:
                 worker_id=task.assigned_worker or 'unknown',
                 result=task_result
             )
+            
+            # Send metric to communication manager if available
+            if self.communication_manager:
+                metric_data = {
+                    'worker_id': task.assigned_worker or 0,
+                    'po_id': po_task.po_number,
+                    'status': 'COMPLETED',
+                    'timestamp': time.time(),
+                    'duration': result.get('processing_time', 0.0),
+                    'attachments_found': result.get('attachments_found', 0),
+                    'attachments_downloaded': result.get('attachments_downloaded', 0),
+                    'message': result.get('message', ''),
+                }
+                self.communication_manager.send_metric(metric_data)
 
             if handle:
                 handle._result = result
@@ -723,6 +835,20 @@ class PersistentWorkerPool:
             po_task.fail_with_error(error_message, allow_retry=requeued)
             if not requeued:
                 po_task.metadata['result_payload'] = result
+            
+            # Send metric to communication manager if available
+            if self.communication_manager:
+                metric_data = {
+                    'worker_id': task.assigned_worker or 0,
+                    'po_id': po_task.po_number,
+                    'status': 'FAILED',
+                    'timestamp': time.time(),
+                    'duration': result.get('processing_time', 0.0),
+                    'attachments_found': 0,
+                    'attachments_downloaded': 0,
+                    'message': error_message,
+                }
+                self.communication_manager.send_metric(metric_data)
 
             if requeued:
                 try:
@@ -950,6 +1076,17 @@ class PersistentWorkerPool:
             
             if not completed:
                 logger.warning("Some tasks did not complete before shutdown timeout")
+            
+            # Process remaining pending finalizations before stopping
+            if not emergency:
+                with self._finalizer_lock:
+                    if self._pending_finalizations:
+                        logger.info("Processing pending finalizations before shutdown", count=len(self._pending_finalizations))
+                        to_process = list(self._pending_finalizations)
+                        self._pending_finalizations.clear()
+                        
+                        for po_task, result in to_process:
+                            self._finalize_task_folder(po_task, result)
             
             # Stop workers
             logger.info("Stopping workers...", emergency=emergency)

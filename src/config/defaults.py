@@ -1,5 +1,5 @@
 """
-Default configuration factories for EXPERIMENTAL profile management.
+Default configuration factories for profile management.
 
 Provides small, dependency-free helpers that return sensible defaults for
 ProfileManager and related components without requiring the full data-model

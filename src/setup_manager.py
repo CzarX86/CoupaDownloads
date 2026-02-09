@@ -10,7 +10,7 @@ from pathlib import Path
 
 from .lib.excel_processor import ExcelProcessor
 from .lib.config import Config as ExperimentalConfig
-from .lib.models import InteractiveSetupSession
+from .lib.models import InteractiveSetupSession, ExecutionMode
 
 # Global variable to store current setup session (replaces environment variables)
 _current_setup_session: Optional[Dict[str, Any]] = None
@@ -85,13 +85,46 @@ class SetupManager:
         # 5) Headless mode (default: Yes) - NEW: Use HeadlessConfiguration instead of env var
         headless_preference = self._prompt_bool("Run browser in headless mode?", default=True)
 
+        # 5.1) UI Mode (NEW)
+        print("\nChoose UI Experience:")
+        print(" [1] Standard (Modern Rich UI)")
+        print(" [2] Premium (Alternative Textual UI with real-time graphs)")
+        ui_choice = input("Select UI mode [1]: ").strip()
+        ui_mode = "premium" if ui_choice == "2" else "standard"
+
+        # 5.2) Execution Mode (NEW)
+        print("\n🚀 Choose Execution Mode:")
+        print(" [1] Standard (Full Browser - Best Compatibility)")
+        print(" [2] Filtered (No Images/Fonts/CSS - Faster & Lighter)")
+        print(" [3] No JS (JavaScript Disabled - Maximum Performance)")
+        print(" [4] Turbo (Direct HTTP - Machine Level Extraction)")
+        exec_choice = input("Select execution mode [1]: ").strip()
+        
+        execution_mode = ExecutionMode.STANDARD
+        if exec_choice == "2":
+            execution_mode = ExecutionMode.FILTERED
+        elif exec_choice == "3":
+            execution_mode = ExecutionMode.NO_JS
+        elif exec_choice == "4":
+            execution_mode = ExecutionMode.DIRECT_HTTP
+
+        # Force USE_PROFILE to True for Filtered/NoJS modes as they rely on PersistentWorkerPool
+        if execution_mode in (ExecutionMode.FILTERED, ExecutionMode.NO_JS):
+            self.experimental_config.USE_PROFILE = True
+
+
         # Create interactive setup session to track user preferences
         from .lib.models import InteractiveSetupSession
-        setup_session = InteractiveSetupSession(headless_preference=headless_preference)
+        setup_session = InteractiveSetupSession(
+            headless_preference=headless_preference,
+            ui_mode=ui_mode,
+            execution_mode=execution_mode
+        )
 
         # Log the headless mode configuration
         mode_str = "headless" if headless_preference else "visible"
         print(f"🎯 Browser mode configured: {mode_str}")
+        print(f"⚡ Execution level: {execution_mode.value.upper()}")
 
         # 6) Suppress worker output (avoid Live UI duplication)
         suppress_output = self._prompt_bool("Suppress worker output during execution?", default=True)
@@ -129,6 +162,10 @@ class SetupManager:
 
         # Headless
         headless_pref = os.environ.get('HEADLESS', 'true').strip().lower() == 'true'
+        
+        # UI and output settings
+        ui_mode = os.environ.get('UI_MODE', 'standard').strip().lower()
+        suppress_output = os.environ.get('SUPPRESS_WORKER_OUTPUT', '1').strip() == '1'
 
         # Download folder (apply timestamp prefix automatically)
         from datetime import datetime
@@ -158,10 +195,19 @@ class SetupManager:
         if prof_name:
             self.experimental_config.EDGE_PROFILE_NAME = prof_name
 
-        suppress_output = os.environ.get('SUPPRESS_WORKER_OUTPUT', '1').strip().lower() in {'1', 'true', 'yes'}
+        # Execution Mode from env
+        exec_mode_env = os.environ.get('EXECUTION_MODE', 'standard').strip().lower()
+        execution_mode = ExecutionMode.STANDARD
+        for m in ExecutionMode:
+            if m.value == exec_mode_env:
+                execution_mode = m
+                break
+
         return {
             "headless_preference": headless_pref,
             "suppress_worker_output": suppress_output,
+            "ui_mode": ui_mode,
+            "execution_mode": execution_mode
         }
 
     def scan_local_drivers(self) -> list[str]:

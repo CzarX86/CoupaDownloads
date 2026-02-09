@@ -190,6 +190,50 @@ class CoupaDownloadsGUI:
             )
             self.feedback_manager.update_status(feedback_message)
 
+            # Parse operation_id for additional metadata
+            if message.operation_id:
+                if message.operation_id.startswith("total:"):
+                    try:
+                        self.ui_state.total_files = int(message.operation_id.split(":")[1])
+                    except:
+                        pass
+                elif message.operation_id.startswith("stats:"):
+                    try:
+                        # Format: stats:S=1,F=0,T=10
+                        parts = message.operation_id.split(":")[1].split(",")
+                        s_val = int(parts[0].split("=")[1])
+                        f_val = int(parts[1].split("=")[1])
+                        t_val = int(parts[2].split("=")[1])
+                        
+                        from .data_model import DownloadStatistics
+                        stats = DownloadStatistics(
+                            total_files=t_val,
+                            successful_downloads=s_val,
+                            failed_downloads=f_val
+                        )
+                        self.feedback_manager.update_statistics(stats)
+                    except:
+                        pass
+
+            # Route progress update if present
+            if message.progress is not None:
+                from .data_model import ProgressData
+                completed = int(message.progress * self.ui_state.total_files / 100) if self.ui_state.total_files > 0 else 0
+                
+                # If it's a "Processing PO X/Y" message, we can get better completed count
+                if "/" in message.message and "Processing PO" in message.message:
+                    try:
+                        completed = int(message.message.split("/")[0].split()[-1])
+                    except:
+                        pass
+
+                progress_data = ProgressData(
+                    completed_files=completed,
+                    total_files=self.ui_state.total_files,
+                    current_file=message.message if "Processing PO" in message.message else None
+                )
+                self.feedback_manager.update_progress(progress_data)
+
         # Update old status display for compatibility
         if hasattr(self, 'status_display'):
             self.status_display.update_status(message)
@@ -290,7 +334,7 @@ class CoupaDownloadsGUI:
             # Update runtime configuration for experimental core system
             if self.current_config.download_directory:
                 # Update the experimental config with the current download directory
-                from EXPERIMENTAL.corelib.config import Config
+                from ..lib.config import Config
                 Config.DOWNLOAD_FOLDER = str(self.current_config.download_directory)
                 Config.ensure_download_folder_exists()
                 logger.info(f"Updated download folder to: {Config.DOWNLOAD_FOLDER}")

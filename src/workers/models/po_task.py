@@ -23,6 +23,7 @@ class TaskStatus(Enum):
     COMPLETED = "completed"
     FAILED = "failed"
     RETRYING = "retrying"
+    READY_TO_FINALIZE = "ready_to_finalize"
     CANCELLED = "cancelled"
 
 
@@ -187,7 +188,7 @@ class POTask:
         return self.priority.value * 10 + age_bonus
     
     def is_completed(self) -> bool:
-        """Check if task is in a completed state."""
+        """Check if task is in a terminal state."""
         return self.status in [TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED]
     
     def is_active(self) -> bool:

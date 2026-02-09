@@ -204,8 +204,12 @@ class BrowserSession:
                 # For now, we'll assume SSO or existing session
                 logger.info("Login form detected - assuming SSO authentication")
                 
-                # Wait for potential SSO redirect or manual login
-                time.sleep(5)
+                # for manual login to land on dashboard/home
+                auth_wait = WebDriverWait(self.driver, 15)
+                auth_wait.until(
+                    lambda d: any(term in d.current_url for term in ["dashboard", "home"]) 
+                    or d.find_elements(By.ID, "user_email")
+                )
                 
                 # Check if authentication succeeded
                 current_url = self.driver.current_url

@@ -11,18 +11,17 @@ import time
 from typing import Optional, List, Callable
 from pathlib import Path
 
-# Add experimental path
-experimental_path = Path(__file__).parent.parent / "EXPERIMENTAL"
-if str(experimental_path) not in sys.path:
-    sys.path.insert(0, str(experimental_path))
+# The experimental core is now integrated into the src package.
+# References to EXPERIMENTAL are redirected to src counterparts.
 
 from .config import ConfigurationSettings
-from .status import StatusMessage
+from .status import StatusMessage, StatusLevel
 from .interfaces import CoreSystemInterface, OperationHandle
 
-# Import experimental core
-from EXPERIMENTAL.core.main import MainApp
-from EXPERIMENTAL.corelib.models import HeadlessConfiguration
+# Import project core
+from ..main import MainApp
+from ..lib.models import HeadlessConfiguration
+from .telemetry import FunctionalTelemetryListener
 
 
 class RealCoreSystem(CoreSystemInterface):
@@ -37,7 +36,7 @@ class RealCoreSystem(CoreSystemInterface):
     def load_configuration(self) -> Optional[ConfigurationSettings]:
         """Load configuration from experimental config"""
         try:
-            from EXPERIMENTAL.corelib.config import Config
+            from ..lib.config import Config
             # Create a ConfigurationSettings from experimental config
             config = ConfigurationSettings()
             
@@ -59,7 +58,7 @@ class RealCoreSystem(CoreSystemInterface):
     def save_configuration(self, config: ConfigurationSettings) -> bool:
         """Save configuration to experimental config"""
         try:
-            from EXPERIMENTAL.corelib.config import Config
+            from ..lib.config import Config
             Config.EXCEL_FILE_PATH = str(config.csv_file_path) if config.csv_file_path else ""
             Config.DOWNLOAD_FOLDER = str(config.download_directory) if config.download_directory else "/tmp/downloads"
             Config.PROC_WORKERS = config.worker_count
@@ -101,6 +100,9 @@ class RealCoreSystem(CoreSystemInterface):
 
         def run_downloads():
             try:
+                # Tracking counts for stats
+                stats = {"successful": 0, "failed": 0, "total": 0}
+
                 # Disable interactive UI mode for GUI context
                 import os
                 original_interactive = os.environ.get('ENABLE_INTERACTIVE_UI', 'True')
@@ -109,82 +111,35 @@ class RealCoreSystem(CoreSystemInterface):
                 try:
                     # Create MainApp instance
                     app = MainApp(enable_parallel=config.worker_count > 1, max_workers=config.worker_count)
+                    app.ui_mode = "none"  # Run in silent/background mode
                     app.set_headless_configuration(headless_config)
 
                     # Mark operation as running
                     self._active_operations[id(handle)] = "running"
 
+                    # Set up telemetry listener
+                    listener = FunctionalTelemetryListener(on_status_fn=status_callback)
+                    app.telemetry.add_listener(listener)
+
                     # Send initial status
-                    status_callback(StatusMessage.info("Starting downloads...", progress=0))
+                    app.telemetry.emit_status(StatusLevel.INFO, "Starting downloads...", progress=0)
 
-                    # Override the app's print function to capture status updates
-                    original_print = print
-                    def capture_print(*args, **kwargs):
-                        message = ' '.join(str(arg) for arg in args)
-                        # Try to extract progress information from messages
-                        if 'Processing PO' in message and '/' in message:
-                            # Extract progress from "Processing PO 1/10"
-                            try:
-                                parts = message.split('/')
-                                if len(parts) == 2:
-                                    current = int(parts[0].split()[-1])
-                                    total = int(parts[1].split()[0])
-                                    progress = int((current / total) * 100)
-                                    status_callback(StatusMessage.info(f"Processing PO {current}/{total}", progress=progress))
-                            except:
-                                pass
-                        elif '✅' in message or '❌' in message or '📭' in message:
-                            # Status messages with emojis
-                            status_callback(StatusMessage.info(message))
-                        elif 'Starting processing' in message:
-                            status_callback(StatusMessage.info("Initializing download process...", progress=5))
-                        elif 'Using' in message and 'worker' in message:
-                            status_callback(StatusMessage.info(message, progress=10))
-                        elif '🚀 Starting' in message:
-                            status_callback(StatusMessage.info("Connecting to Coupa system...", progress=20))
-                        elif '🎉 Processing complete' in message:
-                            status_callback(StatusMessage.info("Downloads completed successfully!", progress=100))
-                            self._active_operations[id(handle)] = "completed"
-                        elif '❌ Failed' in message:
-                            status_callback(StatusMessage.error("Download process failed"))
-                            self._active_operations[id(handle)] = "error"
+                    # Run the main app
+                    app.run()
 
-                        # Still print to console
-                        original_print(*args, **kwargs)
+                    # Report final completion if not already marked
+                    if self._active_operations.get(id(handle)) == "running":
+                         app.telemetry.emit_status(StatusLevel.SUCCESS, "Download process completed", progress=100)
+                         self._active_operations[id(handle)] = "completed"
 
-                    # Temporarily replace print
-                    import builtins
-                    builtins.print = capture_print
-
-                    try:
-                        # Run the main app
-                        app.run()
-
-                        # Check if we have results
-                        if hasattr(app, '_last_parallel_report') and app._last_parallel_report:
-                            report = app._last_parallel_report
-                            successful = report.get('results', [])
-                            total = len(successful)
-                            if total > 0:
-                                status_callback(StatusMessage.info(f"Processed {total} POs successfully", progress=100))
-                                self._active_operations[id(handle)] = "completed"
-                            else:
-                                status_callback(StatusMessage.info("No POs to process", progress=100))
-                                self._active_operations[id(handle)] = "completed"
-                        else:
-                            status_callback(StatusMessage.info("Download process completed", progress=100))
-                            self._active_operations[id(handle)] = "completed"
-
-                    finally:
-                        # Restore original print
-                        builtins.print = original_print
-
-                        # Close the app
-                        app.close()
-                        
                 finally:
-                    # Restore original interactive UI setting
+                    # Restore original interactive setting
                     os.environ['ENABLE_INTERACTIVE_UI'] = original_interactive
+                    # Close the app
+                    try:
+                        app.close()
+                    except:
+                        pass
 
             except Exception as e:
                 error_msg = f"Download failed: {e}"

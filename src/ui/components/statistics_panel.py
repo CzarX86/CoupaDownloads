@@ -247,7 +247,7 @@ class StatisticsPanel(ttk.LabelFrame):
         Args:
             feedback_manager: FeedbackManager instance to register with
         """
-        feedback_manager.register_callback("statistics_updated", self._on_statistics_update)
+        feedback_manager.register_callback("statistics_update", self._on_statistics_update)
 
     def unregister_from_feedback_manager(self, feedback_manager: FeedbackManager):
         """
@@ -256,7 +256,7 @@ class StatisticsPanel(ttk.LabelFrame):
         Args:
             feedback_manager: FeedbackManager instance to unregister from
         """
-        feedback_manager.unregister_callback("statistics_updated", self._on_statistics_update)
+        feedback_manager.unregister_callback("statistics_update", self._on_statistics_update)
 
     def _on_statistics_update(self, stats: DownloadStatistics):
         """

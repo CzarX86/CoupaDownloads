@@ -66,6 +66,13 @@ from ..lib.downloader import Downloader
 from ..lib.folder_hierarchy import FolderHierarchyManager
 from ..lib.po_processing import process_single_po  # shared utility
 from ..lib.driver_manager import DriverManager
+from ..core.utils import (
+    _has_active_downloads,
+    _wait_for_downloads_complete,
+    _derive_status_label,
+    _parse_counts_from_message
+)
+from ..core.protocols import StorageManager, Messenger
 
 # Centralized config for URLs
 try:
@@ -80,125 +87,18 @@ logger = structlog.get_logger(__name__)
 _DOWNLOAD_SUFFIXES = ('.crdownload', '.tmp', '.partial')
 
 
-def _has_active_downloads(folder_path: str) -> bool:
+# Helper functions moved to core/utils.py
+
+
+# Debug logging helper
+def _debug_log(msg: str):
     try:
-        names = os.listdir(folder_path)
-    except Exception:
-        return False
-    return any(name.endswith(_DOWNLOAD_SUFFIXES) for name in names)
-
-
-def _wait_for_downloads_complete(folder_path: str, timeout: int = 180, poll: float = 0.5) -> None:
-    start = time.time()
-    quiet_required = 1.5
-    quiet_start = None
-    while time.time() - start < timeout:
-        if not _has_active_downloads(folder_path):
-            if quiet_start is None:
-                quiet_start = time.time()
-            elif time.time() - quiet_start >= quiet_required:
-                return
-        else:
-            quiet_start = None
-        time.sleep(poll)
-
-
-def _suffix_for_status(status_code: str) -> str:
-    mapping = {
-        'COMPLETED': '_COMPLETED',
-        'FAILED': '_FAILED',
-        'NO_ATTACHMENTS': '_NO_ATTACHMENTS',
-        'PARTIAL': '_PARTIAL',
-        'PO_NOT_FOUND': '_PO_NOT_FOUND',
-    }
-    return mapping.get(status_code, f'_{status_code}')
-
-
-def _rename_folder_with_status(folder_path: str, status_code: str) -> str:
-    """Rename folder with status, ensuring __WORK is removed first."""
-    try:
-        import re
-        base_dir = os.path.dirname(folder_path)
-        base_name = os.path.basename(folder_path)
-        status_upper = (status_code or '').upper().strip() or 'FAILED'
-        
-        # Remove any __WORK sequences first
-        base_name = re.sub(r'(?:__WORK)+', '', base_name)
-        base_name = re.sub(r'_+', '_', base_name).strip('_')
-        
-        # Remove existing status suffixes if changing
-        known_suffixes = ['_COMPLETED', '_FAILED', '_NO_ATTACHMENTS', '_PARTIAL', '_PO_NOT_FOUND', '_TIMEOUT']
-        upper_name = base_name.upper()
-        
-        for suf in known_suffixes:
-            if upper_name.endswith(suf) and suf != f'_{status_upper}':
-                base_name = base_name[:-len(suf)].rstrip('_')
-                break
-        
-        # Add status suffix if not already present
-        if not base_name.upper().endswith(f'_{status_upper}'):
-            target = f"{base_name}_{status_upper}"
-        else:
-            target = base_name
-            
-        # Final cleanup
-        target = re.sub(r'_+', '_', target).rstrip('_')
-        
-        new_path = os.path.join(base_dir, target)
-        if folder_path == new_path:
-            return folder_path
-        if os.path.exists(new_path):
-            i = 2
-            while True:
-                candidate = os.path.join(base_dir, f"{target}-{i}")
-                if not os.path.exists(candidate):
-                    new_path = candidate
-                    break
-                i += 1
-        os.rename(folder_path, new_path)
-        return new_path
-    except Exception:
-        return folder_path
-
-
-def _parse_counts_from_message(message: str) -> tuple[Optional[int], Optional[int]]:
-    if not message:
-        return None, None
-    import re
-
-    match = re.search(r"(\d+)\s*/\s*(\d+)", message)
-    if not match:
-        return None, None
-    try:
-        return int(match.group(1)), int(match.group(2))
-    except Exception:
-        return None, None
-
-
-def _derive_status_label(result: Dict[str, Any]) -> str:
-    if not result:
-        return 'FAILED'
-
-    if 'status_code' in result and result['status_code']:
-        return result['status_code']
-
-    success = result.get('success', False)
-    message = result.get('message', '') or ''
-    msg_lower = message.lower()
-    downloaded, total = _parse_counts_from_message(message)
-
-    if success:
-        if total == 0 or 'no attachments' in msg_lower:
-            return 'NO_ATTACHMENTS'
-        if downloaded is not None and total is not None and downloaded < total:
-            return 'PARTIAL'
-        return 'COMPLETED'
-
-    if 'oops' in msg_lower or 'not found' in msg_lower:
-        return 'PO_NOT_FOUND'
-
-    return 'FAILED'
-
+        with open('/tmp/worker_debug.log', 'a') as f:
+            import datetime
+            ts = datetime.datetime.now().isoformat()
+            f.write(f"[{ts}] {msg}\n")
+    except:
+        pass
 
 class WorkerProcess:
     """
@@ -213,7 +113,8 @@ class WorkerProcess:
         worker_id: str,
         profile: Profile,
         config: PoolConfig,
-        csv_handler: Optional[Any] = None,
+        storage_manager: Optional[StorageManager] = None,
+        messenger: Optional[Messenger] = None,
         result_callback: Optional[Callable[[POTask, Dict[str, Any]], None]] = None,
     ):
         """
@@ -227,7 +128,8 @@ class WorkerProcess:
         self.worker_id = worker_id
         self.profile = profile
         self.config = config
-        self.csv_handler = csv_handler
+        self.storage_manager = storage_manager
+        self.messenger = messenger
         self._result_callback = result_callback
         
         # Create worker model
@@ -299,7 +201,7 @@ class WorkerProcess:
             raise RuntimeError(f"Worker startup failed: {e}") from e
     
     def _initialize_browser_session(self) -> None:
-        """Initialize persistent browser session."""
+        """Initialize persistent browser session based on execution mode."""
         try:
             logger.debug("Initializing browser session", worker_id=self.worker_id)
             
@@ -309,85 +211,168 @@ class WorkerProcess:
             
             # Create browser session
             self.browser_session = BrowserSession()
-
-            # Setup Edge options
-            edge_options = Options()
-
-            if self.config.headless_mode:
-                edge_options.add_argument("--headless")
             
-            # Profile configuration
-            if self.profile.worker_profile_path:
-                edge_options.add_argument(f"--user-data-dir={self.profile.worker_profile_path}")
-                edge_options.add_argument(f"--profile-directory={self.profile.profile_name}")
-
-            # Basic options only
-            edge_options.add_argument("--no-sandbox")
-            edge_options.add_argument("--disable-dev-shm-usage")
-            edge_options.add_argument("--window-size=1920,1080")
-
-            # Configure download preferences to use timestamped folder
-            normalized_dl = self._apply_download_root_override()
-            download_prefs = {
-                "download.default_directory": normalized_dl,
-                "download.prompt_for_download": False,
-                "download.directory_upgrade": True,
-                "safebrowsing.enabled": True
-            }
-            edge_options.add_experimental_option("prefs", download_prefs)
-            logger.info("Worker download folder configured", worker_id=self.worker_id, download_folder=normalized_dl)
-
-            # Create WebDriver - SIMPLIFIED CONFIGURATION
-            dm = DriverManager()
-            driver_path = dm.get_driver_path()
+            # Determine initialization path based on execution_mode
+            execution_mode = getattr(self.config, 'execution_mode', 'standard')
+            mode_str = execution_mode.value if hasattr(execution_mode, 'value') else str(execution_mode)
             
-            # Create service with minimal configuration to avoid conflicts
-            service = Service(
-                executable_path=driver_path,
-                # Remove log suppression to see potential errors
-                # service_args=["--verbose", "--log-level=DEBUG"]  # Commented out to reduce noise
-            )
-
-            # Add delay to prevent simultaneous driver starts
-            import time
-            time.sleep(2)  # 2 second delay between driver initializations
-            
-            driver = webdriver.Edge(service=service, options=edge_options)
-            
-            # Force-set download directory via DevTools to override any profile defaults
-            try:
-                driver.execute_cdp_cmd(
-                    "Page.setDownloadBehavior",
-                    {"behavior": "allow", "downloadPath": normalized_dl}
-                )
-                logger.debug("CDP download directory set", worker_id=self.worker_id, download_folder=normalized_dl)
-            except Exception as cdp_err:
-                logger.warning("Failed to set CDP download directory", worker_id=self.worker_id, error=str(cdp_err))
-
-            # Initialize browser session
-            self.browser_session.driver = driver
-            self.browser_session.main_window_handle = driver.current_window_handle
-            self.browser_session.keeper_handle = driver.current_window_handle
+            _debug_log(f"Worker {self.worker_id} initializing. Config mode: {execution_mode} -> Str: {mode_str}")
+            print(f"DEBUG: Worker {self.worker_id} initializing with mode: {mode_str} (Raw: {execution_mode})", flush=True)
             logger.info(
-                "Edge WebDriver started",
+                "WorkerProcess browser init",
                 worker_id=self.worker_id,
-                profile_path=self.profile.worker_profile_path,
-                headless=self.config.headless_mode,
+                execution_mode=mode_str,
             )
-            self.browser_session.ensure_keeper_tab()
-
-            # Authenticate with Coupa
-            success = self.browser_session.authenticate()
             
-            if not success:
-                raise RuntimeError("Failed to authenticate with Coupa")
+            # Use Playwright for filtered and no_js modes (resource blocking)
+            if mode_str in ("filtered", "no_js"):
+                _debug_log(f"Worker {self.worker_id} selecting Playwright session")
+                print(f"DEBUG: Worker {self.worker_id} selecting Playwright session", flush=True)
+                self._initialize_playwright_session(mode_str)
+                return
             
-            logger.debug("Browser session initialized", worker_id=self.worker_id)
+            _debug_log(f"Worker {self.worker_id} selecting Selenium session")
+            print(f"DEBUG: Worker {self.worker_id} selecting Selenium session", flush=True)
+            # Otherwise, use Selenium with Edge WebDriver (standard mode)
+            self._initialize_selenium_session()
             
         except Exception as e:
             logger.error("Failed to initialize browser session", 
                         worker_id=self.worker_id, error=str(e))
             raise
+    
+    def _initialize_playwright_session(self, mode: str) -> None:
+        """Initialize Playwright session with resource blocking for filtered/no_js modes."""
+        from ..lib.playwright_manager import PlaywrightManager
+        
+        normalized_dl = self._apply_download_root_override()
+        
+        logger.info(
+            "⚡ Initializing Playwright session for worker",
+            worker_id=self.worker_id,
+            mode=mode,
+            download_folder=normalized_dl,
+        )
+        
+        # Create PlaywrightManager instance
+        pw_manager = PlaywrightManager()
+        
+        # Start Playwright with Edge channel and profile
+        playwright_page = pw_manager.start(
+            headless=self.config.headless_mode,
+            execution_mode=mode,
+            profile_dir=self.profile.worker_profile_path,
+        )
+        
+        # Store Playwright manager and page in browser session for later use
+        self.browser_session._playwright_manager = pw_manager
+        self.browser_session._playwright_page = playwright_page
+        self.browser_session._using_playwright = True
+        
+        # For Playwright, we don't have a Selenium driver but need to maintain compatibility
+        # The browser_session should handle both cases
+        self.browser_session.driver = None  # No Selenium driver in this mode
+        self.browser_session.main_window_handle = None
+        self.browser_session.keeper_handle = None
+        
+        logger.info(
+            "Playwright session initialized for worker",
+            worker_id=self.worker_id,
+            mode=mode,
+        )
+        
+        # Playwright sessions are pre-authenticated via Edge profile
+        # Verify we can access Coupa
+        try:
+            test_url = f"{BASE_URL}/purchase_orders"
+            playwright_page.goto(test_url, wait_until="domcontentloaded", timeout=30000)
+            current_url = playwright_page.url
+            
+            if "login" in current_url.lower() or "okta" in current_url.lower():
+                raise RuntimeError("Playwright session not authenticated - login page detected")
+            
+            logger.info("Playwright session authenticated", worker_id=self.worker_id)
+        except Exception as auth_err:
+            logger.error("Playwright authentication check failed", worker_id=self.worker_id, error=str(auth_err))
+            raise RuntimeError(f"Playwright authentication failed: {auth_err}")
+    
+    def _initialize_selenium_session(self) -> None:
+        """Initialize Selenium session with Edge WebDriver for standard mode."""
+        # Setup Edge options
+        edge_options = Options()
+
+        if self.config.headless_mode:
+            edge_options.add_argument("--headless")
+        
+        # Profile configuration
+        if self.profile.worker_profile_path:
+            edge_options.add_argument(f"--user-data-dir={self.profile.worker_profile_path}")
+            edge_options.add_argument(f"--profile-directory={self.profile.profile_name}")
+
+        # Basic options only
+        edge_options.add_argument("--no-sandbox")
+        edge_options.add_argument("--disable-dev-shm-usage")
+        edge_options.add_argument("--window-size=1920,1080")
+
+        # Configure download preferences to use timestamped folder
+        normalized_dl = self._apply_download_root_override()
+        download_prefs = {
+            "download.default_directory": normalized_dl,
+            "download.prompt_for_download": False,
+            "download.directory_upgrade": True,
+            "safebrowsing.enabled": True
+        }
+        edge_options.add_experimental_option("prefs", download_prefs)
+        logger.info("Worker download folder configured", worker_id=self.worker_id, download_folder=normalized_dl)
+
+        # Create WebDriver - SIMPLIFIED CONFIGURATION
+        dm = DriverManager()
+        driver_path = dm.get_driver_path()
+        
+        # Create service with minimal configuration to avoid conflicts
+        service = Service(
+            executable_path=driver_path,
+            # Remove log suppression to see potential errors
+            # service_args=["--verbose", "--log-level=DEBUG"]  # Commented out to reduce noise
+        )
+
+        # Add delay to prevent simultaneous driver starts
+        import time
+        time.sleep(2)  # 2 second delay between driver initializations
+        
+        driver = webdriver.Edge(service=service, options=edge_options)
+        
+        # Force-set download directory via DevTools to override any profile defaults
+        try:
+            driver.execute_cdp_cmd(
+                "Page.setDownloadBehavior",
+                {"behavior": "allow", "downloadPath": normalized_dl}
+            )
+            logger.debug("CDP download directory set", worker_id=self.worker_id, download_folder=normalized_dl)
+        except Exception as cdp_err:
+            logger.warning("Failed to set CDP download directory", worker_id=self.worker_id, error=str(cdp_err))
+
+        # Initialize browser session
+        self.browser_session.driver = driver
+        self.browser_session.main_window_handle = driver.current_window_handle
+        self.browser_session.keeper_handle = driver.current_window_handle
+        self.browser_session._using_playwright = False
+        
+        logger.info(
+            "Edge WebDriver started",
+            worker_id=self.worker_id,
+            profile_path=self.profile.worker_profile_path,
+            headless=self.config.headless_mode,
+        )
+        self.browser_session.ensure_keeper_tab()
+
+        # Authenticate with Coupa
+        success = self.browser_session.authenticate()
+        
+        if not success:
+            raise RuntimeError("Failed to authenticate with Coupa")
+        
+        logger.debug("Browser session initialized", worker_id=self.worker_id)
 
     def _configure_connection_pools(self) -> None:
         """Configure urllib3 connection pools to prevent multiprocessing issues."""
@@ -457,9 +442,9 @@ class WorkerProcess:
         try:
             from ..lib import config as experimental_config
             experimental_config.Config.DOWNLOAD_FOLDER = normalized  # type: ignore[attr-defined]
-            logger.debug("Updated EXPERIMENTAL.corelib.Config.DOWNLOAD_FOLDER", worker_id=self.worker_id, path=normalized)
+            logger.debug("Updated lib.Config.DOWNLOAD_FOLDER", worker_id=self.worker_id, path=normalized)
         except Exception as e:
-            logger.warning("Failed to update EXPERIMENTAL.corelib.Config", worker_id=self.worker_id, error=str(e))
+            logger.warning("Failed to update lib.Config", worker_id=self.worker_id, error=str(e))
 
         try:
             import corelib.config as core_config  # type: ignore
@@ -562,10 +547,55 @@ class WorkerProcess:
     
     def _process_po_task(self, task: POTask) -> Dict[str, Any]:
         """Process a single PO using the worker's persistent browser session."""
-        if not self.browser_session or not self.browser_session.driver:
+        if not self.browser_session:
             return {
                 'success': False,
-                'error': 'Browser session not available',
+                'error': 'Browser session not initialized',
+                'task_id': task.task_id,
+                'status_code': 'FAILED',
+            }
+            
+        po_number = task.po_number
+        po_data = dict(task.metadata or {})
+        display_po = po_data.get('po_number', po_number)
+        hierarchy_cols = self.config.hierarchy_columns or []
+        has_hierarchy = bool(self.config.has_hierarchy_data)
+
+        # Handle Playwright Session
+        if getattr(self.browser_session, '_using_playwright', False):
+            try:
+                manager = self.browser_session._playwright_manager
+                if not manager:
+                    raise RuntimeError("Playwright manager not available in session")
+                
+                logger.info("Delegating PO processing to Playwright", worker_id=self.worker_id, po=po_number)
+                result = manager.process_po(
+                    po_number=po_number,
+                    po_data=po_data,
+                    hierarchy_cols=hierarchy_cols,
+                    has_hierarchy=has_hierarchy
+                )
+                
+                # Add task metadata
+                result['task_id'] = task.task_id
+                result['processing_time'] = task.get_processing_time()
+                return result
+                
+            except Exception as e:
+                logger.error("Playwright processing failed", worker_id=self.worker_id, error=str(e))
+                return {
+                    'success': False,
+                    'error': str(e),
+                    'task_id': task.task_id,
+                    'po_number': po_number,
+                    'status_code': 'FAILED',
+                }
+
+        # Fallback to Selenium (Standard Mode)
+        if not self.browser_session.driver:
+            return {
+                'success': False,
+                'error': 'Browser session driver not available',
                 'task_id': task.task_id,
                 'status_code': 'FAILED',
             }
@@ -604,6 +634,28 @@ class WorkerProcess:
             
             driver.switch_to.window(tab_handle)
 
+            def progress_bridge(progress_data: Dict[str, Any]):
+                if self.messenger:
+                    metric = {
+                        'worker_id': self.worker_id,
+                        'task_id': task.task_id,
+                        'po_id': po_number,
+                        'status': f"Downloading {progress_data.get('attachments_downloaded', 0)}/{progress_data.get('attachments_found', 0)}",
+                        'attachments_found': progress_data.get('attachments_found', 0),
+                        'attachments_downloaded': progress_data.get('attachments_downloaded', 0),
+                        'message': progress_data.get('message', ''),
+                        'timestamp': time.time(),
+                    }
+                    self.messenger.send_metric(metric)
+
+            # Check if batch finalization is enabled in experimental config
+            skip_finalization = False
+            try:
+                from ..lib.config import Config
+                skip_finalization = getattr(Config, 'BATCH_FINALIZATION_ENABLED', False)
+            except Exception:
+                pass
+
             result_entry = process_single_po(
                 po_number=po_number,
                 po_data=po_data,
@@ -611,6 +663,8 @@ class WorkerProcess:
                 browser_manager=browser_manager,
                 hierarchy_columns=hierarchy_cols,
                 has_hierarchy_data=has_hierarchy,
+                progress_callback=progress_bridge,
+                skip_finalization=skip_finalization
             )
 
             # attach processing timing and task id
@@ -688,7 +742,23 @@ class WorkerProcess:
     def _cleanup_browser_session(self, emergency: bool = False) -> None:
         """Cleanup browser session and resources."""
         try:
-            if not (self.browser_session and self.browser_session.driver):
+            if not self.browser_session:
+                return
+
+            # Handle Playwright Cleanup
+            if getattr(self.browser_session, '_using_playwright', False):
+                try:
+                    logger.debug("Cleaning up Playwright session", worker_id=self.worker_id)
+                    manager = getattr(self.browser_session, '_playwright_manager', None)
+                    if manager:
+                        manager.cleanup()
+                    self.browser_session = None
+                    logger.debug("Playwright session cleaned up", worker_id=self.worker_id)
+                except Exception as pw_err:
+                    logger.error("Failed to cleanup Playwright session", worker_id=self.worker_id, error=str(pw_err))
+                return
+
+            if not self.browser_session.driver:
                 return
 
             driver = self.browser_session.driver

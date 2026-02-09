@@ -27,6 +27,7 @@ class PoolConfig:
     # Worker configuration
     worker_count: int = 4
     headless_mode: bool = True
+    execution_mode: str = "standard"  # standard, filtered, no_js, direct_http
     
     # Profile management
     base_profile_path: str = ""
@@ -43,7 +44,7 @@ class PoolConfig:
     shutdown_timeout: float = 60.0  # 1 minute graceful shutdown
     task_timeout: float = 300.0     # 5 minutes per PO
     worker_startup_timeout: float = 30.0  # 30 seconds worker startup
-    stagger_delay: float = 0.5            # seconds between starting workers
+    stagger_delay: float = 1.5            # seconds between starting workers
     
     # Retry configuration
     max_restart_attempts: int = 3
@@ -159,6 +160,7 @@ class PoolConfig:
         return {
             'worker_count': self.worker_count,
             'headless_mode': self.headless_mode,
+            'execution_mode': self.execution_mode,
             'base_profile_path': self.base_profile_path,
             'base_profile_name': self.base_profile_name,
             'hierarchy_columns': self.hierarchy_columns,
@@ -195,6 +197,7 @@ class PoolConfig:
         download_root: str = "",
         sqlite_db_path: Optional[str] = None,
         stagger_delay: float = 0.5,
+        execution_mode: str = "standard",
     ) -> 'PoolConfig':
         """Create default configuration with required parameters."""
         return cls(
@@ -207,6 +210,7 @@ class PoolConfig:
             download_root=download_root,
             sqlite_db_path=sqlite_db_path,
             stagger_delay=stagger_delay,
+            execution_mode=execution_mode,
         )
 
 

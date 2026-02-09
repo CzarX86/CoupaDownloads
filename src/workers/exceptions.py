@@ -1,5 +1,5 @@
 """
-Custom exceptions for parallel processing in EXPERIMENTAL workers module.
+Custom exceptions for parallel processing in the workers module.
 
 This module defines exception classes for different error conditions
 that can occur during parallel PO processing operations.

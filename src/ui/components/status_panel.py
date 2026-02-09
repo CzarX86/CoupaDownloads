@@ -75,8 +75,8 @@ class StatusPanel(ttk.LabelFrame):
         Args:
             feedback_manager: FeedbackManager instance to register with
         """
-        feedback_manager.register_callback("status_update", self._on_status_update)
-        feedback_manager.register_callback("error_update", self._on_error_update)
+        feedback_manager.register_callback("status_change", self._on_status_update)
+        feedback_manager.register_callback("error_occurred", self._on_error_update)
 
     def unregister_from_feedback_manager(self, feedback_manager: FeedbackManager):
         """
@@ -85,8 +85,8 @@ class StatusPanel(ttk.LabelFrame):
         Args:
             feedback_manager: FeedbackManager instance to unregister from
         """
-        feedback_manager.unregister_callback("status_update", self._on_status_update)
-        feedback_manager.unregister_callback("error_update", self._on_error_update)
+        feedback_manager.unregister_callback("status_change", self._on_status_update)
+        feedback_manager.unregister_callback("error_occurred", self._on_error_update)
 
     def _create_widgets(self):
         """Create and layout the status panel widgets."""

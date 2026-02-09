@@ -51,12 +51,16 @@ class CSVHandler:
         if sqlite_db_path and SQLITE_AVAILABLE:
             try:
                 self.sqlite_handler = SQLiteHandler(sqlite_db_path)
-                self.logger.info(f"🚀 SQLite persistence enabled for CSVHandler: {sqlite_db_path}")
+                self.logger.debug(f"🚀 SQLite persistence enabled for CSVHandler: {sqlite_db_path}")
             except Exception as e:
                 self.logger.error(f"⚠️ Failed to initialize SQLite in CSVHandler: {e}")
 
         if not EXCEL_PROCESSOR_AVAILABLE and not self.sqlite_handler:
             self.logger.error("No persistence engine available (ExcelProcessor and SQLite failed)")
+
+    def is_initialized(self) -> bool:
+        """Check if any persistence engine is initialized."""
+        return (EXCEL_PROCESSOR_AVAILABLE and ExcelProcessor is not None) or self.sqlite_handler is not None
 
     @classmethod
     def create_handler(

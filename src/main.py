@@ -26,11 +26,7 @@ project_root_str = str(project_root)
 if project_root_str not in sys.path:
     sys.path.insert(0, project_root_str)
 
-# Add EXPERIMENTAL directory to path for local corelib imports
-experimental_root = Path(__file__).resolve().parents[1]
-experimental_root_str = str(experimental_root)
-if experimental_root_str not in sys.path:
-    sys.path.insert(0, experimental_root_str)
+# Project corelib imports are handled via relative imports within the src package.
 
 from rich.live import Live
 from .lib.browser import BrowserManager
@@ -42,12 +38,16 @@ from .lib.models import HeadlessConfiguration, InteractiveSetupSession
 
 # Import new managers
 from .setup_manager import SetupManager
-from .worker_manager import WorkerManager, ProcessingSession, _wait_for_downloads_complete, _legacy_rename_folder_with_status, _derive_status_label
+from .worker_manager import WorkerManager, ProcessingSession
 from .ui_controller import UIController
 from .core.communication_manager import CommunicationManager
 from .processing_controller import ProcessingController
 from .csv_manager import CSVManager
 from .core.resource_assessor import ResourceAssessor
+from .core.telemetry import TelemetryProvider, ConsoleTelemetryListener
+from .core.status import StatusLevel
+from .services.processing_service import ProcessingService
+from .core.utils import _humanize_exception, _wait_for_downloads_complete, _derive_status_label, _legacy_rename_folder_with_status
 
 # Enable interactive UI mode (set to True to enable interactive prompts)
 ENABLE_INTERACTIVE_UI = os.environ.get('ENABLE_INTERACTIVE_UI', 'True').strip().lower() == 'true'
@@ -83,7 +83,18 @@ class MainApp:
         self.ui_controller = UIController()
         self.processing_controller = ProcessingController(self.worker_manager, self.ui_controller)
         self.csv_manager = CSVManager()
+        self.telemetry = TelemetryProvider()
+        # Add console listener by default for standard execution
+        self.telemetry.add_listener(ConsoleTelemetryListener())
         self.communication_manager = CommunicationManager()
+        
+        self.processing_service = ProcessingService(
+            browser_manager=self.browser_manager,
+            folder_hierarchy=self.folder_hierarchy,
+            storage_manager=self.csv_manager,
+            telemetry=self.telemetry,
+            ui_controller=self.ui_controller
+        )
         self.driver = None
         self.lock = threading.Lock()  # Thread safety for browser operations
         self._run_start_time: float | None = None
@@ -96,7 +107,8 @@ class MainApp:
     def set_headless_configuration(self, headless_config: HeadlessConfiguration) -> None:
         """Set the headless configuration for this MainApp instance."""
         self._headless_config = headless_config
-        print(f"[MainApp] 🎯 Headless configuration set: {headless_config}")
+        self.processing_service.set_headless_configuration(headless_config)
+        self.telemetry.emit_status(StatusLevel.INFO, f"Headless configuration set: {headless_config}")
     
     # ---- UI helpers ---------------------------------------------------------------------
 
@@ -260,192 +272,25 @@ class MainApp:
             return status_reason.replace('_', ' ').title()
         return ''
 
-    def process_single_po(self, po_data, hierarchy_cols, has_hierarchy_data, index, total):
-        """Process a single PO using the existing browser window (no extra tabs)."""
-        display_po = po_data['po_number']
-        po_number = po_data['po_number']
-        if self._run_start_time is None:
-            self._prepare_progress_tracking(total)
-
-        self._current_po_start_time = time.perf_counter()
-        vendor_hint = po_data.get('supplier') or po_data.get('vendor') or ''
-        print(self._build_progress_line(index, total))
-        print(f"   Current PO: {display_po}")
-
+    def process_single_po(self, po_data, hierarchy_cols, has_hierarchy_data, index, total, execution_mode=None):
+        """Process a single PO using the processing service."""
+        from .lib.models import ExecutionMode
+        execution_mode = execution_mode or ExecutionMode.STANDARD
+        
+        # Ensure the service has the current driver/lock context from MainApp if needed
+        # (Though MainApp will eventually be refactored further)
+        self.processing_service.driver = self.driver
+        self.processing_service.lock = self.lock
+        
         try:
-            # Create hierarchical folder structure
-            folder_path = self.folder_hierarchy.create_folder_path(
-                po_data, hierarchy_cols, has_hierarchy_data
+            return self.processing_service.process_single_po(
+                po_data=po_data,
+                hierarchy_cols=hierarchy_cols,
+                has_hierarchy_data=has_hierarchy_data,
+                index=index,
+                total=total,
+                execution_mode=execution_mode
             )
-            print(f"   📁 Folder: {folder_path}")
-
-            def _update_seq_worker(status: str, attachments_found: int = 0, attachments_downloaded: int = 0) -> None:
-                if not self.ui_controller.worker_states:
-                    self.ui_controller.worker_states = [{
-                        "worker_id": "Worker 1",
-                        "current_po": "Idle",
-                        "status": "Idle",
-                        "attachments_found": 0,
-                        "attachments_downloaded": 0,
-                        "duration": 0.0,
-                    }]
-                worker_state = self.ui_controller.worker_states[0]
-                worker_state["current_po"] = display_po
-                worker_state["status"] = status
-                worker_state["attachments_found"] = attachments_found
-                worker_state["attachments_downloaded"] = attachments_downloaded
-                if self._current_po_start_time:
-                    worker_state["duration"] = max(0.0, time.perf_counter() - self._current_po_start_time)
-                self.ui_controller.update_display()
-
-            def _emit_progress(payload: Dict[str, Any]) -> None:
-                _update_seq_worker(
-                    status=payload.get("status", "PROCESSING"),
-                    attachments_found=payload.get("attachments_found", 0),
-                    attachments_downloaded=payload.get("attachments_downloaded", 0),
-                )
-
-            _update_seq_worker("STARTED")
-
-            # Process entirely under lock to avoid Selenium races (single window)
-            with self.lock:
-                # Ensure driver exists and is responsive
-                if not self.browser_manager.is_browser_responsive():
-                    print("   ⚠️ Browser not responsive. Reinitializing driver...")
-                    self.browser_manager.cleanup()
-                    self.browser_manager.initialize_driver(headless=self._get_headless_setting())
-                    self.driver = self.browser_manager.driver
-
-                # Ensure downloads for this PO go to the right folder
-                self.browser_manager.update_download_directory(folder_path)
-
-                # Create downloader and attempt processing
-                downloader = Downloader(self.driver, self.browser_manager, progress_callback=_emit_progress)
-                try:
-                    result_payload = downloader.download_attachments_for_po(po_number)
-                except (InvalidSessionIdException, NoSuchWindowException) as e:
-                    # Session/tab was lost. Try to recover once.
-                    print(f"   ⚠️ Session issue detected ({type(e).__name__}). Recovering driver and retrying once...")
-                    self.browser_manager.cleanup()
-                    self.browser_manager.initialize_driver(headless=self._get_headless_setting())
-                    self.driver = self.browser_manager.driver
-                    downloader = Downloader(self.driver, self.browser_manager, progress_callback=_emit_progress)
-                    result_payload = downloader.download_attachments_for_po(po_number)
-
-                message = result_payload.get('message', '')
-
-                # Wait for downloads to complete before finalizing folder name
-                _wait_for_downloads_complete(folder_path)
-
-                # Derive unified status and rename folder with standardized suffix
-                status_code = _derive_status_label(result_payload)
-                try:
-                    final_folder = self.folder_hierarchy.finalize_folder(folder_path, status_code)
-                except Exception:
-                    final_folder = _legacy_rename_folder_with_status(folder_path, status_code)
-                status_reason = result_payload.get('status_reason', '')
-                errors = result_payload.get('errors', [])
-
-                # Update status with the final folder path and enriched fields
-                formatted_names = self.folder_hierarchy.format_attachment_names(
-                    result_payload.get('attachment_names', [])
-                )
-                csv_message = self._compose_csv_message(result_payload)
-                if self.csv_manager.is_initialized():
-                    try:
-                        self.csv_manager.update_record(display_po, {
-                            'STATUS': status_code,
-                            'SUPPLIER': result_payload.get('supplier_name', ''),
-                            'ATTACHMENTS_FOUND': result_payload.get('attachments_found', 0),
-                            'ATTACHMENTS_DOWNLOADED': result_payload.get('attachments_downloaded', 0),
-                            'AttachmentName': formatted_names,
-                            'ERROR_MESSAGE': csv_message,
-                            'DOWNLOAD_FOLDER': final_folder,
-                            'COUPA_URL': result_payload.get('coupa_url', ''),
-                        })
-                    except Exception as e:
-                        print(f"[seq] ⚠️ Failed incremental CSV update: {e}")
-
-                # (Legacy note) Incremental CSVHandler não é usado no modo sequencial aqui.
-                # Persistência incremental já coberta por excel_processor.update_po_status acima.
-
-                emoji = {
-                    'COMPLETED': '✅',
-                    'NO_ATTACHMENTS': '📭',
-                    'PARTIAL': '⚠️',
-                    'FAILED': '❌',
-                    'PO_NOT_FOUND': '🚫',
-                }.get(status_code, 'ℹ️')
-                log_message = message or status_reason or status_code
-                print(f"   {emoji} {display_po}: {log_message}")
-                _update_seq_worker(
-                    status=status_code,
-                    attachments_found=result_payload.get('attachments_found', 0),
-                    attachments_downloaded=result_payload.get('attachments_downloaded', 0),
-                )
-                return status_code in {'COMPLETED', 'NO_ATTACHMENTS'}
-
-        except Exception as e:
-            friendly = _humanize_exception(e)
-            print(f"   ❌ Error processing {display_po}: {friendly}")
-            # Use unified FAILED status on exceptions in sequential mode
-            if self.csv_manager.is_initialized():
-                try:
-                    self.csv_manager.update_record(display_po, {
-                        'STATUS': 'FAILED',
-                        'ERROR_MESSAGE': friendly,
-                    })
-                except Exception as e:
-                    print(f"[seq] ⚠️ Failed incremental CSV update (failed path): {e}")
-
-            # Persist to CSV if handler is initialized
-            if self.csv_manager.is_initialized():
-                failed_result = {
-                    'po_number': po_number,
-                    'po_number_display': display_po,
-                    'status_code': 'FAILED',
-                    'message': friendly,
-                    'supplier_name': vendor_hint,
-                }
-                if self.csv_manager.is_initialized():
-                    try:
-                        self.csv_manager.update_record(display_po, {
-                            'STATUS': 'FAILED',
-                            'ERROR_MESSAGE': friendly,
-                        })
-                    except Exception as e:
-                        print(f"[seq-exception] ⚠️ Failed incremental CSV update: {e}")
-
-            # Clean up browser state: close any extra tabs and return to main tab
-            try:
-                with self.lock:
-                    # Skip cleanup if driver doesn't exist
-                    if self.driver is None:
-                        print("   ⚠️ Driver is None - skipping cleanup")
-                        return False
-                    
-                    # Attempt to close extra tabs if they exist
-                    try:
-                        if len(self.driver.window_handles) > 1:
-                            self.driver.close()
-                            self.driver.switch_to.window(self.driver.window_handles[0])
-                    except (NoSuchWindowException, InvalidSessionIdException) as e:
-                        print(f"   ⚠️ Tab cleanup error: {str(e)}")
-            except Exception as unexpected_error:
-                print(f"   ⚠️ Unexpected cleanup error: {str(unexpected_error)}")
-            
-            # Always attempt browser recovery after errors
-            try:
-                with self.lock:
-                    if self.driver is None or not self.browser_manager.is_browser_responsive():
-                        print("   ⚠️ Attempting browser recovery")
-                        self.browser_manager.cleanup()
-                        self.browser_manager.initialize_driver(headless=self._get_headless_setting())
-                        self.driver = self.browser_manager.driver
-            except Exception as recovery_error:
-                print(f"   🔴 Browser recovery failed: {str(recovery_error)}")
-
-            return False
         finally:
             self._register_po_completion()
 
@@ -461,10 +306,19 @@ class MainApp:
         if enable_interactive:
             setup_session = self.setup_manager.interactive_setup()
             headless_config = HeadlessConfiguration(enabled=setup_session.headless_preference)
+            self.ui_mode = setup_session.ui_mode
+            self.execution_mode = setup_session.execution_mode
         else:
-            print("⚙️ Applying environment configuration")
+            self.telemetry.emit_status(StatusLevel.INFO, "Applying environment configuration")
             config = self.setup_manager.apply_env_overrides()
             headless_config = HeadlessConfiguration(enabled=config["headless_preference"])
+            # Respect pre-existing modes (e.g. "none" set by RealCoreSystem)
+            if not hasattr(self, 'ui_mode') or self.ui_mode is None:
+                self.ui_mode = config.get("ui_mode", "standard")
+            if not hasattr(self, 'execution_mode') or self.execution_mode is None:
+                self.execution_mode = config.get("execution_mode", "standard")
+        
+        self.set_headless_configuration(headless_config)
         
         self.set_headless_configuration(headless_config)
 
@@ -476,11 +330,11 @@ class MainApp:
             # Inform which input file will be processed (CSV or Excel)
             _, ext = os.path.splitext(excel_path.lower())
             file_kind = "CSV" if ext == ".csv" else "Excel"
-            print(f"📄 Processing input file: {excel_path} ({file_kind})")
+            self.telemetry.emit_status(StatusLevel.INFO, f"Processing input file: {excel_path} ({file_kind})")
             po_entries, original_cols, hierarchy_cols, has_hierarchy_data = self.excel_processor.read_po_numbers_from_excel(excel_path)
             valid_entries = self.excel_processor.process_po_numbers(po_entries)
         except Exception as e:
-            print(f"❌ Failed to read or process input file: {e}")
+            self.telemetry.emit_status(StatusLevel.ERROR, f"Failed to read or process input file: {e}")
             return
 
         if not valid_entries:
@@ -513,11 +367,8 @@ class MainApp:
                     po_data_list.append(entry)
                     break
 
-        print(f"📋 PO Data Conversion:")
-        print(f"  - Valid entries: {len(valid_entries)}")
-        print(f"  - Po_data_list created: {len(po_data_list)}")
-        print(f"  - Sample PO data: {po_data_list[0] if po_data_list else 'None'}")
-        print(f"🚀 Starting processing with {len(po_data_list)} POs...")
+        self.telemetry.emit_status(StatusLevel.SUCCESS, f"PO Data Conversion complete. {len(po_data_list)} POs ready.")
+        self.telemetry.emit_status(StatusLevel.INFO, f"Starting processing with {len(po_data_list)} POs...")
         use_process_pool = bool(getattr(ExperimentalConfig, 'USE_PROCESS_POOL', False))  # Derived from worker count
 
         requested_workers = getattr(ExperimentalConfig, 'PROC_WORKERS', self.max_workers)
@@ -571,49 +422,22 @@ class MainApp:
             } for i in range(self.max_workers)
         ]
 
-        # Start Live display with initial Group
-        initial_renderable = self.ui_controller.get_initial_renderable()
-        with Live(
-            initial_renderable, 
-            console=self.ui_controller.console, 
-            refresh_per_second=4,
-            screen=True,  # Full screen mode for proper rendering
-            auto_refresh=False  # Manual refresh for proper resize handling
-        ) as live:
-            self.ui_controller.live = live
-            self.ui_controller._updating = True
-            self.ui_controller.add_log("🚀 System initialized and ready")
+        if self.ui_mode == "premium":
+            self._run_premium_ui(
+                po_data_list,
+                hierarchy_cols,
+                has_hierarchy_data,
+                use_process_pool
+            )
+            # Final stats after UI closes
+            agg = self.communication_manager.get_aggregated_metrics(drain_all=True)
+            successful = agg.get("total_successful", 0)
+            failed = agg.get("total_failed", 0)
+        elif self.ui_mode == "none":
+            # Silent mode - no Rich UI
+            self.ui_controller._updating = False  # Disable Rich updates
+            print(f"🚀 Starting silent processing with {len(po_data_list)} POs...")
             
-            # Start a thread to update elapsed time every second
-            def update_timer():
-                while self.ui_controller.live:
-                    time.sleep(1)
-                    if self._run_start_time:
-                        elapsed_seconds = time.perf_counter() - self._run_start_time
-                        minutes, seconds = divmod(int(elapsed_seconds), 60)
-                        self.ui_controller.global_stats["elapsed"] = f"{minutes}m {seconds}s"
-                        # Update worker elapsed
-                        for worker in self.ui_controller.worker_states:
-                            worker["elapsed"] = self.ui_controller.global_stats["elapsed"]
-                        # Update display with new elapsed time
-                        try:
-                            self.ui_controller.update_display()
-                        except:
-                            break  # Live closed
-            
-            timer_thread = threading.Thread(target=update_timer, daemon=True)
-            timer_thread.start()
-
-            if use_process_pool and self.enable_parallel:
-                self.ui_controller.add_log(f"🔥 Starting parallel processing with {self.max_workers} workers")
-                self.ui_controller.start_live_updates(self.communication_manager, update_interval=0.5)
-            else:
-                self.ui_controller.add_log("📺 Starting sequential processing")
-            
-            # Process POs directly without UI
-            if self._headless_config is None:
-                raise RuntimeError("Headless configuration not set.")
-                
             try:
                 successful, failed = self.processing_controller.process_po_entries(
                     po_data_list,
@@ -630,19 +454,117 @@ class MainApp:
                     self.process_single_po,
                     communication_manager=self.communication_manager if use_process_pool and self.enable_parallel else None,
                     sqlite_db_path=self.csv_manager.sqlite_db_path,
+                    execution_mode=getattr(self, 'execution_mode', 'standard'),
                 )
             finally:
                 if use_process_pool and self.enable_parallel:
-                    self.ui_controller.stop_live_updates()
+                    self.worker_manager.shutdown()
+        else:
+            # Start Live display with initial Group (Standard UI)
+            initial_renderable = self.ui_controller.get_initial_renderable()
+            with Live(
+                initial_renderable, 
+                console=self.ui_controller.console, 
+                refresh_per_second=4,
+                screen=True,  # Full screen mode for proper rendering
+                auto_refresh=False  # Manual refresh for proper resize handling
+            ) as live:
+                self.ui_controller.live = live
+                self.ui_controller._updating = True
+                self.ui_controller.add_log("🚀 System initialized and ready")
+                
+                # Start a thread to update elapsed time every second
+                def update_timer():
+                    while self.ui_controller.live:
+                        time.sleep(1)
+                        if self._run_start_time:
+                            elapsed_seconds = time.perf_counter() - self._run_start_time
+                            minutes, seconds = divmod(int(elapsed_seconds), 60)
+                            self.ui_controller.global_stats["elapsed"] = f"{minutes}m {seconds}s"
+                            # Update worker elapsed
+                            for worker in self.ui_controller.worker_states:
+                                worker["elapsed"] = self.ui_controller.global_stats["elapsed"]
+                            # Update display with new elapsed time
+                            try:
+                                self.ui_controller.update_display()
+                            except:
+                                break  # Live closed
+                
+                timer_thread = threading.Thread(target=update_timer, daemon=True)
+                timer_thread.start()
+
+                if use_process_pool and self.enable_parallel:
+                    self.ui_controller.add_log(f"🔥 Starting parallel processing with {self.max_workers} workers")
+                    self.ui_controller.start_live_updates(self.communication_manager, update_interval=0.5)
+                else:
+                    self.ui_controller.add_log("📺 Starting sequential processing")
+                
+                # Process POs directly without UI
+                if self._headless_config is None:
+                    raise RuntimeError("Headless configuration not set.")
+                    
+                try:
+                    successful, failed = self.processing_controller.process_po_entries(
+                        po_data_list,
+                        hierarchy_cols,
+                        has_hierarchy_data,
+                        use_process_pool,
+                        self._headless_config,
+                        self.enable_parallel,
+                        self.max_workers,
+                        self.csv_manager.csv_handler,
+                        self.folder_hierarchy,
+                        self.initialize_browser_once,
+                        self._prepare_progress_tracking,
+                        self.process_single_po,
+                        communication_manager=self.communication_manager if use_process_pool and self.enable_parallel else None,
+                        sqlite_db_path=self.csv_manager.sqlite_db_path,
+                        # Pass the captured execution mode instead of default config
+                        execution_mode=getattr(self, 'execution_mode', getattr(ExperimentalConfig, 'EXECUTION_MODE', 'standard')),
+                    )
+                finally:
+                    if use_process_pool and self.enable_parallel:
+                        self.ui_controller.stop_live_updates()
 
         # Shutdown CSV handler to ensure all data is persisted
         self.csv_manager.shutdown_csv_handler()
 
-        print("-" * 60)
-        print("🎉 Processing complete!")
-        print(f"✅ Successful: {successful}")
-        print(f"❌ Failed: {failed}")
-        print(f"📊 Total: {successful + failed}")
+        self.telemetry.emit_stats(successful, failed, successful + failed)
+        self.telemetry.emit_status(StatusLevel.SUCCESS, f"Processing complete! {successful} successful, {failed} failed.")
+
+    def _run_premium_ui(self, po_data_list, hierarchy_cols, has_hierarchy_data, use_process_pool):
+        """Run the alternative Premium Textual UI."""
+        from .ui.textual_ui_app import CoupaTextualUI
+        import threading
+
+        # Start processing in a background thread
+        def run_processing():
+            try:
+                self.processing_controller.process_po_entries(
+                    po_data_list,
+                    hierarchy_cols,
+                    has_hierarchy_data,
+                    use_process_pool,
+                    self._headless_config,
+                    self.enable_parallel,
+                    self.max_workers,
+                    self.csv_manager.csv_handler,
+                    self.folder_hierarchy,
+                    self.initialize_browser_once,
+                    self._prepare_progress_tracking,
+                    self.process_single_po,
+                    communication_manager=self.communication_manager if use_process_pool and self.enable_parallel else None,
+                    sqlite_db_path=self.csv_manager.sqlite_db_path,
+                )
+            except Exception as e:
+                print(f"Error in background processing: {e}")
+
+        proc_thread = threading.Thread(target=run_processing, daemon=True)
+        proc_thread.start()
+
+        # Run the Textual App
+        app = CoupaTextualUI(self.communication_manager, total_pos=len(po_data_list))
+        app.run()
 
     def close(self, emergency: bool = False):
         """Close the browser properly and stop all active components."""
@@ -747,5 +669,16 @@ def main() -> None:
             app.close()
 
 
+
+def _debug_log(msg: str):
+    try:
+        with open('/tmp/worker_debug.log', 'a') as f:
+            ts = datetime.now().isoformat()
+            f.write(f"[{ts}] [MAIN] {msg}\n")
+    except:
+        pass
+
 if __name__ == "__main__":
+    _debug_log("MainApp starting...")
+
     main()

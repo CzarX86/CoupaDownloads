@@ -17,7 +17,7 @@ from typing import Dict, List, Optional, Any, Tuple, Callable
 from dataclasses import dataclass, field
 
 try:
-    # Prefer absolute package imports when EXPERIMENTAL is a package
+    # Standard package imports
     from ..lib.models import HeadlessConfiguration
     from .exceptions import (
         WorkerPoolError,
@@ -32,22 +32,6 @@ try:
         ResourceMonitor,
     )
 except ImportError:
-    try:
-        # Fallback to package-relative imports when imported within EXPERIMENTAL package
-        from ..corelib.models import HeadlessConfiguration
-        from .exceptions import (
-            WorkerPoolError,
-            WorkerCreationError,
-            WorkerTimeoutError,
-            ProfileConflictError,
-        )
-        from .profile_manager import ProfileManager
-        from .task_queue import TaskQueue
-        from .resource_monitor import (
-            create_default_monitor,
-            ResourceMonitor,
-        )
-    except ImportError:
         # Handle direct script execution or tests invoking this module standalone
         import sys
         from pathlib import Path

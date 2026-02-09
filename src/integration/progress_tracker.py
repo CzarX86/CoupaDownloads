@@ -17,7 +17,7 @@ from datetime import datetime, timedelta
 from dataclasses import dataclass, asdict
 from enum import Enum
 import threading
-from .collections import deque
+from collections import deque
 import structlog
 
 from ..workers.models import POTask, TaskStatus
@@ -101,7 +101,7 @@ class ProgressTracker:
         self.start_time = datetime.now()
         self.last_snapshot_time = self.start_time
         self.completed_in_last_window: List[datetime] = []
-        self.processing_rate_window_seconds = 60.0  # Calculate rate over 1 minute
+        self.processing_rate_window_seconds = 300.0  # Calculate rate over 5 minutes
         
         # Thread safety
         self._lock = threading.RLock()
@@ -540,8 +540,10 @@ class ProgressTracker:
                 'current_snapshot': asdict(snapshot),
                 'throughput': {
                     'last_1_minute': throughput_1min,
+                    'last_1_minute': throughput_1min,
                     'last_5_minutes': throughput_5min,
-                    'last_15_minutes': throughput_15min
+                    'last_15_minutes': throughput_15min,
+                    'dynamic_rate_per_minute': self._calculate_dynamic_throughput() * 60
                 },
                 'worker_efficiency': worker_efficiency,
                 'total_processing_time_seconds': self.get_total_duration().total_seconds(),
@@ -670,6 +672,22 @@ class ProgressTracker:
         
         duration_seconds = (datetime.now() - since_time).total_seconds()
         return len(completed_since) / duration_seconds if duration_seconds > 0 else 0.0
+
+    def _calculate_dynamic_throughput(self) -> float:
+        """
+        Calculate throughput using a dynamic window based on runtime.
+        - First 5 minutes: use 10-second window (fast feedback)
+        - After 5 minutes: use 5-minute window (stable trend)
+        """
+        now = datetime.now()
+        runtime_seconds = (now - self.start_time).total_seconds()
+        
+        if runtime_seconds < 300:  # Less than 5 minutes
+            window_start = now - timedelta(seconds=10)
+        else:
+            window_start = now - timedelta(minutes=5)
+            
+        return self._calculate_throughput_since(window_start)
     
     def _calculate_worker_efficiency(self) -> Dict[str, Any]:
         """Calculate worker efficiency metrics."""

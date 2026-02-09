@@ -129,6 +129,7 @@ class ProcessingController:
         process_single_po: callable,
         communication_manager: Optional[Any] = None,
         sqlite_db_path: Optional[str] = None,
+        execution_mode: Any = None,
     ) -> Tuple[int, int]:
         """
         Process PO entries with automatic parallel mode selection.
@@ -136,64 +137,45 @@ class ProcessingController:
         Enhanced to support ProcessingSession for intelligent parallel processing.
         Falls back to original implementation for backward compatibility.
         """
-        # Check if parallel processing is enabled and beneficial
+        from .lib.models import ExecutionMode
+        execution_mode = execution_mode or ExecutionMode.STANDARD
+        if self.ui_controller:
+            self.ui_controller.execution_mode = execution_mode
+            mode_val = execution_mode.value if hasattr(execution_mode, 'value') else str(execution_mode)
+            self.ui_controller.add_log(f"🚀 Execution Mode: {mode_val.upper()}")
+
+
+        # Use unified processing engine for all parallel cases
         if enable_parallel and len(po_data_list) > 1 and use_process_pool:
-            if communication_manager:
-                manager = mp.Manager()
-                try:
-                    po_queue = manager.Queue()
-                    for po_data in po_data_list:
-                        po_queue.put(po_data)
-
-                    successful, failed, _session_report = self.worker_manager.process_parallel_with_reusable_workers(
-                        po_queue=po_queue,
-                        hierarchy_cols=hierarchy_cols,
-                        has_hierarchy_data=has_hierarchy_data,
-                        headless_config=headless_config,
-                        communication_manager=communication_manager,
-                        queue_size=len(po_data_list),
-                        csv_handler=csv_handler,
-                        folder_hierarchy=folder_hierarchy,
-                        sqlite_db_path=sqlite_db_path,
-                    )
-                    return successful, failed
-                finally:
-                    try:
-                        manager.shutdown()
-                    except Exception:
-                        pass
+            print(f"🚀 Using Unified Processing Engine with {self.worker_manager.max_workers} workers")
             try:
-                # Use WorkerManager for ProcessingSession approach
-                successful, failed, session_report = self.worker_manager.process_parallel_with_session(
-                    po_data_list, hierarchy_cols, has_hierarchy_data, headless_config,
-                    csv_handler=csv_handler, folder_hierarchy=folder_hierarchy,
-                    sqlite_db_path=sqlite_db_path
+                successful, failed, session_report = self.worker_manager.process_pos(
+                    po_data_list=po_data_list,
+                    hierarchy_cols=hierarchy_cols,
+                    has_hierarchy_data=has_hierarchy_data,
+                    headless_config=headless_config,
+                    storage_manager=csv_handler,
+                    folder_manager=folder_hierarchy,
+                    messenger=communication_manager,
+                    sqlite_db_path=sqlite_db_path,
+                    execution_mode=execution_mode,
                 )
-                
-                # self._last_parallel_report = session_report  # TODO: handle this
                 return successful, failed
-                
             except Exception as e:
-                print(f"⚠️  ProcessingSession failed, falling back to legacy processing: {e}")
-                # Fall through to legacy implementation
+                print(f"⚠️ Unified engine failed: {e}")
+                raise
+        
+        # Sequential processing (single worker, in-process)
+        if not use_process_pool or not enable_parallel:
 
-        # Legacy implementation (backward compatibility)
-        if use_process_pool:
-            # Use WorkerManager for legacy ProcessPoolExecutor approach
-            successful, failed = self.worker_manager.process_parallel_legacy(
-                po_data_list, hierarchy_cols, has_hierarchy_data, headless_config,
-                csv_handler=csv_handler, folder_hierarchy=folder_hierarchy,
-                sqlite_db_path=sqlite_db_path
-            )
-            return successful, failed
-        else:
-            print("📊 Using in-process mode (single WebDriver, sequential)")
+            mode_display = getattr(execution_mode, 'value', str(execution_mode)).upper()
+            print(f"📊 Using in-process mode (single WebDriver, sequential) - Mode: {mode_display}")
             initialize_browser_once()
             prepare_progress_tracking(len(po_data_list))
             successful = 0
             failed = 0
             for i, po_data in enumerate(po_data_list):
-                ok = process_single_po(po_data, hierarchy_cols, has_hierarchy_data, i, len(po_data_list))
+                ok = process_single_po(po_data, hierarchy_cols, has_hierarchy_data, i, len(po_data_list), execution_mode=execution_mode)
                 if ok:
                     successful += 1
                     self.ui_controller.global_stats["completed"] += 1

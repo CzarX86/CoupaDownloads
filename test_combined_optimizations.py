@@ -42,8 +42,7 @@ def test_combined_optimizations():
 
     # Setup configuration
     headless_config = HeadlessConfiguration(
-        headless_mode=False,  # Set to True for headless testing
-        interactive_setup_session=None
+        enabled=False  # Set to True for headless testing
     )
 
     # Initialize communication manager

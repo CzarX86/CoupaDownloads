@@ -33,41 +33,58 @@ class SQLiteHandler:
         return conn
 
     def _initialize_database(self):
-        """Creates the schema if it doesn't exist."""
-        try:
-            with self._get_connection() as conn:
-                conn.execute("""
-                    CREATE TABLE IF NOT EXISTS po_tasks (
-                        po_number TEXT PRIMARY KEY,
-                        STATUS TEXT DEFAULT 'PENDING',
-                        SUPPLIER TEXT DEFAULT '',
-                        ATTACHMENTS_FOUND INTEGER DEFAULT 0,
-                        ATTACHMENTS_DOWNLOADED INTEGER DEFAULT 0,
-                        AttachmentName TEXT DEFAULT '',
-                        LAST_PROCESSED TEXT DEFAULT '',
-                        ERROR_MESSAGE TEXT DEFAULT '',
-                        DOWNLOAD_FOLDER TEXT DEFAULT '',
-                        COUPA_URL TEXT DEFAULT ''
-                    )
-                """)
-                # Create an index on status for faster reporting
-                conn.execute("CREATE INDEX IF NOT EXISTS idx_status ON po_tasks(STATUS)")
-                conn.commit()
-            self.logger.info(f"💾 SQLite database initialized at {self.db_path}")
-        except Exception as e:
-            self.logger.error(f"❌ Failed to initialize SQLite database: {e}")
-            raise
+        """Creates the schema if it doesn't exist, with retries for concurrency."""
+        import time
+        max_retries = 5
+        for attempt in range(max_retries):
+            try:
+                with self._get_connection() as conn:
+                    conn.execute("""
+                        CREATE TABLE IF NOT EXISTS po_tasks (
+                            po_number TEXT PRIMARY KEY,
+                            STATUS TEXT DEFAULT 'PENDING',
+                            SUPPLIER TEXT DEFAULT '',
+                            ATTACHMENTS_FOUND INTEGER DEFAULT 0,
+                            ATTACHMENTS_DOWNLOADED INTEGER DEFAULT 0,
+                            AttachmentName TEXT DEFAULT '',
+                            LAST_PROCESSED TEXT DEFAULT '',
+                            ERROR_MESSAGE TEXT DEFAULT '',
+                            DOWNLOAD_FOLDER TEXT DEFAULT '',
+                            COUPA_URL TEXT DEFAULT ''
+                        )
+                    """)
+                    # Create an index on status for faster reporting
+                    conn.execute("CREATE INDEX IF NOT EXISTS idx_status ON po_tasks(STATUS)")
+                    conn.commit()
+                self.logger.debug(f"💾 SQLite database initialized at {self.db_path}")
+                return # Success
+            except sqlite3.OperationalError as e:
+                if "locked" in str(e).lower() and attempt < max_retries - 1:
+                    time.sleep(0.1 * (attempt + 1))
+                    continue
+                self.logger.error(f"❌ Failed to initialize SQLite database: {e}")
+                raise
+            except Exception as e:
+                self.logger.error(f"❌ Failed to initialize SQLite database: {e}")
+                raise
 
     def seed_from_dataframe(self, df: pd.DataFrame, po_col: str = 'PO_NUMBER'):
         """
         Populate the database with initial PO numbers from the input file.
         Existing records remain untouched.
         """
-        if po_col not in df.columns:
-            self.logger.warning(f"Column {po_col} not found in dataframe. Seeding aborted.")
+        # Find the column case-insensitively
+        actual_col = None
+        for col in df.columns:
+            if str(col).strip().upper() == po_col.upper():
+                actual_col = col
+                break
+        
+        if actual_col is None:
+            self.logger.warning(f"Column {po_col} not found in dataframe columns: {list(df.columns)}. Seeding aborted.")
             return
 
-        po_list = df[po_col].astype(str).str.strip().tolist()
+        po_list = df[actual_col].astype(str).str.strip().tolist()
         
         try:
             with self._get_connection() as conn:
@@ -77,7 +94,7 @@ class SQLiteHandler:
                     [(po,) for po in po_list if po]
                 )
                 conn.commit()
-            self.logger.info(f"🌱 Seeded {len(po_list)} POs into SQLite")
+            self.logger.debug(f"🌱 Seeded {len(po_list)} POs into SQLite")
         except Exception as e:
             self.logger.error(f"❌ Failed to seed SQLite: {e}")
 
