@@ -390,6 +390,8 @@ class MainApp:
         """Run the alternative Premium Textual UI."""
         from .ui.textual_ui_app import CoupaTextualUI
         import threading
+        import os
+        from .core.output import OutputSuppressor
 
         # Start processing in a background thread
         def run_processing():
@@ -416,12 +418,14 @@ class MainApp:
                 import traceback
                 traceback.print_exc()
 
-        proc_thread = threading.Thread(target=run_processing, daemon=True)
-        proc_thread.start()
+        os.environ["SUPPRESS_WORKER_OUTPUT"] = "1"
+        with OutputSuppressor(enabled=True):
+            proc_thread = threading.Thread(target=run_processing, daemon=True)
+            proc_thread.start()
 
-        # Run the Textual App
-        app = CoupaTextualUI(self.communication_manager, total_pos=len(po_data_list))
-        app.run()
+            # Run the Textual App
+            app = CoupaTextualUI(self.communication_manager, total_pos=len(po_data_list))
+            app.run()
 
     def close(self, emergency: bool = False):
         """Close the browser properly and stop all active components."""

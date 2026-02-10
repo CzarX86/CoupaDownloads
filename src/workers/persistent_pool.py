@@ -22,6 +22,7 @@ from datetime import datetime
 import structlog
 import psutil
 
+from ..core.output import maybe_print as print
 from .models import (
     PoolConfig, TaskHandle, POTask, Worker, Profile,
     TaskStatus, WorkerStatus, TaskPriority

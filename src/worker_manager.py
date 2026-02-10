@@ -25,6 +25,7 @@ from selenium.common.exceptions import (
     NoSuchWindowException,
     TimeoutException,
 )
+from .core.output import maybe_print as print
 
 # Add the project root to Python path for local execution
 project_root = Path(__file__).resolve().parents[2]
@@ -906,6 +907,22 @@ def process_po_worker(args):
     else:
         raise ValueError("process_po_worker expects at least 4 arguments")
 
+    output_handle = None
+    suppress_output = os.environ.get('SUPPRESS_WORKER_OUTPUT', '').strip().lower() in {'1', 'true', 'yes'}
+    if suppress_output:
+        try:
+            output_handle = open(os.devnull, 'w')
+            # Redirect stdout/stderr to avoid TTY pollution under Textual UI
+            os.dup2(output_handle.fileno(), sys.stdout.fileno())
+            os.dup2(output_handle.fileno(), sys.stderr.fileno())
+            sys.stdout = output_handle
+            sys.stderr = output_handle
+            import logging
+            logging.getLogger().handlers = []
+            logging.basicConfig(stream=output_handle, force=True, level=logging.INFO)
+        except Exception:
+            output_handle = None
+
     download_root = os.path.abspath(os.path.expanduser(download_root)) if download_root else os.path.abspath(os.path.expanduser(ExperimentalConfig.DOWNLOAD_FOLDER))
     os.environ['DOWNLOAD_FOLDER'] = download_root
     try:
@@ -920,7 +937,6 @@ def process_po_worker(args):
     driver = None
     folder_path = ''
     clone_dir = ''
-    output_handle = None # Initialize output_handle for finally block
 
     # Initialize CSV handler if path provided
     csv_handler = None
@@ -1241,10 +1257,7 @@ def process_reusable_worker(args):
     suppress_output = os.environ.get('SUPPRESS_WORKER_OUTPUT', '').strip().lower() in {'1', 'true', 'yes'}
     if suppress_output:
         try:
-            log_dir = os.path.join(tempfile.gettempdir(), 'coupadownloads_logs')
-            _ensure_dir(log_dir)
-            log_path = os.path.join(log_dir, f"worker_{worker_id}_{os.getpid()}.log")
-            output_handle = open(log_path, 'a', buffering=1)
+            output_handle = open(os.devnull, 'w')
             
             # Forceful redirection at OS level to catch sub-processes and loggers
             os.dup2(output_handle.fileno(), sys.stdout.fileno())
@@ -1257,7 +1270,7 @@ def process_reusable_worker(args):
             # Silence logging root handlers if they exist
             import logging
             logging.getLogger().handlers = []
-            logging.basicConfig(filename=log_path, force=True, level=logging.INFO)
+            logging.basicConfig(stream=output_handle, force=True, level=logging.INFO)
         except Exception:
             output_handle = None
 
@@ -1601,6 +1614,11 @@ def process_reusable_worker(args):
         if clone_dir:
             try:
                 shutil.rmtree(clone_dir, ignore_errors=True)
+            except Exception:
+                pass
+        if output_handle:
+            try:
+                output_handle.close()
             except Exception:
                 pass
 

@@ -73,6 +73,7 @@ from ..core.utils import (
     _parse_counts_from_message
 )
 from ..core.protocols import StorageManager, Messenger
+from ..core.output import maybe_print as print
 
 # Centralized config for URLs
 try:

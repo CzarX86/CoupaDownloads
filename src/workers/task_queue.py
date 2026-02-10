@@ -20,6 +20,7 @@ from .exceptions import (
     QueueCapacityError,
     TaskTimeoutError
 )
+from ..core.output import maybe_print as print
 
 
 class TaskStatus(Enum):

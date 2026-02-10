@@ -25,6 +25,7 @@ from .error_handler import ProfileOperationHandler
 from ..config.defaults import get_default_timeouts
 from ..config.logging_config import get_logger
 from ..config.profile_config import get_platform_config
+from ..core.output import maybe_print as print
 from ..specs.parallel_profile_clone.contracts.profile_manager_contract import (
     VerificationConfig as _ContractVerificationConfig,
     VerificationMethod as _ContractVerificationMethod,

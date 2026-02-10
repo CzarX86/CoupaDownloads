@@ -14,6 +14,7 @@ import multiprocessing as mp
 from .worker_manager import WorkerManager
 from .core.csv_handler import CSVHandler, WriteQueue
 from .lib.models import HeadlessConfiguration
+from .core.output import maybe_print as print
 
 
 class ProcessingController:
