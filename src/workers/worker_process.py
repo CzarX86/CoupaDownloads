@@ -443,12 +443,22 @@ class WorkerProcess:
             try:
                 from ..lib.config import Config as _Cfg
                 target = getattr(_Cfg, 'DOWNLOAD_FOLDER', None)
-            except Exception:
+            except Exception as e:
+                logger.warning(
+                    "Failed to get download folder from config (attempt 1)",
+                    worker_id=self.worker_id,
+                    error=str(e)
+                )
                 try:
                     from ..lib.config import Config as _Cfg  # type: ignore
                     target = getattr(_Cfg, 'DOWNLOAD_FOLDER', None)
-                except Exception:
-                    pass
+                except Exception as e2:
+                    logger.warning(
+                        "Failed to get download folder from config (attempt 2)",
+                        worker_id=self.worker_id,
+                        error=str(e2)
+                    )
+                    # Will use default fallback
         
         # Final fallback to default (but this should not happen with proper config)
         if not target:
@@ -471,8 +481,12 @@ class WorkerProcess:
         try:
             from ..lib import config as experimental_config
             experimental_config._settings.DOWNLOAD_FOLDER = normalized  # type: ignore[attr-defined]
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(
+                "Failed to update config _settings (non-critical)",
+                worker_id=self.worker_id,
+                error=str(e)
+            )
 
         try:
             os.makedirs(normalized, exist_ok=True)
