@@ -9,8 +9,8 @@ import logging
 from typing import Optional, Any
 import threading
 
-from .lib.browser import BrowserManager
-from .lib.models import HeadlessConfiguration
+from ..lib.browser import BrowserManager
+from ..lib.models import HeadlessConfiguration
 
 logger = logging.getLogger(__name__)
 
