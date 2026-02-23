@@ -8,9 +8,12 @@ for UI display in parallel processing scenarios.
 import multiprocessing as mp
 import queue
 import threading
+import logging
 from typing import Dict, List, Any, Tuple
 from dataclasses import dataclass, asdict
 from datetime import datetime
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -67,7 +70,7 @@ class CommunicationManager:
     def send_metric(self, metric_dict: Dict[str, Any]) -> None:
         """
         Send a metric message to the shared queue.
-        
+
         Args:
             metric_dict: Dictionary containing metric information
         """
@@ -75,8 +78,16 @@ class CommunicationManager:
             metric_message = MetricMessage(**metric_dict)
             self.metric_queue.put(metric_message)
         except Exception as e:
-            # Avoid frequent printing in workers
-            pass
+            # Log exception with context instead of silently swallowing
+            logger.warning(
+                "Failed to send metric",
+                extra={
+                    "error": str(e),
+                    "metric": metric_dict,
+                    "worker_id": metric_dict.get("worker_id"),
+                    "po_id": metric_dict.get("po_id"),
+                }
+            )
             
     def get_metrics(self) -> List[Dict[str, Any]]:
         """
@@ -98,7 +109,9 @@ class CommunicationManager:
                 count += 1
             except queue.Empty:
                 break
-            except Exception:
+            except Exception as e:
+                # Log unexpected queue errors
+                logger.warning("Unexpected error draining metric queue", extra={"error": str(e)})
                 break
 
             if isinstance(metric, MetricMessage):
@@ -164,8 +177,15 @@ class CommunicationManager:
         """Signal that a folder is ready for finalization."""
         try:
             self.finalization_queue.put((folder_path, status_code))
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(
+                "Failed to signal folder finalization",
+                extra={
+                    "error": str(e),
+                    "folder_path": folder_path,
+                    "status_code": status_code,
+                }
+            )
 
     def get_finalization_tasks(self) -> List[Tuple[str, str]]:
         """Get all pending finalization tasks."""
