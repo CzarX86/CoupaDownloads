@@ -9,6 +9,7 @@ import os
 import sys
 import time
 import threading
+import logging
 from datetime import datetime, timedelta
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
@@ -46,6 +47,9 @@ from .core.telemetry import TelemetryProvider, ConsoleTelemetryListener
 from .core.status import StatusLevel
 from .services.processing_service import ProcessingService
 from .core.utils import _humanize_exception, _wait_for_downloads_complete, _derive_status_label
+
+# Module logger
+logger = logging.getLogger(__name__)
 
 # Enable interactive UI mode (set to True to enable interactive prompts)
 # Default is True for local interactive use
@@ -117,10 +121,10 @@ class MainApp:
     def initialize_browser_once(self):
         """Initialize browser once and keep it open for all POs."""
         if not self.driver:
-            print("🚀 Initializing browser for sequential processing...")
+            logger.info("Initializing browser for sequential processing")
             self.browser_manager.initialize_driver(headless=self._headless_config.get_effective_headless_mode())
             self.driver = self.browser_manager.driver
-            print("✅ Browser initialized successfully")
+            logger.info("Browser initialized successfully")
 
 
     @staticmethod
@@ -272,13 +276,18 @@ class MainApp:
             return
 
         if not valid_entries:
-            print("No valid PO entries found to process.")
+            logger.warning("No valid PO entries found to process")
             return
 
-        print(f"📊 CSV Reading Results:")
-        print(f"  - Total entries read: {len(po_entries)}")
-        print(f"  - Valid POs after processing: {len(valid_entries)}")
-        print(f"  - PO numbers: {[entry[0] for entry in valid_entries[:10]]}{'...' if len(valid_entries) > 10 else ''}")
+        logger.info(
+            "CSV reading completed",
+            extra={
+                "total_entries": len(po_entries),
+                "valid_pos": len(valid_entries),
+                "sample_po_numbers": [entry[0] for entry in valid_entries[:10]],
+                "has_more": len(valid_entries) > 10,
+            }
+        )
 
         # Initialize CSV handler if input file is CSV
         csv_input_path = Path(excel_path)
@@ -291,7 +300,7 @@ class MainApp:
                     df_seed = pd.DataFrame(po_entries)
                     self.csv_manager.seed_sqlite(df_seed)
                 except Exception as e:
-                    print(f"⚠️ Failed to seed SQLite database: {e}")
+                    logger.warning("Failed to seed SQLite database", extra={"error": str(e)})
 
         # Convert to list of PO data
         po_data_list = []
@@ -313,14 +322,17 @@ class MainApp:
 
         # Resource-Aware Scaling Assessment
         if getattr(ExperimentalConfig, 'RESOURCE_AWARE_SCALING', True):
-            print(f"🔍 Performing Resource-Aware Risk Assessment (Target: {configured_workers_raw} workers)...")
+            logger.info("Performing resource-aware risk assessment", extra={"target_workers": configured_workers_raw})
             min_free_ram = float(getattr(ExperimentalConfig, 'MIN_FREE_RAM_GB', 0.3))
             configured_workers, report = ResourceAssessor.calculate_safe_worker_count(configured_workers_raw, min_free_ram_gb=min_free_ram)
-            print(ResourceAssessor.get_risk_message(report))
-            
+            logger.info(ResourceAssessor.get_risk_message(report))
+
             if report["is_throttled"]:
-                print(f"⚠️ Worker count adjusted: {configured_workers_raw} -> {configured_workers}")
-            
+                logger.warning(
+                    "Worker count adjusted due to resource constraints",
+                    extra={"original": configured_workers_raw, "adjusted": configured_workers}
+                )
+
             # Use suggested stagger delay to mitigate startup spikes
             stagger_delay = report.get("stagger_delay", 0.5)
             if hasattr(self.worker_manager, 'stagger_delay'):
@@ -331,7 +343,10 @@ class MainApp:
                 configured_workers = max(1, min(configured_workers_raw, cap))
             else:
                 configured_workers = max(1, configured_workers_raw)
-            print(f"ℹ️ Resource-Aware Scaling disabled. Using configured cap: {configured_workers}")
+            logger.info(
+                "Resource-aware scaling disabled, using configured cap",
+                extra={"workers": configured_workers}
+            )
 
         self.max_workers = configured_workers
         self.worker_manager.max_workers = self.max_workers
@@ -348,7 +363,7 @@ class MainApp:
 
         if self.ui_mode == "none":
             # Silent mode - no UI
-            print(f"🚀 Starting silent processing with {len(po_data_list)} POs...")
+            logger.info("Starting silent processing", extra={"po_count": len(po_data_list)})
             
             try:
                 successful, failed = self.processing_controller.process_po_entries(
@@ -434,7 +449,7 @@ class MainApp:
     def close(self, emergency: bool = False):
         """Close the browser properly and stop all active components."""
         if emergency:
-            print("\n🚨 Accelerated shutdown initiated...")
+            logger.warning("Accelerated shutdown initiated")
 
         # 1. Shutdown active sessions
 
@@ -442,10 +457,10 @@ class MainApp:
         if hasattr(self, 'worker_manager'):
             try:
                 if hasattr(self.worker_manager, 'active_session') and self.worker_manager.active_session:
-                    print(f"🔄 Stopping active processing session (emergency={emergency})...")
+                    logger.info("Stopping active processing session", extra={"emergency": emergency})
                     self.worker_manager.active_session.stop_processing(emergency=emergency)
             except Exception as e:
-                print(f"⚠️ Error stopping worker session: {e}")
+                logger.warning("Error stopping worker session", extra={"error": str(e)})
 
         # 3. Shutdown CSV handler to ensure all data is persisted
         if hasattr(self, 'csv_manager'):
@@ -453,16 +468,16 @@ class MainApp:
                 self.csv_manager.shutdown_csv_handler()
             except Exception:
                 pass
-            
+
         # 4. Cleanup browser manager
         if self.driver:
-            print("🔄 Closing browser...")
+            logger.info("Closing browser")
             try:
                 self.browser_manager.cleanup()
             except Exception:
                 pass
             self.driver = None
-            print("✅ Browser closed successfully")
+            logger.info("Browser closed successfully")
 
 
 class SessionStatus(Enum):
@@ -493,19 +508,19 @@ def main() -> None:
     def signal_handler(sig, frame):
         nonlocal shutdown_initiated
         if shutdown_initiated:
-            print("\n🚨 Second interrupt received. Force quitting...")
+            logger.critical("Second interrupt received, force quitting")
             os._exit(1)
-            
-        print("\n🛑 Interrupt received! Initiating graceful shutdown...")
+
+        logger.warning("Interrupt received, initiating graceful shutdown")
         shutdown_initiated = True
-        
+
         # Trigger the app shutdown
         try:
             app.close(emergency=True)
         except Exception as e:
-            print(f"⚠️ Error during app shutdown: {e}")
-            
-        print("✅ Shutdown sequence completed. Exiting.")
+            logger.error("Error during app shutdown", extra={"error": str(e)})
+
+        logger.info("Shutdown sequence completed")
         # Standard exit code for SIGINT is 130
         os._exit(130)
 
@@ -520,9 +535,7 @@ def main() -> None:
         if not shutdown_initiated:
             signal_handler(signal.SIGINT, None)
     except Exception as e:
-        print(f"❌ Application error: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.error("Application error", extra={"error": str(e)}, exc_info=True)
     finally:
         # Standard cleanup if finished normally
         if not shutdown_initiated:
