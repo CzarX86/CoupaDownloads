@@ -216,7 +216,20 @@ class CSVManager:
                     if target_col and sqlite_col in to_update.columns:
                         # Ensure we don't overwrite with empty values if SQLite has better data
                         # but SQLite should have the most recent data
-                        df.update(to_update[[sqlite_col]].rename(columns={sqlite_col: target_col}))
+                        # Fix: Convert values to compatible types before update
+                        source_data = to_update[sqlite_col].copy()
+                        
+                        # Convert to string for string columns, handle NaN properly
+                        if target_col in ['STATUS', 'SUPPLIER', 'AttachmentName', 'ERROR_MESSAGE', 'DOWNLOAD_FOLDER', 'COUPA_URL', 'LAST_PROCESSED']:
+                            # For string columns, convert to string and replace NaN with empty string
+                            source_data = source_data.fillna('').astype(str)
+                        elif target_col in ['ATTACHMENTS_FOUND', 'ATTACHMENTS_DOWNLOADED']:
+                            # For numeric columns, convert to int and replace NaN with 0
+                            source_data = source_data.fillna(0).astype(int)
+                        
+                        # Create temp dataframe for update
+                        temp_df = pd.DataFrame({target_col: source_data}, index=df.index)
+                        df.update(temp_df)
                 
                 df.reset_index(inplace=True)
                 

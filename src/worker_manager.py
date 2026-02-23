@@ -25,7 +25,6 @@ from selenium.common.exceptions import (
     NoSuchWindowException,
     TimeoutException,
 )
-from .core.output import maybe_print as print
 
 # Add the project root to Python path for local execution
 project_root = Path(__file__).resolve().parents[2]
@@ -296,11 +295,9 @@ class ProcessingSession:
                 csv_handler = None
                 if hasattr(self, 'csv_path') and self.csv_path:
                     try:
-                        csv_handler = CSVHandler(
-                            Path(self.csv_path),
-                            sqlite_db_path=self.sqlite_db_path,
-                            enable_legacy_updates=not ExperimentalConfig.SQLITE_ONLY_PERSISTENCE,
-                        )
+                        from csv_handler import CSVHandler
+                        from pathlib import Path
+                        csv_handler = CSVHandler(Path(self.csv_path))
                         print(f"[PersistentWorkerPool] CSV handler created for: {self.csv_path}")
                     except Exception as e:
                         print(f"[PersistentWorkerPool] Failed to create CSV handler: {e}")
@@ -540,20 +537,6 @@ class ProcessingSession:
                         successful += 1
                     else:
                         failed += 1
-                    if self.communication_manager:
-                        try:
-                            status = 'COMPLETED' if result.get('success', False) else 'FAILED'
-                            self.communication_manager.send_metric({
-                                'worker_id': "proc-pool",
-                                'po_id': result.get('po_number') or result.get('po_number_display', ''),
-                                'status': status,
-                                'timestamp': time.time(),
-                                'attachments_found': result.get('attachments_found', 0),
-                                'attachments_downloaded': result.get('attachments_downloaded', 0),
-                                'message': result.get('message', ''),
-                            })
-                        except Exception:
-                            pass
                 except Exception as exc:
                     failed += 1
                     po_data = future_map[future]
@@ -565,19 +548,6 @@ class ProcessingSession:
                         'final_folder': '',
                         'success': False
                     })
-                    if self.communication_manager:
-                        try:
-                            self.communication_manager.send_metric({
-                                'worker_id': "proc-pool",
-                                'po_id': po_data.get('po_number', ''),
-                                'status': 'FAILED',
-                                'timestamp': time.time(),
-                                'attachments_found': 0,
-                                'attachments_downloaded': 0,
-                                'message': error_msg,
-                            })
-                        except Exception:
-                            pass
         
         return successful, failed, {'results': results}
     
@@ -888,8 +858,7 @@ def process_po_worker(args):
     if experimental_root_str not in sys.path:
         sys.path.insert(0, experimental_root_str)
 
-    sqlite_db_path = None  # Default to None
-    communication_manager = None
+    sqlite_db_path = None # Default to None
     if len(args) == 4:
         po_data, hierarchy_cols, has_hierarchy_data, headless_config = args
         download_root = os.environ.get('DOWNLOAD_FOLDER', ExperimentalConfig.DOWNLOAD_FOLDER)
@@ -902,8 +871,6 @@ def process_po_worker(args):
         execution_mode = "standard"
     elif len(args) >= 8:
         po_data, hierarchy_cols, has_hierarchy_data, headless_config, download_root, csv_path, sqlite_db_path, execution_mode = args[:8]
-        if len(args) >= 9:
-            communication_manager = args[8]
     else:
         raise ValueError("process_po_worker expects at least 4 arguments")
 
@@ -937,17 +904,12 @@ def process_po_worker(args):
     driver = None
     folder_path = ''
     clone_dir = ''
-
     # Initialize CSV handler if path provided
     csv_handler = None
     if csv_path:
         try:
             from .core.csv_handler import CSVHandler
-            csv_handler = CSVHandler(
-                Path(csv_path),
-                sqlite_db_path=sqlite_db_path,
-                enable_legacy_updates=not ExperimentalConfig.SQLITE_ONLY_PERSISTENCE,
-            )
+            csv_handler = CSVHandler(Path(csv_path), sqlite_db_path=sqlite_db_path)
             print(f"[worker] 📊 CSV handler initialized for {csv_path} (SQLite: {sqlite_db_path})", flush=True)
         except Exception as e:
             print(f"[worker] ⚠️ Failed to initialize CSV handler: {e}", flush=True)
@@ -1258,7 +1220,6 @@ def process_reusable_worker(args):
     if suppress_output:
         try:
             output_handle = open(os.devnull, 'w')
-            
             # Forceful redirection at OS level to catch sub-processes and loggers
             os.dup2(output_handle.fileno(), sys.stdout.fileno())
             os.dup2(output_handle.fileno(), sys.stderr.fileno())
@@ -1293,11 +1254,7 @@ def process_reusable_worker(args):
     if csv_path:
         try:
             from .core.csv_handler import CSVHandler
-            csv_handler = CSVHandler(
-                Path(csv_path),
-                sqlite_db_path=sqlite_db_path,
-                enable_legacy_updates=not ExperimentalConfig.SQLITE_ONLY_PERSISTENCE,
-            )
+            csv_handler = CSVHandler(Path(csv_path), sqlite_db_path=sqlite_db_path)
             print(f"[reusable_worker_{worker_id}] 📊 CSV handler initialized for {csv_path} (SQLite: {sqlite_db_path})", flush=True)
         except Exception as e:
             print(f"[reusable_worker_{worker_id}] ⚠️ Failed to initialize CSV handler: {e}", flush=True)
@@ -1652,47 +1609,68 @@ class WorkerManager:
         self.stagger_delay = stagger_delay
         self._processing_session: Optional[ProcessingSession] = None
         self._last_parallel_report: Optional[Dict[str, Any]] = None
+        self._active_executor = None  # Track ProcessPoolExecutor for shutdown
+
+    def shutdown(self, wait: bool = True, emergency: bool = False):
+        """
+        Shutdown the worker manager and release resources.
+        
+        Args:
+            wait: Whether to wait for pending tasks to complete
+            emergency: If True, skip graceful shutdown and exit immediately
+        """
+        print(f"🔄 WorkerManager shutdown initiated (emergency={emergency})...")
+        
+        # Shutdown ProcessingSession if active
+        if self._processing_session:
+            try:
+                self._processing_session.stop_processing(emergency=emergency)
+            except Exception as e:
+                print(f"⚠️ Error stopping processing session: {e}")
+            self._processing_session = None
+        
+        # Note: ProcessPoolExecutor manages its own lifecycle
+        # We just clear our reference here
+        self._active_executor = None
+        
+        print("✅ WorkerManager shutdown complete")
 
     def process_pos(
         self,
         po_data_list: list[dict],
         hierarchy_cols: list[str],
         has_hierarchy_data: bool,
-        headless_config: HeadlessConfiguration,
-        storage_manager: Optional[CSVHandler] = None,
-        folder_manager: Optional[FolderHierarchyManager] = None,
-        messenger: Optional[Any] = None,
+        headless_config,
+        storage_manager=None,
+        folder_manager=None,
+        messenger=None,
         sqlite_db_path: Optional[str] = None,
         execution_mode: Any = None,
     ) -> tuple[int, int, dict]:
         """
-        Unified entrypoint for parallel PO processing.
+        Public entry point for parallel processing called by ProcessingController.
 
-        This keeps backward compatibility with the older WorkerManager.process_pos API
-        while delegating to the ProcessingSession-based engine.
+        Routes to process_parallel_with_reusable_workers using a shared Queue.
         """
-        return self.process_parallel_with_session(
-            po_data_list=po_data_list,
+        import multiprocessing as _mp
+        # Use Manager().Queue() for spawn compatibility on macOS
+        # Regular mp.Queue() can't be shared between spawned processes
+        manager = _mp.Manager()
+        po_queue: _mp.Queue = manager.Queue()
+        for po in po_data_list:
+            po_queue.put(po)
+        return self.process_parallel_with_reusable_workers(
+            po_queue=po_queue,
             hierarchy_cols=hierarchy_cols,
             has_hierarchy_data=has_hierarchy_data,
             headless_config=headless_config,
+            communication_manager=messenger,
+            queue_size=len(po_data_list),
             csv_handler=storage_manager,
             folder_hierarchy=folder_manager,
             sqlite_db_path=sqlite_db_path,
             execution_mode=execution_mode,
-            communication_manager=messenger,
         )
-
-    def shutdown(self, emergency: bool = False) -> None:
-        """Best-effort cleanup for any active processing session/pool."""
-        if not self._processing_session:
-            return
-        try:
-            self._processing_session.stop_processing(emergency=emergency)
-        except Exception as e:
-            print(f"⚠️ WorkerManager shutdown failed: {e}")
-        finally:
-            self._processing_session = None
 
     def process_parallel_with_session(
         self,
@@ -1702,9 +1680,9 @@ class WorkerManager:
         headless_config: HeadlessConfiguration,
         csv_handler: Optional[CSVHandler] = None,
         folder_hierarchy: Optional[FolderHierarchyManager] = None,
-        communication_manager: Optional[Any] = None,
         sqlite_db_path: Optional[str] = None,
         execution_mode: Any = None,
+        communication_manager: Optional[Any] = None,
     ) -> tuple[int, int, dict]:
         """
         Process PO entries using ProcessingSession for intelligent parallel processing.

@@ -48,6 +48,7 @@ from .services.processing_service import ProcessingService
 from .core.utils import _humanize_exception, _wait_for_downloads_complete, _derive_status_label
 
 # Enable interactive UI mode (set to True to enable interactive prompts)
+# Default is True for local interactive use
 ENABLE_INTERACTIVE_UI = os.environ.get('ENABLE_INTERACTIVE_UI', 'True').strip().lower() == 'true'
 
 
@@ -83,7 +84,8 @@ class MainApp:
         self.telemetry = TelemetryProvider()
         # Add console listener by default for standard execution
         self.telemetry.add_listener(ConsoleTelemetryListener())
-        self.communication_manager = CommunicationManager()
+        # Use a plain multiprocessing.Queue for broader compatibility with spawn
+        self.communication_manager = CommunicationManager(use_manager=True)  # Use Manager for spawn compatibility
         
         self.processing_service = ProcessingService(
             browser_manager=self.browser_manager,
@@ -233,8 +235,9 @@ class MainApp:
         """
         # Interactive or non-interactive configuration
         # Re-evaluate ENABLE_INTERACTIVE_UI at runtime to allow dynamic control
+        # Default is True for local interactive use
         enable_interactive = os.environ.get('ENABLE_INTERACTIVE_UI', 'True').strip().lower() == 'true'
-        
+
         if enable_interactive:
             setup_session = self.setup_manager.interactive_setup()
             headless_config = HeadlessConfiguration(enabled=setup_session.headless_preference)
@@ -245,8 +248,9 @@ class MainApp:
             config = self.setup_manager.apply_env_overrides()
             headless_config = HeadlessConfiguration(enabled=config["headless_preference"])
             # Respect pre-existing modes (e.g. "none" set by RealCoreSystem)
+            # Default to "none" for non-interactive mode to avoid Textual UI crash on headless/CI environments
             if not hasattr(self, 'ui_mode') or self.ui_mode is None:
-                self.ui_mode = config.get("ui_mode", "standard")
+                self.ui_mode = "none" if not enable_interactive else config.get("ui_mode", "premium")
             if not hasattr(self, 'execution_mode') or self.execution_mode is None:
                 self.execution_mode = config.get("execution_mode", "standard")
         
@@ -376,7 +380,7 @@ class MainApp:
                 use_process_pool
             )
             # Final stats after UI closes
-            agg = self.communication_manager.get_aggregated_metrics(drain_all=True)
+            agg = self.communication_manager.get_aggregated_metrics()
             successful = agg.get("total_successful", 0)
             failed = agg.get("total_failed", 0)
 

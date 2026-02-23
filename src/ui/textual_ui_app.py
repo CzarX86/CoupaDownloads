@@ -84,6 +84,8 @@ class WorkerStatusGrid(Static):
             status = w.get("status", "Idle")
             found = w.get("attachments_found", 0)
             downloaded = w.get("attachments_downloaded", 0)
+            tasks_processed = w.get("tasks_processed", 0)
+            tasks_failed = w.get("tasks_failed", 0)
             
             # Progress bar
             if found > 0:
@@ -107,15 +109,25 @@ class WorkerStatusGrid(Static):
             efficiency_score = w.get("efficiency_score", 0.0)
             eff_color = "green" if efficiency_score > 80 else "yellow" if efficiency_score > 50 else "red"
             
-            lines.append(f"{wid:<10} | {po:<12} | [{status_style}]{status:^10}[/] | {progress} | [{eff_color}]{efficiency_score:>5.1f}%[/]")
+            lines.append(
+                f"{wid:<10} | {po:<12} | [{status_style}]{status:^10}[/] | "
+                f"{progress} | [{eff_color}]{efficiency_score:>5.1f}%[/] | "
+                f"TP:{tasks_processed} F:{tasks_failed}"
+            )
             
         return "\n".join(lines)
 
 
 class LogFeed(Static):
     """A scrolling log feed for recent activity."""
-    
-    logs = reactive([])
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.logs: List[str] = []
+
+    def set_logs(self, logs: List[str]) -> None:
+        self.logs = logs
+        self.refresh()
 
     def render(self) -> str:
         if not self.logs:
@@ -208,6 +220,7 @@ class CoupaTextualUI(App):
         self.worker_data = []
         self.perf_history = []
         self.last_perf_update = 0
+        self._recent_logs: List[str] = []
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -273,26 +286,31 @@ class CoupaTextualUI(App):
             if displayed_workers:
                 worker_grid.worker_entries = displayed_workers
             
-            # Update logs from recent metrics
-            log_feed = self.query_one("#log-feed", LogFeed)
-            new_logs = []
-            for m in metrics:
-                if m.get("message"):
-                    timestamp = datetime.fromtimestamp(m.get("timestamp", time.time())).strftime("%H:%M:%S")
-                    new_logs.append(f"[{timestamp}] {m['message']}")
-            
-            if new_logs:
-                # Avoid showing exact duplicates in the feed if they arrive closely
-                unique_new_logs = []
-                last_logs = log_feed.logs[-5:] if log_feed.logs else []
-                for nl in new_logs:
-                    if nl not in last_logs and nl not in unique_new_logs:
-                        unique_new_logs.append(nl)
-                
-                if unique_new_logs:
-                    log_feed.logs = log_feed.logs + unique_new_logs
-                    if len(log_feed.logs) > 50:
-                        log_feed.logs = log_feed.logs[-50:]
+            # Update logs from recent metrics (best-effort; keep UI alive on errors)
+            try:
+                log_feed = self.query_one("#log-feed", LogFeed)
+                metric_source = metrics or agg.get("recent_metrics", [])
+                new_logs = []
+                for m in metric_source:
+                    if m.get("message"):
+                        timestamp = datetime.fromtimestamp(m.get("timestamp", time.time())).strftime("%H:%M:%S")
+                        new_logs.append(f"[{timestamp}] {m['message']}")
+
+                if new_logs:
+                    # Avoid showing exact duplicates in the feed if they arrive closely
+                    unique_new_logs = []
+                    last_logs = self._recent_logs[-5:] if self._recent_logs else []
+                    for nl in new_logs:
+                        if nl not in last_logs and nl not in unique_new_logs:
+                            unique_new_logs.append(nl)
+
+                    if unique_new_logs:
+                        self._recent_logs = self._recent_logs + unique_new_logs
+                        if len(self._recent_logs) > 50:
+                            self._recent_logs = self._recent_logs[-50:]
+                        log_feed.set_logs(self._recent_logs)
+            except Exception:
+                pass
  
 
             # Update Efficiency / Perf Graph

@@ -506,6 +506,23 @@ class WorkerProcess:
             self.current_task = task
             self.worker.assign_task(task)
             self._update_heartbeat()
+
+            # Emit STARTED metric for immediate UI update
+            if self.messenger:
+                try:
+                    po_number = task.po_number or task.metadata.get('po_number')
+                    self.messenger.send_metric({
+                        'worker_id': self.worker_id,
+                        'task_id': task.task_id,
+                        'po_id': po_number,
+                        'status': 'STARTED',
+                        'timestamp': time.time(),
+                        'attachments_found': 0,
+                        'attachments_downloaded': 0,
+                        'message': f"Started PO {po_number}" if po_number else "Started PO",
+                    })
+                except Exception:
+                    pass
             
             # Note: task assignment and processing start is already done by TaskQueue.get_next_task()
             # No need to duplicate the assignment here

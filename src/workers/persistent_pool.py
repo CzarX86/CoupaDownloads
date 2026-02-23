@@ -22,7 +22,6 @@ from datetime import datetime
 import structlog
 import psutil
 
-from ..core.output import maybe_print as print
 from .models import (
     PoolConfig, TaskHandle, POTask, Worker, Profile,
     TaskStatus, WorkerStatus, TaskPriority
@@ -386,8 +385,7 @@ class PersistentWorkerPool:
                 worker_id=worker_id,
                 profile=profile,
                 config=self.config,
-                storage_manager=self.csv_handler,
-                messenger=self.communication_manager,
+                csv_handler=self.csv_handler,
             )
 
             logger.info(

@@ -17,10 +17,10 @@ def test_communication_manager_persistence():
         })
     
     # Drain the queue
-    cm.get_metrics(drain_all=True)
+    cm.get_metrics()
     
     # Check aggregation
-    agg = cm.get_aggregated_metrics(drain_all=True)
+    agg = cm.get_aggregated_metrics()
     
     print(f"Total processed: {agg['total_processed']}")
     print(f"Total successful: {agg['total_successful']}")
