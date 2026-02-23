@@ -47,6 +47,7 @@ from .core.telemetry import TelemetryProvider, ConsoleTelemetryListener
 from .core.status import StatusLevel
 from .services.processing_service import ProcessingService
 from .core.utils import _humanize_exception, _wait_for_downloads_complete, _derive_status_label
+from .orchestrators import BrowserOrchestrator, ResultAggregator
 
 # Module logger
 logger = logging.getLogger(__name__)
@@ -90,15 +91,23 @@ class MainApp:
         self.telemetry.add_listener(ConsoleTelemetryListener())
         # Use a plain multiprocessing.Queue for broader compatibility with spawn
         self.communication_manager = CommunicationManager(use_manager=True)  # Use Manager for spawn compatibility
-        
+
+        # Initialize orchestrators (extracted from monolithic MainApp)
+        self.browser_orchestrator = BrowserOrchestrator(self.browser_manager)
+        self.result_aggregator = ResultAggregator(
+            csv_handler=self.csv_manager,
+            telemetry=self.telemetry,
+        )
+
         self.processing_service = ProcessingService(
             browser_manager=self.browser_manager,
             folder_hierarchy=self.folder_hierarchy,
             storage_manager=self.csv_manager,
             telemetry=self.telemetry,
         )
+        # Deprecated: Use browser_orchestrator instead
         self.driver = None
-        self.lock = threading.Lock()  # Thread safety for browser operations
+        self.lock = threading.Lock()  # Thread safety for browser operations (now in browser_orchestrator)
         self._run_start_time: float | None = None
         self._current_po_start_time: float | None = None
         self._completed_po_count = 0
@@ -119,12 +128,9 @@ class MainApp:
     # (Deprecated) _rename_folder_with_status removed in favor of folder_hierarchy.finalize_folder
 
     def initialize_browser_once(self):
-        """Initialize browser once and keep it open for all POs."""
-        if not self.driver:
-            logger.info("Initializing browser for sequential processing")
-            self.browser_manager.initialize_driver(headless=self._headless_config.get_effective_headless_mode())
-            self.driver = self.browser_manager.driver
-            logger.info("Browser initialized successfully")
+        """Initialize browser once and keep it open for all POs (deprecated: use browser_orchestrator)."""
+        if not self.browser_orchestrator.is_initialized():
+            self.browser_orchestrator.initialize_browser(headless=self._headless_config.get_effective_headless_mode())
 
 
     @staticmethod
@@ -462,22 +468,27 @@ class MainApp:
             except Exception as e:
                 logger.warning("Error stopping worker session", extra={"error": str(e)})
 
-        # 3. Shutdown CSV handler to ensure all data is persisted
-        if hasattr(self, 'csv_manager'):
+        # 3. Shutdown CSV handler and finalize results
+        if hasattr(self, 'result_aggregator'):
             try:
-                self.csv_manager.shutdown_csv_handler()
-            except Exception:
-                pass
+                self.result_aggregator.finalize()
+            except Exception as e:
+                logger.warning("Error finalizing results", extra={"error": str(e)})
 
-        # 4. Cleanup browser manager
+        # 4. Cleanup browser via orchestrator
+        if hasattr(self, 'browser_orchestrator'):
+            try:
+                self.browser_orchestrator.cleanup(emergency=emergency)
+            except Exception as e:
+                logger.warning("Error closing browser orchestrator", extra={"error": str(e)})
+        
+        # Legacy cleanup (for backward compatibility)
         if self.driver:
-            logger.info("Closing browser")
             try:
                 self.browser_manager.cleanup()
             except Exception:
                 pass
             self.driver = None
-            logger.info("Browser closed successfully")
 
 
 class SessionStatus(Enum):
