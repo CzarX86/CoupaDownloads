@@ -1,14 +1,32 @@
 """
 Default configuration factories for profile management.
 
-Provides small, dependency-free helpers that return sensible defaults for
-ProfileManager and related components without requiring the full data-model
-enums or verification dataclasses to exist.
+DEPRECATED: Use src.config.constants instead.
+
+This module is maintained for backward compatibility. All new code should use
+the centralized constants from src.config.constants.
+
+Migration guide:
+    Old: from src.config.defaults import get_default_timeouts
+         timeouts = get_default_timeouts()
+    
+    New: from src.config.constants import TASK_COMPLETION_TIMEOUT
+         timeout = TASK_COMPLETION_TIMEOUT
 """
 
 from __future__ import annotations
 
+import warnings
 from typing import Dict, Any
+
+# Deprecation warning
+warnings.warn(
+    "src.config.defaults is deprecated. "
+    "Use src.config.constants for centralized constants. "
+    "This module will be removed in a future version.",
+    DeprecationWarning,
+    stacklevel=2
+)
 
 
 def get_default_profile_manager_kwargs() -> Dict[str, Any]:
