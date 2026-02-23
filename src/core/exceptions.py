@@ -337,7 +337,7 @@ class AttachmentsNotFoundError(CoupaAPIError):
 class WorkerError(CoupaError):
     """Base class for worker-related errors."""
     def __init__(self, message: str, worker_id: Optional[int] = None, **kwargs):
-        context = kwargs.get('context') or ErrorContext()
+        context = kwargs.pop('context', None) or ErrorContext()
         if worker_id is not None:
             context.worker_id = worker_id
         super().__init__(message, context=context, **kwargs)
@@ -495,10 +495,10 @@ class DiskFullError(ResourceError):
 class ValidationError(CoupaError):
     """Input validation failed."""
     def __init__(self, message: str, field: Optional[str] = None, **kwargs):
-        context = kwargs.get('context') or ErrorContext()
+        context = kwargs.pop('context', None) or ErrorContext()
         if field:
             context.extra['field'] = field
-        
+
         super().__init__(
             message,
             code=ErrorCode.VALIDATION_FAILED,

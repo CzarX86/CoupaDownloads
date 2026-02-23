@@ -12,7 +12,7 @@ from typing import Callable, Type, Tuple, Optional, Any, List
 from functools import wraps
 from datetime import datetime
 
-from .constants import (
+from ..config.constants import (
     MAX_WORKER_RETRY_COUNT,
     RETRY_BACKOFF_MULTIPLIER,
 )

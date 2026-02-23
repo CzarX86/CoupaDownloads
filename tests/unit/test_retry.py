@@ -73,7 +73,7 @@ class TestRetryConfig:
     
     def test_calculate_delay_with_jitter(self):
         """Test jitter adds randomness to delay."""
-        config = RetryConfig(base_delay=1.0, jitter=True, jitter_factor=0.1, jitter_factor=0.1)
+        config = RetryConfig(base_delay=1.0, jitter=True, jitter_factor=0.1)
         
         # Run multiple times to check jitter
         delays = [config.calculate_delay(1) for _ in range(10)]
