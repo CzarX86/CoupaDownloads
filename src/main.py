@@ -3,6 +3,24 @@ Módulo principal do sistema CoupaDownloads.
 
 Este módulo contém a classe MainApp, responsável por orquestrar o processamento de POs,
 gerenciamento de UI, CSV e workers paralelos para download de anexos no Coupa.
+
+Exemplo de uso:
+    ```python
+    from src.main import MainApp
+    
+    app = MainApp(enable_parallel=True, max_workers=4)
+    app.run()
+    ```
+
+Atributos:
+    ENABLE_INTERACTIVE_UI (bool): Controla se a UI interativa é exibida.
+        Padrão: True (exibe prompts interativos)
+
+Componentes principais:
+    - MainApp: Orquestrador principal
+    - BrowserOrchestrator: Gerencia ciclo de vida do browser
+    - ResultAggregator: Agrega e persiste resultados
+    - CommunicationManager: Comunicação entre processos para UI
 """
 
 import os
@@ -58,26 +76,65 @@ ENABLE_INTERACTIVE_UI = os.environ.get('ENABLE_INTERACTIVE_UI', 'True').strip().
 
 
 class MainApp:
-    def __init__(self, enable_parallel: bool = True, max_workers: int = 4):
+    """
+    Orquestrador principal do sistema CoupaDownloads.
+    
+    Esta classe é responsável por:
+    - Inicializar todos os componentes do sistema
+    - Gerenciar o ciclo de vida da aplicação
+    - Orquestrar processamento sequencial ou paralelo de POs
+    - Coordenar UI, CSV, workers e persistência de dados
+    
+    Atributos:
+        enable_parallel (bool): Se True, habilita processamento paralelo
+        max_workers (int): Número máximo de workers paralelos
+        browser_orchestrator (BrowserOrchestrator): Gerencia browser
+        result_aggregator (ResultAggregator): Agrega resultados
+        communication_manager (CommunicationManager): Comunicação com UI
+        telemetry (TelemetryProvider): Sistema de telemetria
+        
+    Exemplo:
+        ```python
+        app = MainApp(enable_parallel=True, max_workers=4)
+        app.run()
+        ```
+    """
+    
+    def __init__(self, enable_parallel: bool = True, max_workers: int = 4) -> None:
         """
-        Initialize MainApp with optional parallel processing support.
+        Inicializa a aplicação MainApp com suporte a processamento paralelo.
         
         Args:
-            enable_parallel: Whether to enable parallel processing for multiple POs
-            max_workers: Maximum number of parallel workers (>=1). No implicit hard cap.
+            enable_parallel: Se True, habilita processamento paralelo para múltiplos POs.
+                Padrão: True
+            max_workers: Número máximo de workers paralelos (deve ser >= 1).
+                Sem limite rígido implícito. Padrão: 4
+                
+        Raises:
+            TypeError: Se enable_parallel não for booleano
+            ValueError: Se max_workers não for inteiro positivo
+            
+        Exemplo:
+            ```python
+            # Configuração básica
+            app = MainApp()
+            
+            # Processamento paralelo com 8 workers
+            app = MainApp(enable_parallel=True, max_workers=8)
+            ```
         """
         # Validate parallel processing parameters
         if not isinstance(enable_parallel, bool):
             raise TypeError("enable_parallel must be a boolean")
-        
+
         if not (isinstance(max_workers, int) and max_workers >= 1):
             raise ValueError(f"max_workers must be a positive integer, got {max_workers}")
-        
+
         # Parallel processing configuration
         self.enable_parallel = enable_parallel
         self.max_workers = max_workers
         self._last_parallel_report: Optional[Dict[str, Any]] = None
-        
+
         # Original initialization
         self.excel_processor = ExcelProcessor()
         self.browser_manager = BrowserManager()
@@ -116,26 +173,74 @@ class MainApp:
         self._headless_config: HeadlessConfiguration | None = None
 
     def set_headless_configuration(self, headless_config: HeadlessConfiguration) -> None:
-        """Set the headless configuration for this MainApp instance."""
+        """
+        Define a configuração headless para esta instância MainApp.
+        
+        Args:
+            headless_config: Configuração de modo headless do browser
+        """
         self._headless_config = headless_config
         self.processing_service.set_headless_configuration(headless_config)
         self.telemetry.emit_status(StatusLevel.INFO, f"Headless configuration set: {headless_config}")
     
     # ---- UI helpers ---------------------------------------------------------------------
 
-
-
     # (Deprecated) _rename_folder_with_status removed in favor of folder_hierarchy.finalize_folder
 
-    def initialize_browser_once(self):
-        """Initialize browser once and keep it open for all POs (deprecated: use browser_orchestrator)."""
+    def initialize_browser_once(self) -> None:
+        """
+        Inicializa o browser uma única vez e mantém aberto para todos os POs.
+        
+        Método depreciado: Use browser_orchestrator diretamente.
+        
+        Este método garante que o browser seja inicializado apenas uma vez
+        para processamento sequencial, evitando overhead de reinicialização.
+        
+        Exemplo:
+            ```python
+            app.initialize_browser_once()
+            # Browser agora está disponível em app.browser_orchestrator.driver
+            ```
+        """
         if not self.browser_orchestrator.is_initialized():
             self.browser_orchestrator.initialize_browser(headless=self._headless_config.get_effective_headless_mode())
 
 
     @staticmethod
     def _build_csv_updates(result: Dict[str, Any]) -> Dict[str, Any]:
-        """Translate a processing result into CSV column updates."""
+        """
+        Traduz um resultado de processamento em atualizações para colunas CSV.
+        
+        Args:
+            result: Dicionário com resultado do processamento contendo:
+                - status_code: Código de status (COMPLETED, FAILED, etc.)
+                - attachment_names: Lista ou string de nomes de anexos
+                - attachments_found: Quantidade de anexos encontrados
+                - attachments_downloaded: Quantidade de anexos baixados
+                - final_folder: Pasta final dos downloads
+                - coupa_url: URL do PO no Coupa
+                - supplier_name: Nome do fornecedor (opcional)
+                - last_processed: Data/hora do processamento (opcional)
+                
+        Returns:
+            Dicionário com mapeamento de colunas CSV:
+                - STATUS: Código de status
+                - ATTACHMENTS_FOUND: Quantidade encontrada
+                - ATTACHMENTS_DOWNLOADED: Quantidade baixada
+                - AttachmentName: Lista de nomes de anexos
+                - DOWNLOAD_FOLDER: Pasta de download
+                - COUPA_URL: URL do Coupa
+                - ERROR_MESSAGE: Mensagem de erro (se falhou)
+                - SUPPLIER: Nome do fornecedor (se disponível)
+                - LAST_PROCESSED: Data/hora formatada (se disponível)
+                
+        Exemplo:
+            ```python
+            result = {'status_code': 'COMPLETED', 'attachments_found': 3, ...}
+            updates = MainApp._build_csv_updates(result)
+            # updates = {'STATUS': 'COMPLETED', 'ATTACHMENTS_FOUND': 3, ...}
+            ```
+        """
         status_code = (result.get('status_code') or '').upper() or 'FAILED'
         attachment_names = result.get('attachment_names') or []
         if isinstance(attachment_names, str):
@@ -171,7 +276,33 @@ class MainApp:
         return updates
 
     def _compose_csv_message(self, result_payload: dict) -> str:
-        """Compose error message for CSV from result payload."""
+        """
+        Compõe mensagem de erro para CSV a partir do payload de resultado.
+        
+        Args:
+            result_payload: Dicionário com resultado do processamento contendo:
+                - status_code: Código de status
+                - status_reason: Razão do status
+                - fallback_used: Se usou fallback PR
+                - fallback_details: Detalhes do fallback
+                - message: Mensagem de erro
+                
+        Returns:
+            String formatada para coluna ERROR_MESSAGE no CSV.
+            Retorna string vazia para processamentos bem-sucedidos.
+            
+        Exemplo:
+            ```python
+            payload = {
+                'status_code': 'FAILED',
+                'message': 'Timeout',
+                'fallback_used': True,
+                'fallback_details': {'source': 'PR::link', 'url': '...'}
+            }
+            message = app._compose_csv_message(payload)
+            # message = "Timeout — PR link source: PR via link"
+            ```
+        """
         status_code = (result_payload.get('status_code') or '').upper()
         status_reason = result_payload.get('status_reason', '') or ''
         fallback_used = bool(result_payload.get('fallback_used'))
@@ -241,7 +372,37 @@ class MainApp:
 
     def run(self) -> None:
         """
-        Main execution loop for processing POs.
+        Loop principal de execução para processamento de POs.
+        
+        Este método é o ponto de entrada principal para executar o processamento.
+        Ele:
+        1. Configura modo interativo ou ambiente
+        2. Lê arquivo de entrada (CSV/Excel)
+        3. Inicializa persistência (CSV + SQLite)
+        4. Avalia recursos do sistema
+        5. Processa POs (sequencial ou paralelo)
+        6. Exibe UI (Textual) ou roda em modo silencioso
+        7. Finaliza e reporta estatísticas
+        
+        Fluxo:
+            - Modo interativo: Exibe prompts para configuração
+            - Modo ambiente: Usa variáveis de ambiente/.env
+            - Processamento: UI Textual ou modo silencioso
+            
+        Exceções:
+            Exception: Erros na leitura do arquivo de entrada
+            KeyboardInterrupt: Usuário interrompeu a execução
+            
+        Exemplo:
+            ```python
+            app = MainApp()
+            app.run()  # Inicia processamento
+            ```
+            
+        Notas:
+            - UI_MODE=none para automação/CI sem UI
+            - ENABLE_INTERACTIVE_UI=false para modo não interativo
+            - MAX_PARALLEL_WORKERS define número de workers
         """
         # Interactive or non-interactive configuration
         # Re-evaluate ENABLE_INTERACTIVE_UI at runtime to allow dynamic control
@@ -451,8 +612,43 @@ class MainApp:
             app = CoupaTextualUI(self.communication_manager, total_pos=len(po_data_list))
             app.run()
 
-    def close(self, emergency: bool = False):
-        """Close the browser properly and stop all active components."""
+    def close(self, emergency: bool = False) -> None:
+        """
+        Fecha o browser e para todos os componentes ativos.
+        
+        Este método deve ser chamado para limpeza adequada de recursos,
+        especialmente em caso de interrupção ou erro.
+        
+        Args:
+            emergency: Se True, realiza fechamento acelerado com
+                timeouts mínimos. Útil para handlers de sinal/interrupção.
+                Padrão: False
+                
+        Comportamento:
+            1. Para sessões de processamento ativas
+            2. Para WorkerManager
+            3. Finaliza CSV handler (persiste dados)
+            4. Limpa browser orchestrator
+            5. Limpa driver legado (compatibilidade)
+            
+        Exceções:
+            Exception: Erros durante cleanup são logados mas não propagados
+                para garantir limpeza máxima possível
+                
+        Exemplo:
+            ```python
+            app = MainApp()
+            try:
+                app.run()
+            finally:
+                app.close()  # Gar cleanup adequado
+            ```
+            
+        Notas:
+            - Em modo emergency, timeouts são reduzidos
+            - Erros são logados mas não interrompem cleanup
+            - Dados são persistidos mesmo em falha
+        """
         if emergency:
             logger.warning("Accelerated shutdown initiated")
 
@@ -500,9 +696,50 @@ class SessionStatus(Enum):
 
 
 def main() -> None:
-    """Run the experimental UI workflow."""
-    import signal
+    """
+    Ponto de entrada principal da aplicação.
     
+    Esta função:
+    1. Configura número de workers a partir do environment
+    2. Cria instância MainApp
+    3. Registra handlers para SIGINT/SIGTERM (Ctrl+C)
+    4. Executa app.run()
+    5. Garante cleanup adequado
+    
+    Handlers de Sinal:
+        - SIGINT (Ctrl+C): Shutdown graceful, depois forçado
+        - SIGTERM: Shutdown graceful
+        - Primeiro sinal: Tenta cleanup adequado
+        - Segundo sinal: Force quit imediato (os._exit(1))
+        
+    Variáveis de Ambiente:
+        - MAX_PARALLEL_WORKERS: Número de workers (padrão: 4)
+        - ENABLE_INTERACTIVE_UI: Mostra prompts (padrão: True)
+        - UI_MODE: Tipo de UI (padrão: premium)
+        
+    Exceções:
+        KeyboardInterrupt: Tratado gracefulmente
+        Exception: Logado com traceback completo
+        
+    Exemplo:
+        ```bash
+        # Execução normal
+        uv run python -m src.main
+        
+        # Com 8 workers
+        MAX_PARALLEL_WORKERS=8 uv run python -m src.main
+        
+        # Sem UI (automação)
+        UI_MODE=none uv run python -m src.main
+        ```
+        
+    Notas:
+        - Código de saída 130 para SIGINT (padrão Unix)
+        - Cleanup sempre executado no finally
+        - Logs de erro incluem traceback completo
+    """
+    import signal
+
     try:
         configured_workers = int(ExperimentalConfig.MAX_PARALLEL_WORKERS)
     except (TypeError, ValueError):
@@ -511,10 +748,10 @@ def main() -> None:
     max_workers = max(1, configured_workers)
 
     app = MainApp(enable_parallel=True, max_workers=max_workers)
-    
+
     # Interrupt handling state to allow for graceful then forced exit
     shutdown_initiated = False
-    
+
     def signal_handler(sig, frame):
         nonlocal shutdown_initiated
         if shutdown_initiated:
@@ -552,16 +789,69 @@ def main() -> None:
             app.close()
 
 
+class SessionStatus(Enum):
+    """
+    Enumeração de status para sessões de processamento.
+    
+    Valores:
+        IDLE: Sessão ociosa, sem processamento ativo
+        RUNNING: Sessão executando processamento
+        PAUSED: Sessão pausada (não implementado)
+        COMPLETED: Sessão completada com sucesso
+        FAILED: Sessão falhou
+    """
+    IDLE = "idle"
+    RUNNING = "running"
+    PAUSED = "paused"
+    COMPLETED = "completed"
+    FAILED = "failed"
 
-def _debug_log(msg: str):
+
+def _debug_log(msg: str) -> None:
+    """
+    Registra mensagem de debug em arquivo de log temporário.
+    
+    Função utilitária para debug de workers em tempo de execução.
+    As mensagens são appendadas ao arquivo /tmp/worker_debug.log.
+    
+    Args:
+        msg: Mensagem de debug a ser registrada
+        
+    Formato do Log:
+        [timestamp] [MAIN] mensagem
+        
+    Exemplo:
+        ```python
+        _debug_log("MainApp starting...")
+        # Output: [2026-02-23T17:30:45.123456] [MAIN] MainApp starting...
+        ```
+        
+    Notas:
+        - Silenciosa: exceções são suprimidas
+        - Arquivo: /tmp/worker_debug.log
+        - Timestamp: ISO 8601 format
+    """
     try:
         with open('/tmp/worker_debug.log', 'a') as f:
             ts = datetime.now().isoformat()
             f.write(f"[{ts}] [MAIN] {msg}\n")
-    except:
-        pass
+    except Exception:
+        pass  # Silently ignore logging errors
+
 
 if __name__ == "__main__":
+    """
+    Ponto de entrada quando executado como script principal.
+    
+    Exemplo:
+        ```bash
+        # Executar como módulo (recomendado)
+        uv run python -m src.main
+        
+        # Executar como script
+        uv run python src/main.py
+        ```
+    """
     _debug_log("MainApp starting...")
 
     main()
