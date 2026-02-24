@@ -39,10 +39,10 @@ if experimental_root_str not in sys.path:
     sys.path.insert(0, experimental_root_str)
 
 from .lib.browser import BrowserManager
+from .lib.config import Config as ExperimentalConfig
 from .lib.downloader import Downloader
 from .lib.folder_hierarchy import FolderHierarchyManager
 from .lib.models import HeadlessConfiguration, InteractiveSetupSession
-from .config.app_config import AppConfig, get_config
 
 # Import worker pool for parallel processing
 from .workers.persistent_pool import PersistentWorkerPool
@@ -280,7 +280,7 @@ class ProcessingSession:
                     base_profile_path=base_profile_path,
                     worker_count=self.max_workers,
                     headless_mode=self.headless_config.get_effective_headless_mode(),
-                    base_profile_name=get_config().EDGE_PROFILE_NAME or "Default",
+                    base_profile_name=ExperimentalConfig.EDGE_PROFILE_NAME or "Default",
                     hierarchy_columns=self.hierarchy_columns,
                     has_hierarchy_data=self.has_hierarchy_data,
                     download_root=download_root,
@@ -507,7 +507,7 @@ class ProcessingSession:
         
         # Get download root for workers
         from .lib.config import Config
-        download_root = os.path.abspath(os.path.expanduser(getattr(Config, 'DOWNLOAD_FOLDER', get_config().DOWNLOAD_FOLDER)))
+        download_root = os.path.abspath(os.path.expanduser(getattr(Config, 'DOWNLOAD_FOLDER', ExperimentalConfig.DOWNLOAD_FOLDER)))
         
         with ProcessPoolExecutor(max_workers=proc_workers, mp_context=mp.get_context("spawn")) as executor:
             future_map: dict = {}
@@ -861,7 +861,7 @@ def process_po_worker(args):
     sqlite_db_path = None # Default to None
     if len(args) == 4:
         po_data, hierarchy_cols, has_hierarchy_data, headless_config = args
-        download_root = os.environ.get('DOWNLOAD_FOLDER', get_config().DOWNLOAD_FOLDER)
+        download_root = os.environ.get('DOWNLOAD_FOLDER', ExperimentalConfig.DOWNLOAD_FOLDER)
         csv_path = None
     elif len(args) == 5:
         po_data, hierarchy_cols, has_hierarchy_data, headless_config, download_root = args
@@ -890,10 +890,10 @@ def process_po_worker(args):
         except Exception:
             output_handle = None
 
-    download_root = os.path.abspath(os.path.expanduser(download_root)) if download_root else os.path.abspath(os.path.expanduser(get_config().DOWNLOAD_FOLDER))
+    download_root = os.path.abspath(os.path.expanduser(download_root)) if download_root else os.path.abspath(os.path.expanduser(ExperimentalConfig.DOWNLOAD_FOLDER))
     os.environ['DOWNLOAD_FOLDER'] = download_root
     try:
-        get_config().DOWNLOAD_FOLDER = download_root
+        ExperimentalConfig.DOWNLOAD_FOLDER = download_root
         from .lib.config import Config
         Config.DOWNLOAD_FOLDER = download_root
     except Exception:
@@ -937,21 +937,21 @@ def process_po_worker(args):
         print("[worker] 🚀 Initializing WebDriver...", flush=True)
         # Clone and load the selected profile for this worker (isolated user-data-dir)
         try:
-            base_ud = os.path.expanduser(get_config().EDGE_PROFILE_DIR)
-            profile_name = get_config().EDGE_PROFILE_NAME or 'Default'
+            base_ud = os.path.expanduser(ExperimentalConfig.EDGE_PROFILE_DIR)
+            profile_name = ExperimentalConfig.EDGE_PROFILE_NAME or 'Default'
             session_root = os.path.join(tempfile.gettempdir(), 'edge_profile_clones')
             _ensure_dir(session_root)
             clone_dir = os.path.join(session_root, f"proc_{os.getpid()}_{int(time.time()*1000)}")
             _create_profile_clone(base_ud, profile_name, clone_dir)
             # Point config to the clone so BrowserManager uses it
-            get_config().USE_PROFILE = True
-            get_config().EDGE_PROFILE_DIR = clone_dir
-            get_config().EDGE_PROFILE_NAME = profile_name
+            ExperimentalConfig.USE_PROFILE = True
+            ExperimentalConfig.EDGE_PROFILE_DIR = clone_dir
+            ExperimentalConfig.EDGE_PROFILE_NAME = profile_name
         except Exception as e:
             print(f"[worker] ⚠️ Profile clone failed, continuing without profile: {e}")
             try:
                 # Ensure we don't point to a broken dir
-                get_config().EDGE_PROFILE_DIR = ''
+                ExperimentalConfig.EDGE_PROFILE_DIR = ''
             except Exception:
                 pass
 
@@ -1012,8 +1012,8 @@ def process_po_worker(args):
             driver = browser_manager.driver
             
             # Navigate once to get into the domain
-            # Deprecated - use AppConfig instead
-            driver.get(get_config().BASE_URL)
+            from .lib.config import Config as LibConfig
+            driver.get(LibConfig.BASE_URL)
             
             # Get cookies
             selenium_cookies = driver.get_cookies()
@@ -1058,7 +1058,7 @@ def process_po_worker(args):
         batch_enabled = getattr(ExperimentalConfig, 'BATCH_FINALIZATION_ENABLED', False)
         if not batch_enabled:
             try:
-                # Deprecated - use AppConfig instead
+                from .lib.config import Config as LibConfig
                 batch_enabled = getattr(LibConfig, 'BATCH_FINALIZATION_ENABLED', False)
             except ImportError:
                 pass
@@ -1124,7 +1124,7 @@ def process_po_worker(args):
                     batch_enabled = getattr(ExperimentalConfig, 'BATCH_FINALIZATION_ENABLED', False)
                     if not batch_enabled:
                         try:
-                            # Deprecated - use AppConfig instead
+                            from .lib.config import Config as LibConfig
                             batch_enabled = getattr(LibConfig, 'BATCH_FINALIZATION_ENABLED', False)
                         except ImportError:
                             pass
@@ -1235,10 +1235,10 @@ def process_reusable_worker(args):
         except Exception:
             output_handle = None
 
-    download_root = os.path.abspath(os.path.expanduser(download_root)) if download_root else os.path.abspath(os.path.expanduser(get_config().DOWNLOAD_FOLDER))
+    download_root = os.path.abspath(os.path.expanduser(download_root)) if download_root else os.path.abspath(os.path.expanduser(ExperimentalConfig.DOWNLOAD_FOLDER))
     os.environ['DOWNLOAD_FOLDER'] = download_root
     try:
-        get_config().DOWNLOAD_FOLDER = download_root
+        ExperimentalConfig.DOWNLOAD_FOLDER = download_root
         from .lib.config import Config
         Config.DOWNLOAD_FOLDER = download_root
     except Exception:
@@ -1268,23 +1268,23 @@ def process_reusable_worker(args):
         # Clone and load the selected profile for this worker (isolated user-data-dir)
         # This ensures authentication for ALL modes (Playwright, Direct HTTP, and standard Selenium)
         try:
-            base_ud = os.path.expanduser(get_config().EDGE_PROFILE_DIR)
-            profile_name = get_config().EDGE_PROFILE_NAME or 'Default'
+            base_ud = os.path.expanduser(ExperimentalConfig.EDGE_PROFILE_DIR)
+            profile_name = ExperimentalConfig.EDGE_PROFILE_NAME or 'Default'
             session_root = os.path.join(tempfile.gettempdir(), 'edge_profile_clones')
             _ensure_dir(session_root)
             clone_dir = os.path.join(session_root, f"reusable_worker_{worker_id}_{os.getpid()}")
             _create_profile_clone(base_ud, profile_name, clone_dir)
             # Point config to the clone so BrowserManager uses it
-            get_config().USE_PROFILE = True
-            get_config().EDGE_PROFILE_DIR = clone_dir
-            get_config().EDGE_PROFILE_NAME = profile_name
+            ExperimentalConfig.USE_PROFILE = True
+            ExperimentalConfig.EDGE_PROFILE_DIR = clone_dir
+            ExperimentalConfig.EDGE_PROFILE_NAME = profile_name
             print(f"[reusable_worker_{worker_id}] 🔐 Profile cloned to: {clone_dir}", flush=True)
         except Exception as e:
             print(f"[reusable_worker_{worker_id}] ⚠️ Profile clone failed, continuing without profile: {e}", flush=True)
             clone_dir = ''
             try:
                 # Ensure we don't point to a broken dir
-                get_config().EDGE_PROFILE_DIR = ''
+                ExperimentalConfig.EDGE_PROFILE_DIR = ''
             except Exception:
                 pass
 
@@ -1316,8 +1316,8 @@ def process_reusable_worker(args):
             )
             driver = browser_manager.driver
             # Navigate to get cookies
-            # Deprecated - use AppConfig instead
-            driver.get(get_config().BASE_URL)
+            from .lib.config import Config as LibConfig
+            driver.get(LibConfig.BASE_URL)
             selenium_cookies = driver.get_cookies()
             httpx_cookies = {c['name']: c['value'] for c in selenium_cookies}
             print(f"[reusable_worker_{worker_id}] 🍪 Cookies captured, releasing browser.", flush=True)
@@ -1804,9 +1804,9 @@ class WorkerManager:
         if communication_manager:
             os.environ['SUPPRESS_WORKER_OUTPUT'] = 'true'
 
-        # Use the get_config().DOWNLOAD_FOLDER that was updated during setup
+        # Use the ExperimentalConfig.DOWNLOAD_FOLDER that was updated during setup
         from .lib.config import Config as ExperimentalConfig
-        download_root = os.path.abspath(os.path.expanduser(get_config().DOWNLOAD_FOLDER))
+        download_root = os.path.abspath(os.path.expanduser(ExperimentalConfig.DOWNLOAD_FOLDER))
 
         # Use incoming sqlite_db_path or derive from handler
         effective_sqlite_db_path = sqlite_db_path
@@ -1974,8 +1974,8 @@ class WorkerManager:
             proc_workers = max(1, min(env_procs, len(po_data_list)))
         print(f"📊 Using {proc_workers} process worker(s) (cap={'unlimited' if hard_cap == 0 else hard_cap}), one WebDriver per process")
 
-        # Use the get_config().DOWNLOAD_FOLDER that was updated during setup
-        download_root = os.path.abspath(os.path.expanduser(get_config().DOWNLOAD_FOLDER))
+        # Use the ExperimentalConfig.DOWNLOAD_FOLDER that was updated during setup
+        download_root = os.path.abspath(os.path.expanduser(ExperimentalConfig.DOWNLOAD_FOLDER))
 
         # --- Batch Finalization Setup ---
         finalization_queue = queue.Queue()

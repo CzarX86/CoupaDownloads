@@ -5,8 +5,11 @@ Extracted from MainApp to handle all browser lifecycle operations,
 including initialization, cleanup, and session management.
 """
 
+from __future__ import annotations
+
 import logging
-from typing import Optional, Any
+from typing import Any, Callable, Optional
+
 import threading
 
 from ..lib.browser import BrowserManager
@@ -18,36 +21,36 @@ logger = logging.getLogger(__name__)
 class BrowserOrchestrator:
     """
     Manages browser lifecycle for CoupaDownloads.
-    
+
     Responsibilities:
     - Browser initialization (single instance for sequential processing)
     - Download directory updates
     - Browser cleanup and shutdown
     - Thread-safe browser access
-    
+
     This class was extracted from MainApp to improve separation of concerns
     and reduce class complexity.
     """
-    
-    def __init__(self, browser_manager: BrowserManager):
+
+    def __init__(self, browser_manager: BrowserManager) -> None:
         """
         Initialize browser orchestrator.
-        
+
         Args:
             browser_manager: BrowserManager instance for WebDriver control
         """
-        self.browser_manager = browser_manager
+        self.browser_manager: BrowserManager = browser_manager
         self.driver: Optional[Any] = None
-        self.lock = threading.Lock()
-        self._initialized = False
-    
+        self.lock: threading.Lock = threading.Lock()
+        self._initialized: bool = False
+
     def initialize_browser(self, headless: bool = True) -> Any:
         """
         Initialize browser if not already initialized.
-        
+
         Args:
             headless: Whether to run browser in headless mode
-            
+
         Returns:
             WebDriver instance
         """
@@ -60,17 +63,17 @@ class BrowserOrchestrator:
                     self._initialized = True
                     logger.info("Browser initialized successfully")
         return self.driver
-    
+
     def is_browser_responsive(self) -> bool:
         """
         Check if browser is still responsive.
-        
+
         Returns:
             True if browser is responsive, False otherwise
         """
         if not self.driver:
             return False
-        
+
         try:
             # Try to execute a simple command to check responsiveness
             self.driver.current_url
@@ -78,18 +81,18 @@ class BrowserOrchestrator:
         except Exception as e:
             logger.debug("Browser not responsive", extra={"error": str(e)})
             return False
-    
+
     def update_download_directory(self, path: str) -> None:
         """
         Update browser download directory.
-        
+
         Args:
             path: New download directory path
         """
         if not self.driver:
             logger.warning("Cannot update download directory: browser not initialized")
             return
-        
+
         try:
             self.browser_manager.update_download_directory(path)
             logger.debug("Download directory updated", extra={"path": path})
@@ -98,28 +101,28 @@ class BrowserOrchestrator:
                 "Failed to update download directory",
                 extra={"path": path, "error": str(e)}
             )
-    
+
     def get_driver(self) -> Optional[Any]:
         """
         Get current driver instance.
-        
+
         Returns:
             WebDriver instance or None if not initialized
         """
         return self.driver
-    
+
     def cleanup(self, emergency: bool = False) -> None:
         """
         Cleanup browser resources.
-        
+
         Args:
             emergency: If True, perform accelerated cleanup with minimal timeouts
         """
         if not self.driver:
             return
-        
+
         logger.info("Closing browser", extra={"emergency": emergency})
-        
+
         try:
             with self.lock:
                 if self.driver:
@@ -136,25 +139,25 @@ class BrowserOrchestrator:
             else:
                 logger.error("Error closing browser", extra={"error": str(e)})
                 raise
-    
+
     def is_initialized(self) -> bool:
         """
         Check if browser has been initialized.
-        
+
         Returns:
             True if initialized, False otherwise
         """
         return self._initialized and self.driver is not None
-    
-    def execute_with_lock(self, operation: callable, *args, **kwargs) -> Any:
+
+    def execute_with_lock(self, operation: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
         """
         Execute a browser operation with thread-safe locking.
-        
+
         Args:
             operation: Function to execute
             *args: Positional arguments for operation
             **kwargs: Keyword arguments for operation
-            
+
         Returns:
             Result of operation
         """
