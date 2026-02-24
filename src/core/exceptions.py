@@ -168,7 +168,7 @@ class CoupaError(Exception):
 
 class ConfigurationError(CoupaError):
     """Error in application configuration."""
-    def __init__(self, message: str, **kwargs):
+    def __init__(self, message: str, **kwargs: Any) -> None:
         super().__init__(
             message,
             code=ErrorCode.CONFIGURATION_ERROR,
@@ -178,7 +178,7 @@ class ConfigurationError(CoupaError):
 
 class InitializationError(CoupaError):
     """Error during component initialization."""
-    def __init__(self, message: str, **kwargs):
+    def __init__(self, message: str, **kwargs: Any) -> None:
         super().__init__(
             message,
             code=ErrorCode.INITIALIZATION_ERROR,
@@ -192,13 +192,13 @@ class InitializationError(CoupaError):
 
 class BrowserError(CoupaError):
     """Base class for browser-related errors."""
-    def __init__(self, message: str, **kwargs):
+    def __init__(self, message: str, **kwargs: Any) -> None:
         super().__init__(message, **kwargs)
 
 
 class BrowserNotFoundError(BrowserError):
     """Microsoft Edge browser not found on system."""
-    def __init__(self, message: str = "Microsoft Edge browser not found", **kwargs):
+    def __init__(self, message: str = "Microsoft Edge browser not found", **kwargs: Any) -> None:
         super().__init__(
             message,
             code=ErrorCode.BROWSER_NOT_FOUND,
@@ -212,7 +212,7 @@ class BrowserNotFoundError(BrowserError):
 
 class BrowserInitError(BrowserError):
     """Failed to initialize browser."""
-    def __init__(self, message: str, **kwargs):
+    def __init__(self, message: str, **kwargs: Any) -> None:
         super().__init__(
             message,
             code=ErrorCode.BROWSER_INIT_FAILED,
@@ -227,7 +227,7 @@ class BrowserInitError(BrowserError):
 
 class DriverNotFoundError(BrowserError):
     """EdgeDriver not found or incompatible."""
-    def __init__(self, message: str, **kwargs):
+    def __init__(self, message: str, **kwargs: Any) -> None:
         super().__init__(
             message,
             code=ErrorCode.DRIVER_NOT_FOUND,
@@ -281,7 +281,7 @@ class TimeoutError(BrowserError):
 
 class CoupaAPIError(CoupaError):
     """Base class for Coupa API/page errors."""
-    def __init__(self, message: str, **kwargs):
+    def __init__(self, message: str, **kwargs: Any) -> None:
         super().__init__(message, **kwargs)
 
 
@@ -379,7 +379,7 @@ class WorkerCrashError(WorkerError):
 
 class ProfileCloneError(WorkerError):
     """Failed to clone browser profile."""
-    def __init__(self, message: str, **kwargs):
+    def __init__(self, message: str, **kwargs: Any) -> None:
         super().__init__(
             message,
             code=ErrorCode.PROFILE_CLONE_FAILED,
@@ -398,7 +398,7 @@ class ProfileCloneError(WorkerError):
 
 class FileSystemError(CoupaError):
     """Base class for file system errors."""
-    def __init__(self, message: str, **kwargs):
+    def __init__(self, message: str, **kwargs: Any) -> None:
         super().__init__(message, **kwargs)
 
 
@@ -419,7 +419,7 @@ class FileNotFoundError(FileSystemError):
 
 class CSVError(FileSystemError):
     """Error reading or writing CSV files."""
-    def __init__(self, message: str, **kwargs):
+    def __init__(self, message: str, **kwargs: Any) -> None:
         super().__init__(
             message,
             code=ErrorCode.CSV_READ_ERROR if "read" in message.lower() else ErrorCode.CSV_WRITE_ERROR,
@@ -433,7 +433,7 @@ class CSVError(FileSystemError):
 
 class SQLiteError(FileSystemError):
     """Error with SQLite database operations."""
-    def __init__(self, message: str, **kwargs):
+    def __init__(self, message: str, **kwargs: Any) -> None:
         super().__init__(
             message,
             code=ErrorCode.SQLITE_ERROR,
@@ -451,7 +451,7 @@ class SQLiteError(FileSystemError):
 
 class ResourceError(CoupaError):
     """Base class for resource-related errors."""
-    def __init__(self, message: str, **kwargs):
+    def __init__(self, message: str, **kwargs: Any) -> None:
         super().__init__(message, **kwargs)
 
 
@@ -509,7 +509,7 @@ class ValidationError(CoupaError):
 
 class InvalidInputError(ValidationError):
     """Invalid input provided."""
-    def __init__(self, message: str, **kwargs):
+    def __init__(self, message: str, **kwargs: Any) -> None:
         super().__init__(
             message,
             context=ErrorContext(

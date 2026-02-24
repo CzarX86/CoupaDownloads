@@ -5,7 +5,7 @@ Coordena o processamento de entradas de PO, integrando WorkerManager e CSVHandle
 para execução paralela e feedback em tempo real.
 """
 
-from typing import Optional, List, Dict, Any, Tuple
+from typing import Optional, List, Dict, Any, Tuple, Callable
 from pathlib import Path
 import time
 import threading
@@ -57,7 +57,7 @@ class ProcessingController:
         folder_hierarchy: Any,
         initialize_browser_once: callable,
         prepare_progress_tracking: callable,
-        process_single_po: callable,
+        process_single_po: Callable[..., bool],
         communication_manager: Optional[Any] = None,
         sqlite_db_path: Optional[str] = None,
         execution_mode: Any = None,

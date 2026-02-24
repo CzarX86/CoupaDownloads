@@ -1,5 +1,7 @@
+from __future__ import annotations
+
 from pathlib import Path
-from typing import Dict, List, Any, Optional, Tuple, ClassVar
+from typing import TYPE_CHECKING, Dict, List, Any, Optional, Tuple, ClassVar
 from datetime import datetime
 import logging
 import os
@@ -21,17 +23,20 @@ except ImportError:
     SQLITE_AVAILABLE = False
     SQLiteHandler = None
 
+if TYPE_CHECKING:
+    from .sqlite_handler import SQLiteHandler as SQLiteHandlerType
+
 
 class WriteQueue:
     """Stub WriteQueue implementation."""
-    
-    def __init__(self, csv_handler):
+
+    def __init__(self, csv_handler: Any) -> None:
         self.csv_handler = csv_handler
-    
-    def start_writer_thread(self):
+
+    def start_writer_thread(self) -> None:
         pass
-    
-    def stop_writer_thread(self, timeout=15.0):
+
+    def stop_writer_thread(self, timeout: float = 15.0) -> None:
         pass
 
 
