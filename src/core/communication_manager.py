@@ -131,7 +131,7 @@ class CommunicationManager:
 
                     if po_id:
                         self._total_pos_seen.add(po_id)
-                        
+
                         # Handle status transitions
                         if status in {'COMPLETED', 'NO_ATTACHMENTS', 'PARTIAL', 'SUCCESS'}:
                             self._pos_successful.add(po_id)
@@ -142,17 +142,28 @@ class CommunicationManager:
                             self._pos_successful.discard(po_id)
                             self._pos_processing.discard(po_id)
                         else:
-                            # Processing or other transient state
+                            # Processing or other transient state (STARTED, PROCESSING, etc.)
                             self._pos_processing.add(po_id)
 
                     if worker_id is not None:
-                        # Update worker state
+                        # Update worker state with full metric data
                         self._worker_states[worker_id] = m
+                        logger.debug("Worker state updated", extra={
+                            "worker_id": worker_id,
+                            "po_id": po_id,
+                            "status": status
+                        })
 
-                # 2. Add to log/recent buffer
+                # 2. Add to log/recent buffer - keep more history for UI
                 self._metrics_buffer.extend(metrics)
-                if self._max_buffer_size and len(self._metrics_buffer) > self._max_buffer_size:
-                    self._metrics_buffer = self._metrics_buffer[-self._max_buffer_size:]
+                buffer_limit = max(self._max_buffer_size, 200)  # Increased for better UI history
+                if len(self._metrics_buffer) > buffer_limit:
+                    self._metrics_buffer = self._metrics_buffer[-buffer_limit:]
+
+                logger.debug("Metrics buffer updated", extra={
+                    "new_metrics": len(metrics),
+                    "buffer_size": len(self._metrics_buffer)
+                })
 
         return metrics
         

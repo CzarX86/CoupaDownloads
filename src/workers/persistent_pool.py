@@ -798,8 +798,24 @@ class PersistentWorkerPool:
                 worker_id=task.assigned_worker or 'unknown',
                 result=task_result
             )
-            
-            # Send metric to communication manager if available
+
+            # Send STARTED metric for UI visibility (if not sent before)
+            if self.communication_manager:
+                try:
+                    self.communication_manager.send_metric({
+                        'worker_id': task.assigned_worker or 0,
+                        'task_id': task.task_id,
+                        'po_id': po_task.po_number,
+                        'status': 'STARTED',
+                        'timestamp': time.time(),
+                        'attachments_found': 0,
+                        'attachments_downloaded': 0,
+                        'message': f'Started processing {po_task.po_number}',
+                    })
+                except Exception:
+                    pass
+
+            # Send COMPLETED metric with results
             if self.communication_manager:
                 metric_data = {
                     'worker_id': task.assigned_worker or 0,
@@ -832,8 +848,24 @@ class PersistentWorkerPool:
             po_task.fail_with_error(error_message, allow_retry=requeued)
             if not requeued:
                 po_task.metadata['result_payload'] = result
-            
-            # Send metric to communication manager if available
+
+            # Send STARTED metric for UI visibility
+            if self.communication_manager:
+                try:
+                    self.communication_manager.send_metric({
+                        'worker_id': task.assigned_worker or 0,
+                        'task_id': task.task_id,
+                        'po_id': po_task.po_number,
+                        'status': 'STARTED',
+                        'timestamp': time.time(),
+                        'attachments_found': 0,
+                        'attachments_downloaded': 0,
+                        'message': f'Started processing {po_task.po_number}',
+                    })
+                except Exception:
+                    pass
+
+            # Send FAILED metric
             if self.communication_manager:
                 metric_data = {
                     'worker_id': task.assigned_worker or 0,
