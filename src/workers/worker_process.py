@@ -559,15 +559,53 @@ class WorkerProcess:
             if result['success']:
                 self.tasks_processed += 1
                 self.worker.complete_task(success=True)
-                logger.debug("Task completed successfully", 
+                logger.debug("Task completed successfully",
                            worker_id=self.worker_id, po_number=task.po_number)
+                
+                # Send COMPLETED metric with updated stats
+                if self.messenger:
+                    try:
+                        po_number = task.po_number or task.metadata.get('po_number')
+                        self.messenger.send_metric({
+                            'worker_id': self.worker_id,
+                            'task_id': task.task_id,
+                            'po_id': po_number,
+                            'status': 'COMPLETED',
+                            'timestamp': time.time(),
+                            'attachments_found': result.get('attachments_found', 0),
+                            'attachments_downloaded': result.get('attachments_downloaded', 0),
+                            'tasks_processed': self.tasks_processed,
+                            'tasks_failed': self.tasks_failed,
+                            'efficiency_score': (self.tasks_processed / max(1, self.tasks_processed + self.tasks_failed)) * 100,
+                            'message': f"Completed {po_number}",
+                        })
+                    except Exception:
+                        pass
             else:
                 self.tasks_failed += 1
                 self.worker.complete_task(success=False)
-                logger.warning("Task failed", 
-                              worker_id=self.worker_id, 
+                logger.warning("Task failed",
+                              worker_id=self.worker_id,
                               po_number=task.po_number,
                               error=result.get('error'))
+                
+                # Send FAILED metric with updated stats
+                if self.messenger:
+                    try:
+                        po_number = task.po_number or task.metadata.get('po_number')
+                        self.messenger.send_metric({
+                            'worker_id': self.worker_id,
+                            'task_id': task.task_id,
+                            'po_id': po_number,
+                            'status': 'FAILED',
+                            'timestamp': time.time(),
+                            'tasks_processed': self.tasks_processed,
+                            'tasks_failed': self.tasks_failed,
+                            'efficiency_score': (self.tasks_processed / max(1, self.tasks_processed + self.tasks_failed)) * 100,
+                            'message': f"Failed {po_number}: {result.get('error', 'Unknown error')}",
+                        })
+                    except Exception:
+                        pass
             
             self.current_task = None
             return result
@@ -690,6 +728,8 @@ class WorkerProcess:
                         'attachments_downloaded': progress_data.get('attachments_downloaded', 0),
                         'message': progress_data.get('message', ''),
                         'timestamp': time.time(),
+                        'tasks_processed': self.tasks_processed,
+                        'tasks_failed': self.tasks_failed,
                     }
                     self.messenger.send_metric(metric)
 

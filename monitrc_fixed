@@ -1,0 +1,46 @@
+# Monit Configuration File
+# Generated for Evolution API Monitoring
+
+set daemon 60
+set logfile /var/log/monit.log
+set pidfile /var/run/monit.pid
+set statefile /var/lib/monit/state
+
+# Global settings
+set httpd port 2812
+    allow admin:monit_admin_2026
+    allow @localhost only
+
+# Check Evolution API Container
+check program evolution_api_container with path "/bin/bash" and args "-c", "docker ps --filter name=evolution_api --format '{{.Status}}' | grep -q Up"
+    if status != 0 then alert
+    if 3 restarts within 5 cycles then alert
+    every 2 cycles
+
+# Check PostgreSQL Container
+check program postgres_container with path "/bin/bash" and args "-c", "docker ps --filter name=evolution_postgres --format '{{.Status}}' | grep -q Up"
+    if status != 0 then alert
+    if 3 restarts within 5 cycles then alert
+    every 2 cycles
+
+# Check Redis Container
+check program redis_container with path "/bin/bash" and args "-c", "docker ps --filter name=evolution_redis --format '{{.Status}}' | grep -q Up"
+    if status != 0 then alert
+    if 3 restarts within 5 cycles then alert
+    every 2 cycles
+
+# Check Docker Service
+check process dockerd matching "dockerd"
+    if not running then alert
+    if 3 restarts within 5 cycles then alert
+
+# Check Disk Space
+check filesystem rootfs with path /
+    if space usage > 90% then alert
+    if space usage > 95% then exec "/home/julio/health_check_fixed.sh"
+    every 5 cycles
+
+# Check Memory (via script)
+check program memory_check with path "/bin/bash" and args "-c", "test $(free | awk '/Mem:/ {print int($3/$2 * 100)}') -gt 90"
+    if status != 0 then alert
+    every 5 cycles
