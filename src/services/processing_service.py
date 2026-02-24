@@ -14,7 +14,7 @@ from pathlib import Path
 from ..lib.browser import BrowserManager
 from ..lib.folder_hierarchy import FolderHierarchyManager
 from ..lib.models import ExecutionMode, HeadlessConfiguration
-from ..lib.config import Config
+from ..config.app_config import get_config
 from ..core.telemetry import TelemetryProvider
 from ..core.status import StatusLevel
 from ..csv_manager import CSVManager
@@ -107,7 +107,7 @@ class ProcessingService:
                     page = pw_manager.start(
                         headless=self._get_headless_setting(), 
                         execution_mode=execution_mode,
-                        profile_dir=Config.EDGE_PROFILE_DIR
+                        profile_dir=get_config().edge_profile_dir
                     )
                     def _on_findings(findings): return folder_path
                     pw_downloader = PlaywrightDownloader(page, progress_callback=_emit_progress)

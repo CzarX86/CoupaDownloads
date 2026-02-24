@@ -30,11 +30,11 @@ if project_root_str not in sys.path:
 # Project corelib imports are handled via relative imports within the src package.
 
 from .lib.browser import BrowserManager
-from .lib.config import Config as ExperimentalConfig
 from .lib.downloader import Downloader
 from .lib.excel_processor import ExcelProcessor
 from .lib.folder_hierarchy import FolderHierarchyManager
 from .lib.models import HeadlessConfiguration, InteractiveSetupSession
+from .config.app_config import AppConfig, get_config
 
 # Import new managers
 from .setup_manager import SetupManager
@@ -91,6 +91,9 @@ class MainApp:
         self.telemetry.add_listener(ConsoleTelemetryListener())
         # Use a plain multiprocessing.Queue for broader compatibility with spawn
         self.communication_manager = CommunicationManager(use_manager=True)  # Use Manager for spawn compatibility
+        
+        # Get unified configuration
+        self.config = get_config()
 
         # Initialize orchestrators (extracted from monolithic MainApp)
         self.browser_orchestrator = BrowserOrchestrator(self.browser_manager)
@@ -266,8 +269,8 @@ class MainApp:
         
         self.set_headless_configuration(headless_config)
 
-        os.makedirs(ExperimentalConfig.INPUT_DIR, exist_ok=True)
-        os.makedirs(ExperimentalConfig.DOWNLOAD_FOLDER, exist_ok=True)
+        os.makedirs(self.config.input_dir, exist_ok=True)
+        os.makedirs(self.config.stable_download_folder, exist_ok=True)
 
         try:
             excel_path = self.excel_processor.get_excel_file_path()
@@ -505,7 +508,7 @@ def main() -> None:
     import signal
     
     try:
-        configured_workers = int(ExperimentalConfig.MAX_PARALLEL_WORKERS)
+        configured_workers = int(get_config().max_workers)
     except (TypeError, ValueError):
         configured_workers = 4
     # Removed previous hard cap of 8
