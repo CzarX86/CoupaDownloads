@@ -5,11 +5,13 @@ Manages communication between processes to share metrics and progress updates
 for UI display in parallel processing scenarios.
 """
 
+from __future__ import annotations
+
 import multiprocessing as mp
 import queue
 import threading
 import logging
-from typing import Dict, List, Any, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 from dataclasses import dataclass, asdict
 from datetime import datetime
 
@@ -32,26 +34,26 @@ class MetricMessage:
 class CommunicationManager:
     """
     Manages communication inter-processes for metrics and progress updates.
-    
+
     Uses multiprocessing.Queue for thread-safe communication between processes.
     Enhanced with persistent state tracking to prevent data loss.
     """
-    
-    def __init__(self, use_manager: bool = True):
+
+    def __init__(self, use_manager: bool = True) -> None:
         """Initialize the communication manager with a shared queue."""
-        self._manager = mp.Manager() if use_manager else None
-        self.metric_queue = self._manager.Queue() if self._manager else mp.Queue()
+        self._manager: Optional[mp.managers.SyncManager] = mp.Manager() if use_manager else None
+        self.metric_queue: Any = self._manager.Queue() if self._manager else mp.Queue()
         self._metrics_buffer: List[Dict[str, Any]] = []
-        self._metrics_lock = threading.Lock()
-        self._max_buffer_size = 500
-        self.finalization_queue = self._manager.Queue() if self._manager else mp.Queue()
-        
+        self._metrics_lock: threading.Lock = threading.Lock()
+        self._max_buffer_size: int = 500
+        self.finalization_queue: Any = self._manager.Queue() if self._manager else mp.Queue()
+
         # Persistent state tracking
-        self._pos_successful = set()
-        self._pos_failed = set()
-        self._pos_processing = set()  # Currently active POs
-        self._worker_states = {}       # Latest state per worker
-        self._total_pos_seen = set()   # All PO IDs encountered
+        self._pos_successful: Set[str] = set()
+        self._pos_failed: Set[str] = set()
+        self._pos_processing: Set[str] = set()  # Currently active POs
+        self._worker_states: Dict[int, Dict[str, Any]] = {}       # Latest state per worker
+        self._total_pos_seen: Set[str] = set()   # All PO IDs encountered
 
     def __getstate__(self) -> Dict[str, Any]:
         """Ensure the manager remains picklable for multiprocessing."""
