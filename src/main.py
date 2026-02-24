@@ -257,10 +257,9 @@ class MainApp:
             self.telemetry.emit_status(StatusLevel.INFO, "Applying environment configuration")
             config = self.setup_manager.apply_env_overrides()
             headless_config = HeadlessConfiguration(enabled=config["headless_preference"])
-            # Respect pre-existing modes (e.g. "none" set by RealCoreSystem)
-            # Default to "none" for non-interactive mode to avoid Textual UI crash on headless/CI environments
+            # Default to "premium" (Textual UI) for better visibility, use "none" for CI/automation
             if not hasattr(self, 'ui_mode') or self.ui_mode is None:
-                self.ui_mode = "none" if not enable_interactive else config.get("ui_mode", "premium")
+                self.ui_mode = config.get("ui_mode", "premium")  # Changed from "none" to "premium"
             if not hasattr(self, 'execution_mode') or self.execution_mode is None:
                 self.execution_mode = config.get("execution_mode", "standard")
         
