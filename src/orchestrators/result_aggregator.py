@@ -106,19 +106,22 @@ class ResultAggregator:
     
     def _persist_result(self, po_number: str, result: Dict[str, Any]) -> None:
         """
-        Persist result to CSV/SQLite.
+        Persist result to SQLite only.
+
+        CSV/Excel write-back is no longer done incrementally.  The final
+        report is generated on-demand at the end of the run.
 
         Args:
             po_number: PO number
             result: Result dictionary
         """
         try:
-            # Update SQLite (preferred for parallel processing)
+            # Update SQLite (single source of truth during processing)
             if self.sqlite_handler:
                 self.sqlite_handler.update_record(po_number, result)
 
-            # Update CSV (for incremental safety or if SQLite not available)
-            if self.csv_handler and self.csv_handler.is_initialized():
+            # Delegate to CSVManager.update_record which now only writes to SQLite
+            if self.csv_handler and hasattr(self.csv_handler, 'update_record'):
                 csv_updates = self._build_csv_updates(result)
                 self.csv_handler.update_record(po_number, csv_updates)
 

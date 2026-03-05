@@ -533,6 +533,9 @@ class WorkerProcess:
                         'timestamp': time.time(),
                         'attachments_found': 0,
                         'attachments_downloaded': 0,
+                        'tasks_processed': self.tasks_processed,
+                        'tasks_failed': self.tasks_failed,
+                        'efficiency_score': (self.tasks_processed / max(1, self.tasks_processed + self.tasks_failed)) * 100 if (self.tasks_processed + self.tasks_failed) > 0 else 0.0,
                         'message': f"Started PO {po_number}" if po_number else "Started PO",
                     })
                 except Exception:
@@ -730,6 +733,7 @@ class WorkerProcess:
                         'timestamp': time.time(),
                         'tasks_processed': self.tasks_processed,
                         'tasks_failed': self.tasks_failed,
+                        'efficiency_score': (self.tasks_processed / max(1, self.tasks_processed + self.tasks_failed)) * 100 if (self.tasks_processed + self.tasks_failed) > 0 else 0.0,
                     }
                     self.messenger.send_metric(metric)
 
@@ -764,8 +768,29 @@ class WorkerProcess:
             status_code = 'FAILED'
             if 'read timed out' in lower_msg or 'read timeout' in lower_msg or 'timeout' in lower_msg:
                 status_code = 'TIMEOUT'
-            # Folder path is managed inside process_single_po; on exception we may not have it
+
+            # Try to recover download folder and count any files that were
+            # already saved before the exception occurred.
             failed_folder = ''
+            files_on_disk = 0
+            try:
+                normalized_dl = self._apply_download_root_override()
+                # Look for __WORK folders matching this PO
+                if normalized_dl and os.path.isdir(normalized_dl):
+                    for entry in os.scandir(normalized_dl):
+                        if entry.is_dir() and po_number in entry.name:
+                            failed_folder = entry.path
+                            files_on_disk = sum(
+                                1 for f in os.scandir(entry.path)
+                                if f.is_file() and not f.name.startswith('.') and not f.name.endswith(('.crdownload', '.tmp'))
+                            )
+                            break
+            except Exception:
+                pass
+
+            # If files were partially downloaded, report PARTIAL instead of FAILED
+            if files_on_disk > 0 and status_code == 'FAILED':
+                status_code = 'PARTIAL'
 
             return {
                 'success': False,
@@ -776,6 +801,7 @@ class WorkerProcess:
                 'status_code': status_code,
                 'message': friendly,
                 'final_folder': failed_folder,
+                'attachments_downloaded': files_on_disk,
                 'errors': [{'filename': '', 'reason': friendly}],
                 'processing_time': task.get_processing_time(),
                 'transient': True if status_code == 'TIMEOUT' else False,

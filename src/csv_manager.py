@@ -102,103 +102,123 @@ class CSVManager:
         if self._sqlite_handler:
             self._sqlite_handler.seed_from_dataframe(df)
 
-    def shutdown_csv_handler(self):
-        """Shutdown handlers and export SQLite data back to CSV."""
-        db_path_to_clean = self._sqlite_db_path
+    def shutdown_csv_handler(self, cleanup_sqlite: bool = True):
+        """Shutdown handlers. Does NOT auto-export to CSV anymore.
         
-        if self._sqlite_handler and self.csv_handler:
-            self._export_sqlite_to_file()
+        The final report is now generated on-demand via ``generate_final_report``.
+        
+        Args:
+            cleanup_sqlite: If True (default), close and remove the temporary
+                SQLite files. Set to False if the caller still needs the data
+                (e.g. to generate the final report).
+        """
+        db_path_to_clean = self._sqlite_db_path
 
         if self._csv_write_queue:
             self._csv_write_queue.stop_writer_thread(timeout=15.0)
             self._csv_write_queue = None
-        
-        # Close SQLite handler if it has a close method (it currently doesn't do much, but good practice)
-        if self._sqlite_handler:
-            self._sqlite_handler.close()
-            
-        self.csv_handler = None
-        self._sqlite_handler = None
-        self._sqlite_db_path = None
-        
-        # Cleanup temporary SQLite files
-        if db_path_to_clean and os.path.exists(db_path_to_clean):
-            try:
-                # Give a small buffer for OS to release file handles if needed
-                import time
-                time.sleep(0.5)
-                
-                os.remove(db_path_to_clean)
-                print(f"🧹 Cleaned up temporary SQLite session: {os.path.basename(db_path_to_clean)}")
-                
-                # Also cleanup sidecar files if they exist (WAL mode)
-                for suffix in ['-wal', '-shm']:
-                    sidecar = f"{db_path_to_clean}{suffix}"
-                    if os.path.exists(sidecar):
-                        os.remove(sidecar)
-            except Exception as e:
-                print(f"⚠️ Failed to cleanup temporary SQLite files: {e}")
 
-    def _export_sqlite_to_file(self):
-        """Internal helper to export SQLite results back to CSV/Excel."""
-        if not self._sqlite_handler or not self.csv_handler:
-            return
+        if cleanup_sqlite:
+            # Close SQLite handler
+            if self._sqlite_handler:
+                self._sqlite_handler.close()
+
+            self.csv_handler = None
+            self._sqlite_handler = None
+            self._sqlite_db_path = None
+
+            # Cleanup temporary SQLite files
+            if db_path_to_clean and os.path.exists(db_path_to_clean):
+                try:
+                    import time
+                    time.sleep(0.5)
+
+                    os.remove(db_path_to_clean)
+                    print(f"🧹 Cleaned up temporary SQLite session: {os.path.basename(db_path_to_clean)}")
+
+                    for suffix in ['-wal', '-shm']:
+                        sidecar = f"{db_path_to_clean}{suffix}"
+                        if os.path.exists(sidecar):
+                            os.remove(sidecar)
+                except Exception as e:
+                    print(f"⚠️ Failed to cleanup temporary SQLite files: {e}")
+
+    def generate_final_report(self, download_root: Optional[Path] = None) -> Optional[Path]:
+        """Generate a final Excel report with processing results.
+
+        Merges the SQLite data with the original input file and saves an
+        ``.xlsx`` report to *download_root* (the timestamped directory where
+        attachments were saved during this run).
+
+        Args:
+            download_root: Directory where the report will be saved.
+                Falls back to the input file's directory if not provided.
+
+        Returns:
+            Path to the generated report, or ``None`` on failure.
+        """
+        if not self._sqlite_handler:
+            print("⚠️ No SQLite data available to generate report.")
+            return None
 
         try:
             results_df = self._sqlite_handler.get_all_results_df()
             if results_df.empty:
-                print("ℹ️ No results in SQLite to export.")
-                return
+                print("ℹ️ No results to include in the report.")
+                return None
 
-            if not hasattr(self.csv_handler, 'csv_path') or not self.csv_handler.csv_path:
-                print("⚠️ CSV handler has no path for export.")
-                return
+            # Determine input path for reading the original structure
+            input_path: Optional[Path] = None
+            if self.csv_handler and hasattr(self.csv_handler, 'csv_path'):
+                input_path = self.csv_handler.csv_path
+            elif self._input_csv_path:
+                input_path = self._input_csv_path
 
-            input_path = self.csv_handler.csv_path
-            if not input_path.exists():
-                print(f"⚠️ File path {input_path} does not exist for export.")
-                return
-            
-            output_path = self._output_copy_path or self._build_output_copy_path(input_path)
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            import shutil
-            shutil.copy2(input_path, output_path)
+            if not input_path or not input_path.exists():
+                print("⚠️ Original input file not found. Generating standalone report.")
+                return self._generate_standalone_report(results_df, download_root)
 
-            print(f"💾 Merging {len(results_df)} records from SQLite into {output_path.name}...")
-            
-            # Read original file using ExcelProcessor logic to maintain compatibility
+            # Determine output directory and filename
+            report_dir = download_root or input_path.parent
+            report_dir = Path(report_dir)
+            report_dir.mkdir(parents=True, exist_ok=True)
+
+            timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+            report_name = f"CoupaDownloads_Report_{timestamp}.xlsx"
+            report_path = report_dir / report_name
+
+            # Read original input file
             from .lib.excel_processor import ExcelProcessor
             processor = ExcelProcessor()
-            _, ext = os.path.splitext(str(output_path).lower())
-            
-            # We need to know the original structure to merge correctly
-            if ext == '.csv':
-                df, sep, enc = processor._read_csv_auto(str(output_path))
-            else:
-                # Excel: read specific sheet
-                xl = pd.ExcelFile(output_path)
-                sheet_name = 'PO_Data' if 'PO_Data' in xl.sheet_names else xl.sheet_names[0]
-                df = pd.read_excel(output_path, sheet_name=sheet_name, engine='openpyxl')
+            _, ext = os.path.splitext(str(input_path).lower())
 
-            # Find the actual PO_NUMBER column
+            if ext == '.csv':
+                df, _sep, _enc = processor._read_csv_auto(str(input_path))
+            else:
+                xl = pd.ExcelFile(input_path)
+                sheet_name = 'PO_Data' if 'PO_Data' in xl.sheet_names else xl.sheet_names[0]
+                df = pd.read_excel(input_path, sheet_name=sheet_name, engine='openpyxl')
+
             po_col = processor._find_column(df, 'PO_NUMBER')
             if not po_col:
-                print("❌ Could not find PO_NUMBER column in the original file. Export aborted.")
-                return
+                print("❌ Could not find PO_NUMBER column. Generating standalone report.")
+                return self._generate_standalone_report(results_df, download_root)
 
             # Clean keys for matching
             df[po_col] = df[po_col].astype(str).str.strip()
             results_df['po_number'] = results_df['po_number'].astype(str).str.strip()
-            
-            # Only update records that were actually processed (not PENDING)
+
+            # Convert all columns to object dtype to avoid StringDtype assignment
+            # errors when mixing str/int values during the merge.
+            df = df.astype(object)
+
             to_update = results_df[results_df['STATUS'] != 'PENDING'].copy()
-            
+
             if not to_update.empty:
-                print(f"   📝 Updating {len(to_update)} processed records...")
+                print(f"   📝 Merging {len(to_update)} processed records into report...")
                 df.set_index(po_col, inplace=True)
                 to_update.set_index('po_number', inplace=True)
-                
-                # Columns to sync back
+
                 sync_map = {
                     'STATUS': 'STATUS',
                     'SUPPLIER': 'SUPPLIER',
@@ -208,58 +228,80 @@ class CSVManager:
                     'LAST_PROCESSED': 'LAST_PROCESSED',
                     'ERROR_MESSAGE': 'ERROR_MESSAGE',
                     'DOWNLOAD_FOLDER': 'DOWNLOAD_FOLDER',
-                    'COUPA_URL': 'COUPA_URL'
+                    'COUPA_URL': 'COUPA_URL',
                 }
-                
+
                 for sqlite_col, standard_name in sync_map.items():
                     target_col = processor._find_column(df, standard_name)
                     if target_col and sqlite_col in to_update.columns:
-                        # Ensure we don't overwrite with empty values if SQLite has better data
-                        # but SQLite should have the most recent data
-                        # Fix: Convert values to compatible types before update
                         source_data = to_update[sqlite_col].copy()
-                        
-                        # Convert to string for string columns, handle NaN properly
-                        if target_col in ['STATUS', 'SUPPLIER', 'AttachmentName', 'ERROR_MESSAGE', 'DOWNLOAD_FOLDER', 'COUPA_URL', 'LAST_PROCESSED']:
-                            # For string columns, convert to string and replace NaN with empty string
+
+                        if target_col in [
+                            'STATUS', 'SUPPLIER', 'AttachmentName',
+                            'ERROR_MESSAGE', 'DOWNLOAD_FOLDER', 'COUPA_URL',
+                            'LAST_PROCESSED',
+                        ]:
                             source_data = source_data.fillna('').astype(str)
                         elif target_col in ['ATTACHMENTS_FOUND', 'ATTACHMENTS_DOWNLOADED']:
-                            # For numeric columns, convert to int and replace NaN with 0
-                            source_data = source_data.fillna(0).astype(int)
-                        
-                        # Create temp dataframe for update
-                        temp_df = pd.DataFrame({target_col: source_data}, index=df.index)
-                        df.update(temp_df)
-                
+                            source_data = pd.to_numeric(source_data, errors='coerce').fillna(0).astype(int)
+
+                        chunk = source_data[~source_data.index.duplicated(keep='first')]
+                        df.loc[df.index.isin(chunk.index), target_col] = chunk
+
                 df.reset_index(inplace=True)
-                
-                # Save back to disk
-                if ext == '.csv':
-                    df.to_csv(output_path, index=False, sep=sep, encoding=enc)
-                else:
-                    with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
-                        df.to_excel(writer, sheet_name=sheet_name, index=False)
-                
-                print(f"✅ Final export completed successfully to {output_path}")
-            else:
-                print("ℹ️ No processed records to export (all still PENDING).")
-                
+
+            # Always save as .xlsx for the report
+            with pd.ExcelWriter(report_path, engine='openpyxl') as writer:
+                df.to_excel(writer, sheet_name='Report', index=False)
+
+            print(f"✅ Final report saved to: {report_path}")
+            return report_path
+
         except Exception as e:
-            print(f"❌ Export failed: {e}")
+            print(f"❌ Report generation failed: {e}")
             import traceback
             traceback.print_exc()
+            return None
+
+    def _generate_standalone_report(self, results_df: pd.DataFrame, download_root: Optional[Path] = None) -> Optional[Path]:
+        """Fallback: generate report purely from SQLite data without merging."""
+        try:
+            report_dir = Path(download_root) if download_root else Path.cwd()
+            report_dir.mkdir(parents=True, exist_ok=True)
+            timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+            report_path = report_dir / f"CoupaDownloads_Report_{timestamp}.xlsx"
+
+            to_export = results_df[results_df['STATUS'] != 'PENDING'].copy()
+            if to_export.empty:
+                print("ℹ️ No processed records to export.")
+                return None
+
+            with pd.ExcelWriter(report_path, engine='openpyxl') as writer:
+                to_export.to_excel(writer, sheet_name='Report', index=False)
+
+            print(f"✅ Standalone report saved to: {report_path}")
+            return report_path
+        except Exception as e:
+            print(f"❌ Standalone report generation failed: {e}")
+            return None
+
+    def has_results(self) -> bool:
+        """Check if there are any processed results available for a report."""
+        if not self._sqlite_handler:
+            return False
+        try:
+            results_df = self._sqlite_handler.get_all_results_df()
+            if results_df.empty:
+                return False
+            return bool((results_df['STATUS'] != 'PENDING').any())
+        except Exception:
+            return False
 
     def update_record(self, po_number: str, updates: Dict[str, Any]) -> bool:
-        """Update a record (prefer SQLite if available)."""
-        success = False
+        """Update a record in SQLite only (no CSV write-back during processing)."""
         if self._sqlite_handler:
-            success = self._sqlite_handler.update_record(po_number, updates)
-        
-        # Fallback to CSV if SQLite is not used or purely for incremental safety
-        if self.csv_handler:
-            success = self.csv_handler.update_record(po_number, updates) or success
-            
-        return success
+            return self._sqlite_handler.update_record(po_number, updates)
+        return False
 
     def is_initialized(self) -> bool:
         """Check if any persistence handler is initialized."""

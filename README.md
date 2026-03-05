@@ -12,6 +12,7 @@ This release includes everything you need to run CoupaDownloads on Windows with 
 - ✅ **One-click setup** - Just run `setup_windows.bat`
 - ✅ **All dependencies included** - No internet required after setup
 - ✅ **Comprehensive error handling** - Better troubleshooting
+- ✅ **Conversão opcional de .msg para PDF** - Pergunta ao final da execução (default = Sim); modo não interativo converte automaticamente e mantém o arquivo original.
 
 ## 🎯 Quick Start
 
@@ -70,6 +71,12 @@ For detailed configuration options, see: `EXPERIMENTAL/docs/parallel-processing.
   - Launches an interactive, English-only walkthrough for preparing review CSVs, ingesting annotations, evaluating metrics, training Sentence Transformers, and exporting Label Studio tasks.
 - ⚙️ **Classic CLI** — `poetry run python tools/feedback_cli.py --help`
   - Ideal for automation; uses the same handlers that the wizard calls behind the scenes.
+
+### Conversão opcional de .msg para .pdf
+- Ao finalizar os downloads, o app detecta arquivos `.msg` e oferece converter para PDF (default = Sim).  
+- Em modo não interativo (`ENABLE_INTERACTIVE_UI=false`), a conversão roda automaticamente.  
+- Flags de controle: `MSG_TO_PDF_ENABLED=true|false` e `MSG_TO_PDF_OVERWRITE=true|false`.  
+- PDFs são salvos na mesma pasta do `.msg`, preservando o original.
 
 ## 📚 User Guide
 For a complete end-to-end manual (installation, configuration, running, outputs, troubleshooting), see:

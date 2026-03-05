@@ -77,8 +77,7 @@ class CommunicationManager:
             metric_dict: Dictionary containing metric information
         """
         try:
-            metric_message = MetricMessage(**metric_dict)
-            self.metric_queue.put(metric_message)
+            self.metric_queue.put(dict(metric_dict))
         except Exception as e:
             # Log exception with context instead of silently swallowing
             logger.warning(
@@ -118,8 +117,10 @@ class CommunicationManager:
 
             if isinstance(metric, MetricMessage):
                 metrics.append(asdict(metric))
-            else:
+            elif isinstance(metric, dict):
                 metrics.append(metric)
+            else:
+                metrics.append(dict(metric) if hasattr(metric, '__iter__') else {'raw': metric})
 
         if metrics:
             with self._metrics_lock:

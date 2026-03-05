@@ -95,6 +95,14 @@ def _derive_status_label(result: Optional[Dict[str, Any]]) -> str:
         return 'COMPLETED'
     if 'oops' in msg_lower or 'not found' in msg_lower:
         return 'PO_NOT_FOUND'
+    # Even when success=False, check if some attachments were downloaded
+    downloaded = result.get('attachments_downloaded', 0)
+    try:
+        downloaded = int(downloaded)
+    except (TypeError, ValueError):
+        downloaded = 0
+    if downloaded > 0:
+        return 'PARTIAL'
     return 'FAILED'
 
 

@@ -211,7 +211,159 @@ class AppConfig(BaseSettings):
         default=None,
         description="Explicit path to EdgeDriver"
     )
+
+    page_load_timeout: int = Field(
+        default=30,
+        ge=5,
+        description="Timeout for page loading in seconds"
+    )
+
+    attachment_wait_timeout: int = Field(
+        default=15,
+        ge=1,
+        description="Timeout for waiting for attachments to appear"
+    )
+
+    download_wait_timeout: int = Field(
+        default=60,
+        ge=1,
+        description="Timeout for file downloads to complete"
+    )
     
+    # =========================================================================
+    # Selectors & Logic
+    # =========================================================================
+
+    attachment_selector: str = Field(
+        default="a[href*='attachment'], a[href*='download'], [aria-label*='attachment'], [title*='attachment'], a[download]",
+        description="CSS selector for matching attachment links"
+    )
+
+    supplier_name_css_selectors: List[str] = Field(
+        default=[
+            "span[data-supplier-name]",
+            "span[class*='supplier-name']",
+            ".supplier-info span",
+            "[data-testid*='supplier'] span",
+            "section:nth-of-type(2) div:nth-of-type(2) span:nth-of-type(3)",
+            "section div[class*='supplier'] span",
+            "section span:contains('supplier')",
+            "div[class*='po-detail'] span:nth-child(3)"
+        ],
+        description="Priority list of CSS selectors for supplier name"
+    )
+
+    supplier_name_xpath: str = Field(
+        default="/html/body/div[1]/div[5]/div/div/div[4]/div/div[3]/section[2]/div[2]/div[1]/div/span[3]",
+        description="Fallback XPath for supplier name"
+    )
+
+    error_page_markers: List[str] = Field(
+        default=[
+            "Oops! We couldn't find what you wanted",
+            "You are not authorized",
+            "Access denied",
+            "The page you were looking for doesn't exist",
+            "Desculpe, não encontramos o que você procurava",
+        ],
+        description="Text markers to identify error pages"
+    )
+
+    error_page_css_selectors: List[str] = Field(
+        default=[
+            "div.flash_error",
+            "div.flash-error",
+            "div.notice",
+            "div#error_explanation",
+        ],
+        description="CSS selectors used to detect Coupa error pages"
+    )
+
+    error_page_xpath_selectors: List[str] = Field(
+        default=[
+            "//div[contains(@class,'flash') and contains(.,'Oops')]",
+            "//h1[contains(.,'Oops') or contains(.,'Sorry')]",
+        ],
+        description="XPath selectors used to detect Coupa error pages"
+    )
+
+    error_page_check_timeout: float = Field(
+        default=2.0,
+        ge=0.1,
+        description="Timeout (seconds) for error page detection before DOM ready"
+    )
+
+    error_page_ready_check_timeout: float = Field(
+        default=1.0,
+        ge=0.0,
+        description="Timeout (seconds) for error page detection after DOM ready"
+    )
+
+    error_page_wait_poll: float = Field(
+        default=0.2,
+        ge=0.05,
+        description="Polling interval (seconds) for error page detection waits"
+    )
+
+    early_error_check_before_ready: bool = Field(
+        default=True,
+        description="Whether to run error-page detection before waiting for DOM ready"
+    )
+
+    pr_fallback_enabled: bool = Field(
+        default=True,
+        description="Enable navigation fallback to PR when PO has no attachments or PDFs"
+    )
+
+    pr_fallback_link_timeout: float = Field(
+        default=4.0,
+        ge=0.5,
+        description="Timeout (seconds) to locate PR link on PO page"
+    )
+
+    pr_fallback_link_poll: float = Field(
+        default=0.2,
+        ge=0.05,
+        description="Polling interval (seconds) when waiting for PR link"
+    )
+
+    pr_fallback_ready_timeout: float = Field(
+        default=8.0,
+        ge=0.0,
+        description="Additional wait (seconds) for PR page DOM ready after navigation"
+    )
+
+    pr_link_css_selectors: List[str] = Field(
+        default=[
+            "a[href*='/requisition_headers/']",
+            "a[href*='requisition_header']",
+            "a[data-testid*='requisition']",
+            "a[data-qa*='requisition']",
+            "a[href*='/req/']",
+        ],
+        description="CSS selectors to locate PR link from PO page"
+    )
+
+    pr_link_xpath_candidates: List[str] = Field(
+        default=[
+            "//a[contains(@href,'/requisition_') or contains(@href,'/requisition-')]",
+            "//a[contains(@href,'requisition_headers')]",
+            "//a[contains(normalize-space(.),'Requisition')]",
+            "//a[contains(normalize-space(.),'Requisição')]",
+        ],
+        description="XPath candidates to locate PR link from PO page"
+    )
+
+    pr_link_text_candidates: List[str] = Field(
+        default=[
+            "Requisition",
+            "Purchase Requisition",
+            "Requisição",
+            "Requisições",
+        ],
+        description="Link text snippets used to locate PR link from PO page"
+    )
+
     # =========================================================================
     # Logging & Verbosity
     # =========================================================================
@@ -478,6 +630,106 @@ class AppConfig(BaseSettings):
     def EDGE_DRIVER_PATH(self) -> Optional[Path]:
         """Legacy compatibility for Config.EDGE_DRIVER_PATH."""
         return self.edge_driver_path
+    
+    @property
+    def ATTACHMENT_WAIT_TIMEOUT(self) -> int:
+        """Legacy compatibility for Config.ATTACHMENT_WAIT_TIMEOUT."""
+        return self.attachment_wait_timeout
+    
+    @property
+    def DOWNLOAD_WAIT_TIMEOUT(self) -> int:
+        """Legacy compatibility for Config.DOWNLOAD_WAIT_TIMEOUT."""
+        return self.download_wait_timeout
+    
+    @property
+    def PAGE_LOAD_TIMEOUT(self) -> int:
+        """Legacy compatibility for Config.PAGE_LOAD_TIMEOUT."""
+        return self.page_load_timeout
+
+    @property
+    def ATTACHMENT_SELECTOR(self) -> str:
+        """Legacy compatibility for Config.ATTACHMENT_SELECTOR."""
+        return self.attachment_selector
+
+    @property
+    def SUPPLIER_NAME_CSS_SELECTORS(self) -> List[str]:
+        """Legacy compatibility for Config.SUPPLIER_NAME_CSS_SELECTORS."""
+        return self.supplier_name_css_selectors
+
+    @property
+    def SUPPLIER_NAME_XPATH(self) -> str:
+        """Legacy compatibility for Config.SUPPLIER_NAME_XPATH."""
+        return self.supplier_name_xpath
+
+    @property
+    def ERROR_PAGE_MARKERS(self) -> List[str]:
+        """Legacy compatibility for Config.ERROR_PAGE_MARKERS."""
+        return self.error_page_markers
+
+    @property
+    def ERROR_PAGE_CSS_SELECTORS(self) -> List[str]:
+        """Legacy compatibility for Config.ERROR_PAGE_CSS_SELECTORS."""
+        return self.error_page_css_selectors
+
+    @property
+    def ERROR_PAGE_XPATH_SELECTORS(self) -> List[str]:
+        """Legacy compatibility for Config.ERROR_PAGE_XPATH_SELECTORS."""
+        return self.error_page_xpath_selectors
+
+    @property
+    def ERROR_PAGE_CHECK_TIMEOUT(self) -> float:
+        """Legacy compatibility for Config.ERROR_PAGE_CHECK_TIMEOUT."""
+        return self.error_page_check_timeout
+
+    @property
+    def ERROR_PAGE_READY_CHECK_TIMEOUT(self) -> float:
+        """Legacy compatibility for Config.ERROR_PAGE_READY_CHECK_TIMEOUT."""
+        return self.error_page_ready_check_timeout
+
+    @property
+    def ERROR_PAGE_WAIT_POLL(self) -> float:
+        """Legacy compatibility for Config.ERROR_PAGE_WAIT_POLL."""
+        return self.error_page_wait_poll
+
+    @property
+    def EARLY_ERROR_CHECK_BEFORE_READY(self) -> bool:
+        """Legacy compatibility for Config.EARLY_ERROR_CHECK_BEFORE_READY."""
+        return self.early_error_check_before_ready
+
+    @property
+    def PR_FALLBACK_ENABLED(self) -> bool:
+        """Legacy compatibility for Config.PR_FALLBACK_ENABLED."""
+        return self.pr_fallback_enabled
+
+    @property
+    def PR_FALLBACK_LINK_TIMEOUT(self) -> float:
+        """Legacy compatibility for Config.PR_FALLBACK_LINK_TIMEOUT."""
+        return self.pr_fallback_link_timeout
+
+    @property
+    def PR_FALLBACK_LINK_POLL(self) -> float:
+        """Legacy compatibility for Config.PR_FALLBACK_LINK_POLL."""
+        return self.pr_fallback_link_poll
+
+    @property
+    def PR_FALLBACK_READY_TIMEOUT(self) -> float:
+        """Legacy compatibility for Config.PR_FALLBACK_READY_TIMEOUT."""
+        return self.pr_fallback_ready_timeout
+
+    @property
+    def PR_LINK_CSS_SELECTORS(self) -> List[str]:
+        """Legacy compatibility for Config.PR_LINK_CSS_SELECTORS."""
+        return self.pr_link_css_selectors
+
+    @property
+    def PR_LINK_XPATH_CANDIDATES(self) -> List[str]:
+        """Legacy compatibility for Config.PR_LINK_XPATH_CANDIDATES."""
+        return self.pr_link_xpath_candidates
+
+    @property
+    def PR_LINK_TEXT_CANDIDATES(self) -> List[str]:
+        """Legacy compatibility for Config.PR_LINK_TEXT_CANDIDATES."""
+        return self.pr_link_text_candidates
     
     @property
     def INPUT_DIR(self) -> Path:

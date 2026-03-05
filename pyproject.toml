@@ -25,6 +25,8 @@ playwright = "^1.40.0"
 structlog = "^23.0.0"  # Structured logging for parallel processing
 httpx = "^0.27.0"
 pydantic-settings = "^2.10.1"  # Settings management in config.py
+extract-msg = "^0.50.8"
+fpdf2 = "^2.7.9"
 
 [tool.poetry.scripts]
 coupa-downloader = "src.cli.main:main"

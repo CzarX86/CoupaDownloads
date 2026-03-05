@@ -38,6 +38,7 @@ graph TD
 ### 1. Entry Point (`src.main`)
 
 O `MainApp` é o orquestrador global. Ele gerencia o ciclo de vida da aplicação, desde a leitura do Excel inicial até o encerramento do sistema.
+- **Pós-processamento**: após finalizar POs e métricas, o `MainApp` oferece a conversão opcional de arquivos `.msg` para PDF (automática em modo não interativo) antes de gerar o relatório final.
 
 ### 2. Controle de Processamento (`ProcessingController`)
 

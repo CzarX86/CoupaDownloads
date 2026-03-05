@@ -158,9 +158,11 @@ class SetupManager:
 
         # Headless
         headless_pref = os.environ.get('HEADLESS', 'true').strip().lower() == 'true'
-        
+
         # UI and output settings
-        ui_mode = os.environ.get('UI_MODE', 'premium').strip().lower()
+        # Default to 'none' for non-interactive, 'premium' for interactive
+        enable_interactive = os.environ.get('ENABLE_INTERACTIVE_UI', 'True').strip().lower() == 'true'
+        ui_mode = os.environ.get('UI_MODE', 'none' if not enable_interactive else 'premium').strip().lower()
         suppress_output = os.environ.get('SUPPRESS_WORKER_OUTPUT', '1').strip() == '1'
 
         # Download folder (apply timestamp prefix automatically)
@@ -179,9 +181,17 @@ class SetupManager:
         # IMPORTANT: Also update Config.DOWNLOAD_FOLDER so browser uses the correct path
         from .lib.config import Config
         Config.DOWNLOAD_FOLDER = os.path.abspath(os.path.expanduser(timestamped_dl))
-        normalized_dl = Config.DOWNLOAD_FOLDER
+        normalized_dl = str(Config.DOWNLOAD_FOLDER)  # Convert Path to str
         os.environ['DOWNLOAD_FOLDER'] = normalized_dl
         os.makedirs(normalized_dl, exist_ok=True)
+
+        # MSG → PDF flags
+        msg_to_pdf_enabled = os.environ.get('MSG_TO_PDF_ENABLED', 'true').strip().lower() in ('1', 'true', 'yes')
+        msg_to_pdf_overwrite = os.environ.get('MSG_TO_PDF_OVERWRITE', 'false').strip().lower() in ('1', 'true', 'yes')
+        self.experimental_config.MSG_TO_PDF_ENABLED = msg_to_pdf_enabled
+        self.experimental_config.MSG_TO_PDF_OVERWRITE = msg_to_pdf_overwrite
+        os.environ['MSG_TO_PDF_ENABLED'] = 'true' if msg_to_pdf_enabled else 'false'
+        os.environ['MSG_TO_PDF_OVERWRITE'] = 'true' if msg_to_pdf_overwrite else 'false'
 
         # Profile hints (optional)
         prof_dir = os.environ.get('EDGE_PROFILE_DIR')

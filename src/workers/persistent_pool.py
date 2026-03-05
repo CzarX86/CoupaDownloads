@@ -385,7 +385,7 @@ class PersistentWorkerPool:
                 worker_id=worker_id,
                 profile=profile,
                 config=self.config,
-                csv_handler=self.csv_handler,
+                messenger=self.communication_manager,
             )
 
             logger.info(
@@ -567,13 +567,18 @@ class PersistentWorkerPool:
         
         # Create task function for TaskQueue
         def task_function(po_data: Dict[str, Any]) -> Dict[str, Any]:
-            """Task function that processes PO data."""
-            # This would be called by the TaskQueue
-            # For now, return a mock result since actual processing happens in worker
+            """
+            Task function defined for TaskQueue contract.
+            NOTE: The actual PO processing for persistent workers happens 
+            directly in WorkerProcess.process_task(po_task) called from
+            the worker's run loop (_run_worker_process), which bypasses
+            this local function to use the worker's persistent browser context.
+            """
             return {
                 'success': True,
-                'data': {'po_number': po_data['po_number']},
-                'files': []
+                'data': {'po_number': po_data.get('po_number', 'unknown')},
+                'files': [],
+                'is_stub': True
             }
         
         # Convert priority to TaskQueue priority (1=highest, 10=lowest)
@@ -799,23 +804,7 @@ class PersistentWorkerPool:
                 result=task_result
             )
 
-            # Send STARTED metric for UI visibility (if not sent before)
-            if self.communication_manager:
-                try:
-                    self.communication_manager.send_metric({
-                        'worker_id': task.assigned_worker or 0,
-                        'task_id': task.task_id,
-                        'po_id': po_task.po_number,
-                        'status': 'STARTED',
-                        'timestamp': time.time(),
-                        'attachments_found': 0,
-                        'attachments_downloaded': 0,
-                        'message': f'Started processing {po_task.po_number}',
-                    })
-                except Exception:
-                    pass
-
-            # Send COMPLETED metric with results
+            # Send COMPLETED metric with results (supplements worker-level metrics)
             if self.communication_manager:
                 metric_data = {
                     'worker_id': task.assigned_worker or 0,
@@ -849,23 +838,7 @@ class PersistentWorkerPool:
             if not requeued:
                 po_task.metadata['result_payload'] = result
 
-            # Send STARTED metric for UI visibility
-            if self.communication_manager:
-                try:
-                    self.communication_manager.send_metric({
-                        'worker_id': task.assigned_worker or 0,
-                        'task_id': task.task_id,
-                        'po_id': po_task.po_number,
-                        'status': 'STARTED',
-                        'timestamp': time.time(),
-                        'attachments_found': 0,
-                        'attachments_downloaded': 0,
-                        'message': f'Started processing {po_task.po_number}',
-                    })
-                except Exception:
-                    pass
-
-            # Send FAILED metric
+            # Send FAILED metric (supplements worker-level metrics)
             if self.communication_manager:
                 metric_data = {
                     'worker_id': task.assigned_worker or 0,

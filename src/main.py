@@ -64,15 +64,23 @@ from .core.resource_assessor import ResourceAssessor
 from .core.telemetry import TelemetryProvider, ConsoleTelemetryListener
 from .core.status import StatusLevel
 from .services.processing_service import ProcessingService
+from .services.msg_conversion_service import MsgToPdfConverter, find_msg_files
 from .core.utils import _humanize_exception, _wait_for_downloads_complete, _derive_status_label
 from .orchestrators import BrowserOrchestrator, ResultAggregator
 
 # Module logger
 logger = logging.getLogger(__name__)
 
-# Enable interactive UI mode (set to True to enable interactive prompts)
-# Default is True for local interactive use
-ENABLE_INTERACTIVE_UI = os.environ.get('ENABLE_INTERACTIVE_UI', 'True').strip().lower() == 'true'
+# Enable interactive UI mode.
+# Behavior:
+# - If ENABLE_INTERACTIVE_UI is explicitly set, honor it.
+# - Otherwise, default to interactive when running in a TTY (local terminal),
+#   and non-interactive in automation contexts.
+_enable_interactive_env = os.environ.get('ENABLE_INTERACTIVE_UI')
+if _enable_interactive_env is None:
+    ENABLE_INTERACTIVE_UI = sys.stdin.isatty()
+else:
+    ENABLE_INTERACTIVE_UI = _enable_interactive_env.strip().lower() == 'true'
 
 
 class MainApp:
@@ -405,9 +413,13 @@ class MainApp:
             - MAX_PARALLEL_WORKERS define número de workers
         """
         # Interactive or non-interactive configuration
-        # Re-evaluate ENABLE_INTERACTIVE_UI at runtime to allow dynamic control
-        # Default is True for local interactive use
-        enable_interactive = os.environ.get('ENABLE_INTERACTIVE_UI', 'True').strip().lower() == 'true'
+        # Use module-level ENABLE_INTERACTIVE_UI constant
+        enable_interactive = ENABLE_INTERACTIVE_UI
+        self.telemetry.emit_status(
+            StatusLevel.INFO,
+            f"Startup mode: {'interactive' if enable_interactive else 'non-interactive'} "
+            f"(ENABLE_INTERACTIVE_UI={os.environ.get('ENABLE_INTERACTIVE_UI', '<auto>')})",
+        )
 
         if enable_interactive:
             setup_session = self.setup_manager.interactive_setup()
@@ -418,9 +430,9 @@ class MainApp:
             self.telemetry.emit_status(StatusLevel.INFO, "Applying environment configuration")
             config = self.setup_manager.apply_env_overrides()
             headless_config = HeadlessConfiguration(enabled=config["headless_preference"])
-            # Default to "premium" (Textual UI) for better visibility, use "none" for CI/automation
+            # Default based on interactivity: premium for interactive, none for automation
             if not hasattr(self, 'ui_mode') or self.ui_mode is None:
-                self.ui_mode = config.get("ui_mode", "premium")  # Changed from "none" to "premium"
+                self.ui_mode = config.get("ui_mode", "none" if not enable_interactive else "premium")
             if not hasattr(self, 'execution_mode') or self.execution_mode is None:
                 self.execution_mode = config.get("execution_mode", "standard")
         
@@ -565,11 +577,22 @@ class MainApp:
             successful = agg.get("total_successful", 0)
             failed = agg.get("total_failed", 0)
 
-        # Shutdown CSV handler to ensure all data is persisted
-        self.csv_manager.shutdown_csv_handler()
+        # --- Final Report Prompt ---
+        # Keep SQLite alive for report generation (cleanup_sqlite=False).
+        self.csv_manager.shutdown_csv_handler(cleanup_sqlite=False)
 
         self.telemetry.emit_stats(successful, failed, successful + failed)
         self.telemetry.emit_status(StatusLevel.SUCCESS, f"Processing complete! {successful} successful, {failed} failed.")
+
+        # Offer .msg → .pdf conversion before report generation
+        self._offer_msg_conversion()
+
+        # Offer to generate a final Excel report if there are results
+        if self.csv_manager.has_results():
+            self._offer_final_report()
+
+        # Now fully clean up SQLite temp files
+        self.csv_manager.shutdown_csv_handler(cleanup_sqlite=True)
 
     def _run_premium_ui(self, po_data_list, hierarchy_cols, has_hierarchy_data, use_process_pool):
         """Run the alternative Premium Textual UI."""
@@ -578,9 +601,22 @@ class MainApp:
         import os
         from .core.output import OutputSuppressor
 
+        # Premium UI requires parallel/process-pool mode because processing runs
+        # in a background thread while Textual owns the terminal.  Sequential
+        # in-process mode would call initialize_browser_once() / process_single_po()
+        # which are incompatible with a daemon thread under output suppression.
+        if not use_process_pool or not self.enable_parallel:
+            _debug_log("_run_premium_ui: forcing parallel mode (was sequential)")
+            use_process_pool = True
+            self.enable_parallel = True
+            if self.max_workers < 2:
+                self.max_workers = 2
+                self.worker_manager.max_workers = 2
+
         # Start processing in a background thread
         def run_processing():
             try:
+                _debug_log(f"run_processing started: parallel={self.enable_parallel}, workers={self.max_workers}, pool={use_process_pool}, pos={len(po_data_list)}")
                 self.processing_controller.process_po_entries(
                     po_data_list,
                     hierarchy_cols,
@@ -598,9 +634,12 @@ class MainApp:
                     sqlite_db_path=self.csv_manager.sqlite_db_path,
                     execution_mode=getattr(self, 'execution_mode', 'standard'),
                 )
+                _debug_log("run_processing completed successfully")
             except Exception as e:
-                print(f"Error in background processing: {e}")
+                _debug_log(f"run_processing FAILED: {e}")
                 import traceback
+                _debug_log(traceback.format_exc())
+                print(f"Error in background processing: {e}")
                 traceback.print_exc()
 
         os.environ["SUPPRESS_WORKER_OUTPUT"] = "1"
@@ -611,6 +650,97 @@ class MainApp:
             # Run the Textual App
             app = CoupaTextualUI(self.communication_manager, total_pos=len(po_data_list))
             app.run()
+
+    # ---- Final Report -------------------------------------------------------------------
+
+    def _offer_msg_conversion(self) -> None:
+        """Offer to convert downloaded .msg files to PDF."""
+        try:
+            download_root = Path(ExperimentalConfig.DOWNLOAD_FOLDER)
+            enabled = bool(getattr(ExperimentalConfig, 'MSG_TO_PDF_ENABLED', True))
+            overwrite = bool(getattr(ExperimentalConfig, 'MSG_TO_PDF_OVERWRITE', False))
+        except Exception:
+            logger.warning("MSG to PDF: unable to resolve configuration")
+            return
+
+        if not enabled:
+            logger.info("MSG to PDF conversion disabled via configuration")
+            return
+
+        msg_files = find_msg_files(download_root)
+        total = len(msg_files)
+        if total == 0:
+            logger.info("MSG to PDF: no .msg files found", extra={"root": str(download_root)})
+            return
+
+        proceed = True
+        if ENABLE_INTERACTIVE_UI:
+            print("\n" + "=" * 60)
+            print("  ✉️  MSG TO PDF")
+            print("=" * 60)
+            sample = [f"  - {p.relative_to(download_root)}" for p in msg_files[:5]]
+            if sample:
+                print("  Sample files:")
+                for line in sample:
+                    print(line)
+            print()
+            try:
+                answer = input(f"  Convert {total} .msg file(s) to PDF now? [Y/n]: ").strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                answer = "n"
+            proceed = answer in ("", "y", "yes", "s", "sim")
+
+        if not proceed:
+            print("  ℹ️  MSG to PDF conversion skipped.")
+            return
+
+        converter = MsgToPdfConverter(overwrite=overwrite, telemetry=self.telemetry)
+        summary = converter.convert_all(msg_files)
+
+        converted = summary.get("converted", 0)
+        skipped = summary.get("skipped", 0)
+        failed = summary.get("failed", 0)
+
+        print(f"  ✅ MSG to PDF complete: {converted} converted, {skipped} skipped, {failed} failed.")
+        if failed and summary.get("errors"):
+            print("  ⚠️  Errors:")
+            for err in summary["errors"][:5]:
+                print(f"    - {err['file']}: {err['error']}")
+
+    def _offer_final_report(self) -> None:
+        """Ask the user whether to save a final Excel report.
+
+        The report is saved into the timestamped download root directory
+        (``ExperimentalConfig.DOWNLOAD_FOLDER``) so it lives alongside the
+        downloaded attachments.
+        """
+        try:
+            download_root = Path(ExperimentalConfig.DOWNLOAD_FOLDER)
+        except Exception:
+            download_root = None
+
+        # In non-interactive / CI mode, skip the prompt and always generate
+        if not ENABLE_INTERACTIVE_UI:
+            logger.info("Non-interactive mode: auto-generating final report")
+            self.csv_manager.generate_final_report(download_root)
+            return
+
+        print("\n" + "=" * 60)
+        print("  📊  FINAL REPORT")
+        print("=" * 60)
+        if download_root:
+            print(f"  Save location: {download_root}")
+        print()
+
+        try:
+            answer = input("  Would you like to save a final Excel report? [Y/n]: ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            answer = "n"
+
+        if answer in ("", "y", "yes", "s", "sim"):
+            self.csv_manager.generate_final_report(download_root)
+        else:
+            print("  ℹ️  Report generation skipped.")
 
     def close(self, emergency: bool = False) -> None:
         """
@@ -684,15 +814,6 @@ class MainApp:
             except Exception:
                 pass
             self.driver = None
-
-
-class SessionStatus(Enum):
-    """Status enumeration for processing sessions."""
-    IDLE = "idle"
-    RUNNING = "running"
-    PAUSED = "paused"
-    COMPLETED = "completed"
-    FAILED = "failed"
 
 
 def main() -> None:

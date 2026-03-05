@@ -73,9 +73,19 @@ class ProcessingController:
         mode_val = execution_mode.value if hasattr(execution_mode, 'value') else str(execution_mode)
         print(f"🚀 Execution Mode: {mode_val.upper()}")
 
+        # Debug: log flow entry to file (survives output suppression)
+        try:
+            from datetime import datetime as _dt
+            with open('/tmp/worker_debug.log', 'a') as _f:
+                _f.write(f"[{_dt.now().isoformat()}] [CONTROLLER] process_po_entries: parallel={enable_parallel}, pool={use_process_pool}, pos={len(po_data_list)}, workers={self.worker_manager.max_workers}\n")
+        except Exception:
+            pass
 
         # Use unified processing engine for all parallel cases
-        if enable_parallel and len(po_data_list) > 1 and use_process_pool:
+        # Note: len >= 1 (not > 1) so process-pool mode also works with a single PO.
+        # This is critical when running under Textual UI, where sequential in-process
+        # mode is incompatible with the background thread + output suppression.
+        if enable_parallel and len(po_data_list) >= 1 and use_process_pool:
             print(f"🚀 Using Unified Processing Engine with {self.worker_manager.max_workers} workers")
             try:
                 successful, failed, session_report = self.worker_manager.process_pos(

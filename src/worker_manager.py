@@ -295,7 +295,7 @@ class ProcessingSession:
                 csv_handler = None
                 if hasattr(self, 'csv_path') and self.csv_path:
                     try:
-                        from csv_handler import CSVHandler
+                        from .core.csv_handler import CSVHandler
                         from pathlib import Path
                         csv_handler = CSVHandler(Path(self.csv_path))
                         print(f"[PersistentWorkerPool] CSV handler created for: {self.csv_path}")
@@ -752,6 +752,14 @@ def _derive_status_label(result: dict | None) -> str:
         return 'COMPLETED'
     if 'oops' in msg_lower or 'not found' in msg_lower:
         return 'PO_NOT_FOUND'
+    # Even when success=False, check if some attachments were downloaded
+    downloaded = result.get('attachments_downloaded', 0)
+    try:
+        downloaded = int(downloaded)
+    except (TypeError, ValueError):
+        downloaded = 0
+    if downloaded > 0:
+        return 'PARTIAL'
     return 'FAILED'
 
 
@@ -1653,6 +1661,15 @@ class WorkerManager:
         Routes to process_parallel_with_reusable_workers using a shared Queue.
         """
         import multiprocessing as _mp
+
+        # Debug: log flow entry to file (survives output suppression)
+        try:
+            from datetime import datetime as _dt
+            with open('/tmp/worker_debug.log', 'a') as _f:
+                _f.write(f"[{_dt.now().isoformat()}] [WORKER_MANAGER] process_pos called: {len(po_data_list)} POs\n")
+        except Exception:
+            pass
+
         # Use Manager().Queue() for spawn compatibility on macOS
         # Regular mp.Queue() can't be shared between spawned processes
         manager = _mp.Manager()

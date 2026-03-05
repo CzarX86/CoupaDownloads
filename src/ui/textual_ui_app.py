@@ -248,43 +248,52 @@ class CoupaTextualUI(App):
             agg = self.comm_manager.get_aggregated_metrics()
             
             # Update workers using persistent worker_states from manager
-            worker_grid = self.query_one("#worker-grid", WorkerStatusGrid)
-            worker_states = agg.get("workers_status", {})
-            
-            displayed_workers = []
-            # Sort by worker_id (handle both int and str)
-            def sort_key(k):
-                if isinstance(k, int): return k
-                if isinstance(k, str) and k.startswith('worker-'):
-                    try: return int(k.split('-')[1])
-                    except: return float('inf')
-                return str(k)
-            
-            for wid in sorted(worker_states.keys(), key=sort_key):
-                m = worker_states[wid]
+            try:
+                worker_grid = self.query_one("#worker-grid", WorkerStatusGrid)
+                worker_states = agg.get("workers_status", {})
                 
-                # Robust display ID generation
-                display_id = str(wid)
-                if isinstance(wid, int):
-                    display_id = f"Worker {wid + 1}"
-                elif isinstance(wid, str) and wid.startswith('worker-'):
-                    try:
-                        num = wid.split('-')[1]
-                        display_id = f"Worker {num}"
-                    except:
-                        pass
+                displayed_workers = []
+                # Sort by worker_id (handle both int and str, always return int)
+                def sort_key(k):
+                    if isinstance(k, int):
+                        return k
+                    if isinstance(k, str):
+                        if k.startswith('worker-'):
+                            try:
+                                return int(k.split('-')[1])
+                            except (ValueError, IndexError):
+                                pass
+                        # Try to parse any numeric string
+                        try:
+                            return int(k)
+                        except (ValueError, TypeError):
+                            pass
+                    # Fallback: use a large int so unknown keys sort last
+                    return 999999
                 
-                displayed_workers.append({
-                    "worker_id": display_id,
-                    "current_po": m.get("po_id", "Idle"),
-                    "status": m.get("status", "Idle"),
-                    "attachments_found": m.get("attachments_found", 0),
-                    "attachments_downloaded": m.get("attachments_downloaded", 0),
-                    "efficiency_score": m.get("efficiency_score", 0.0)
-                })
-            
-            if displayed_workers:
-                worker_grid.worker_entries = displayed_workers
+                for wid in sorted(worker_states.keys(), key=sort_key):
+                    m = worker_states[wid]
+                    
+                    # Robust display ID generation: always derive a human-friendly label
+                    numeric_id = sort_key(wid)
+                    if numeric_id != 999999:
+                        display_id = f"Worker {numeric_id}"
+                    else:
+                        display_id = str(wid)
+                    
+                    displayed_workers.append({
+                        "worker_id": display_id,
+                        "current_po": m.get("po_id", "Idle"),
+                        "status": m.get("status", "Idle"),
+                        "attachments_found": m.get("attachments_found", 0),
+                        "attachments_downloaded": m.get("attachments_downloaded", 0),
+                        "efficiency_score": m.get("efficiency_score", 0.0)
+                    })
+                
+                if displayed_workers:
+                    worker_grid.worker_entries = displayed_workers
+            except Exception:
+                pass  # Worker grid update failed; continue with other sections
             
             # Update logs from recent metrics (best-effort; keep UI alive on errors)
             try:
