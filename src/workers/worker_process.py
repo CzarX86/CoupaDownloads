@@ -60,6 +60,7 @@ from requests.adapters import HTTPAdapter
 
 from .models import Worker, Profile, POTask, PoolConfig, WorkerStatus
 from .browser_session import BrowserSession
+from .task_queue import ProcessingTask
 
 from ..lib.browser import BrowserManager
 from ..lib.downloader import Downloader
@@ -77,12 +78,14 @@ from ..core.output import maybe_print as print
 
 # Centralized config for URLs
 try:
-    from ..lib.config import Config as _ExperimentalConfig  # type: ignore
+    from ..config.app_config import Config as _ExperimentalConfig  # type: ignore
     BASE_URL: str = getattr(_ExperimentalConfig, "BASE_URL", "https://unilever.coupahost.com")
 except Exception:
     BASE_URL = "https://unilever.coupahost.com"
 
 logger = structlog.get_logger(__name__)
+
+_HTTP_POOL_PATCH_MARKER = "_coupa_worker_pool_patch_applied"
 
 
 _DOWNLOAD_SUFFIXES = ('.crdownload', '.tmp', '.partial')
@@ -150,7 +153,7 @@ class WorkerProcess:
         
         # Task processing
         self.current_task: Optional[POTask] = None
-        self.task_queue = queue.Queue()
+        self.task_queue: "queue.Queue[ProcessingTask]" = queue.Queue(maxsize=1)
         
         # State management
         self._stop_event = threading.Event()
@@ -163,6 +166,75 @@ class WorkerProcess:
         self.tasks_failed = 0
         
         logger.debug("WorkerProcess initialized", worker_id=worker_id)
+
+    def _emit_worker_state(self, status: str, message: str, *, po_id: str = "SYSTEM") -> None:
+        """Publish worker lifecycle state so the UI can render the worker before first task."""
+        if not self.messenger:
+            return
+
+        try:
+            self.messenger.send_metric({
+                'worker_id': self.worker_id,
+                'po_id': po_id,
+                'status': status,
+                'timestamp': time.time(),
+                'attachments_found': 0,
+                'attachments_downloaded': 0,
+                'tasks_processed': self.tasks_processed,
+                'tasks_failed': self.tasks_failed,
+                'efficiency_score': (self.tasks_processed / max(1, self.tasks_processed + self.tasks_failed)) * 100 if (self.tasks_processed + self.tasks_failed) > 0 else 0.0,
+                'message': message,
+            })
+        except Exception:
+            pass
+
+    def _get_startup_delay_seconds(self) -> float:
+        """Return a small startup jitter to avoid stampeding browser launches."""
+        base_delay = 0.1
+        jitter_window = 0.2
+        return base_delay + ((abs(hash(self.worker_id)) % 3) * (jitter_window / 2))
+
+    def can_accept_task(self) -> bool:
+        """Return True when the worker is ready for exactly one new assignment."""
+        if not self._running or self.should_stop():
+            return False
+        if self.current_task is not None or not self.task_queue.empty():
+            return False
+        return self.worker.status in {WorkerStatus.READY, WorkerStatus.IDLE}
+
+    def submit_task_assignment(self, task: ProcessingTask) -> bool:
+        """Queue one assigned task for this worker without allowing prefetch beyond one item."""
+        if not self.can_accept_task():
+            return False
+
+        try:
+            self.task_queue.put_nowait(task)
+            return True
+        except queue.Full:
+            return False
+
+    def get_assigned_task(self, timeout: float = 0.1) -> Optional[ProcessingTask]:
+        """Return the next centrally-assigned task for this worker."""
+        if self.should_stop():
+            return None
+
+        try:
+            return self.task_queue.get(timeout=timeout)
+        except queue.Empty:
+            return None
+
+    def has_pending_assignment(self) -> bool:
+        """Return True when a task is already reserved for this worker."""
+        return not self.task_queue.empty()
+
+    def drain_assigned_tasks(self) -> list[ProcessingTask]:
+        """Drain reserved assignments that never started processing."""
+        drained: list[ProcessingTask] = []
+        while True:
+            try:
+                drained.append(self.task_queue.get_nowait())
+            except queue.Empty:
+                return drained
     
     def start(self) -> None:
         """
@@ -183,12 +255,14 @@ class WorkerProcess:
             
             # Update worker status
             self.worker.status = WorkerStatus.STARTING
+            self._emit_worker_state("STARTING", f"{self.worker_id} is starting")
             
             # Initialize browser session
             self._initialize_browser_session()
             
             # Mark worker as ready
             self.worker.status = WorkerStatus.READY
+            self._emit_worker_state("READY", f"{self.worker_id} is ready")
             
             logger.info("Worker process started successfully", 
                        worker_id=self.worker_id)
@@ -197,6 +271,7 @@ class WorkerProcess:
             self._running = False
             self.worker.status = WorkerStatus.CRASHED
             self.worker.last_error = f"Startup failed: {str(e)}"
+            self._emit_worker_state("FAILED", f"{self.worker_id} failed to start: {e}")
             logger.error("Failed to start worker process", 
                         worker_id=self.worker_id, error=str(e))
             raise RuntimeError(f"Worker startup failed: {e}") from e
@@ -345,9 +420,8 @@ class WorkerProcess:
             # service_args=["--verbose", "--log-level=DEBUG"]  # Commented out to reduce noise
         )
 
-        # Add delay to prevent simultaneous driver starts
-        import time
-        init_delay = 2 + (abs(hash(self.worker_id)) % 3) # Jittered delay
+        # Keep only a small jitter here. Initial pool startup already uses stagger_delay.
+        init_delay = self._get_startup_delay_seconds()
         _debug_log(f"Worker {self.worker_id} delaying start by {init_delay}s...")
         time.sleep(init_delay)
         
@@ -399,21 +473,23 @@ class WorkerProcess:
         """Configure urllib3 connection pools to prevent multiprocessing issues."""
         try:
             import urllib3
-            from urllib3.util import connection
             
             # Monkey patch urllib3 to use larger default pool sizes globally
             # This prevents "Connection pool is full" errors during multiprocessing
-            original_init = urllib3.connectionpool.HTTPConnectionPool.__init__
-            
-            def patched_init(self, host, port=None, timeout=urllib3.util.timeout.Timeout.DEFAULT_TIMEOUT, maxsize=1, block=False, headers=None, retries=None, _proxy=None, _proxy_headers=None, _proxy_config=None, **conn_kw):
-                # Force larger pool sizes, especially for localhost
-                if host in ('localhost', '127.0.0.1'):
-                    maxsize = max(maxsize, 20)  # Larger pools for localhost/multiprocessing
-                else:
-                    maxsize = max(maxsize, 10)  # Normal pools for external connections
-                return original_init(self, host, port, timeout, maxsize, block, headers, retries, _proxy, _proxy_headers, _proxy_config, **conn_kw)
-            
-            urllib3.connectionpool.HTTPConnectionPool.__init__ = patched_init
+            http_pool_init = urllib3.connectionpool.HTTPConnectionPool.__init__
+            if not getattr(http_pool_init, _HTTP_POOL_PATCH_MARKER, False):
+                original_init = http_pool_init
+
+                def patched_init(self, host, port=None, timeout=urllib3.util.timeout.Timeout.DEFAULT_TIMEOUT, maxsize=1, block=False, headers=None, retries=None, _proxy=None, _proxy_headers=None, _proxy_config=None, **conn_kw):
+                    # Force larger pool sizes, especially for localhost
+                    if host in ('localhost', '127.0.0.1'):
+                        maxsize = max(maxsize, 20)  # Larger pools for localhost/multiprocessing
+                    else:
+                        maxsize = max(maxsize, 10)  # Normal pools for external connections
+                    return original_init(self, host, port, timeout, maxsize, block, headers, retries, _proxy, _proxy_headers, _proxy_config, **conn_kw)
+
+                setattr(patched_init, _HTTP_POOL_PATCH_MARKER, True)
+                urllib3.connectionpool.HTTPConnectionPool.__init__ = patched_init
             
             # Create a custom connection pool manager with larger pools
             http = urllib3.PoolManager(
@@ -441,7 +517,7 @@ class WorkerProcess:
         # If still no target, get from ..config with timestamp preservation
         if not target:
             try:
-                from ..lib.config import Config as _Cfg
+                from ..config.app_config import Config as _Cfg
                 target = getattr(_Cfg, 'DOWNLOAD_FOLDER', None)
             except Exception as e:
                 logger.warning(
@@ -450,7 +526,7 @@ class WorkerProcess:
                     error=str(e)
                 )
                 try:
-                    from ..lib.config import Config as _Cfg  # type: ignore
+                    from ..config.app_config import Config as _Cfg  # type: ignore
                     target = getattr(_Cfg, 'DOWNLOAD_FOLDER', None)
                 except Exception as e2:
                     logger.warning(
@@ -469,24 +545,13 @@ class WorkerProcess:
         # Set environment variable for downstream processes
         os.environ['DOWNLOAD_FOLDER'] = normalized
 
-        # Update all config facades so that FolderHierarchyManager sees the right path
+        # Update shared runtime config singleton so other components see the same path.
         try:
-            from ..lib import config as experimental_config
-            experimental_config.Config.DOWNLOAD_FOLDER = normalized  # type: ignore[attr-defined]
-            logger.debug("Updated lib.Config.DOWNLOAD_FOLDER", worker_id=self.worker_id, path=normalized)
+            from ..config import app_config as runtime_config
+            runtime_config.Config.DOWNLOAD_FOLDER = normalized  # type: ignore[attr-defined]
+            logger.debug("Updated runtime Config.DOWNLOAD_FOLDER", worker_id=self.worker_id, path=normalized)
         except Exception as e:
-            logger.warning("Failed to update lib.Config", worker_id=self.worker_id, error=str(e))
-
-        # Also try to update any config objects that might be cached
-        try:
-            from ..lib import config as experimental_config
-            experimental_config._settings.DOWNLOAD_FOLDER = normalized  # type: ignore[attr-defined]
-        except Exception as e:
-            logger.debug(
-                "Failed to update config _settings (non-critical)",
-                worker_id=self.worker_id,
-                error=str(e)
-            )
+            logger.warning("Failed to update runtime Config", worker_id=self.worker_id, error=str(e))
 
         try:
             os.makedirs(normalized, exist_ok=True)
@@ -541,8 +606,7 @@ class WorkerProcess:
                 except Exception:
                     pass
             
-            # Note: task assignment and processing start is already done by TaskQueue.get_next_task()
-            # No need to duplicate the assignment here
+            # Assignment reservation happens in the central dispatcher.
             
             # Process the task using browser session
             result = self._process_po_task(task)
@@ -740,7 +804,7 @@ class WorkerProcess:
             # Check if batch finalization is enabled in experimental config
             skip_finalization = False
             try:
-                from ..lib.config import Config
+                from ..config.app_config import Config
                 skip_finalization = getattr(Config, 'BATCH_FINALIZATION_ENABLED', False)
             except Exception:
                 pass
@@ -1002,6 +1066,7 @@ class WorkerProcess:
             'healthy': self.is_healthy(),
             'uptime_seconds': uptime,
             'current_task': self.current_task.po_number if self.current_task else None,
+            'has_pending_assignment': self.has_pending_assignment(),
             'tasks_processed': self.tasks_processed,
             'tasks_failed': self.tasks_failed,
             'last_heartbeat': self._last_heartbeat,

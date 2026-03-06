@@ -1,7 +1,7 @@
 import warnings
 
 from src.config.app_config import AppConfig
-from src.lib.config import Config
+from src.config.app_config import Config
 
 
 def test_config_exposes_page_delay_from_appconfig():

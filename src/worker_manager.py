@@ -16,7 +16,7 @@ import threading
 import queue
 import multiprocessing as mp
 from datetime import datetime, timedelta
-from concurrent.futures import ProcessPoolExecutor, as_completed, ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, TimeoutError as FutureTimeoutError, as_completed, ThreadPoolExecutor
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Tuple, Callable
 from enum import Enum
@@ -39,7 +39,7 @@ if experimental_root_str not in sys.path:
     sys.path.insert(0, experimental_root_str)
 
 from .lib.browser import BrowserManager
-from .lib.config import Config as ExperimentalConfig
+from .config.app_config import Config as ExperimentalConfig
 from .lib.downloader import Downloader
 from .lib.folder_hierarchy import FolderHierarchyManager
 from .lib.models import HeadlessConfiguration, InteractiveSetupSession
@@ -49,7 +49,9 @@ from .workers.persistent_pool import PersistentWorkerPool
 
 # Import CSV handler for incremental persistence
 from .core.csv_handler import CSVHandler, WriteQueue
+from .core.folder_finalizer import FolderFinalizer, FolderFinalizationResult
 from .workers.models import PoolConfig
+from .core.utils import _compose_csv_message as compose_csv_message
 
 
 class SessionStatus(Enum):
@@ -259,7 +261,7 @@ class ProcessingSession:
     def _process_parallel(self, po_list: List[dict]) -> Tuple[int, int, Dict[str, Any]]:
         """Process POs using parallel worker pool."""
         # Check if profiles are disabled - if so, fall back to ProcessPoolExecutor
-        from .lib.config import Config as _Cfg
+        from .config.app_config import Config as _Cfg
         if not _Cfg.USE_PROFILE:
             print("🔄 Profiles disabled, using ProcessPoolExecutor instead of PersistentWorkerPool")
             return self._process_parallel_with_processpool(po_list)
@@ -279,6 +281,7 @@ class ProcessingSession:
                 config = PoolConfig.create_default(
                     base_profile_path=base_profile_path,
                     worker_count=self.max_workers,
+                    autoscaling_enabled=bool(getattr(_Cfg, 'PROC_WORKERS', self.max_workers) == 0),
                     headless_mode=self.headless_config.get_effective_headless_mode(),
                     base_profile_name=ExperimentalConfig.EDGE_PROFILE_NAME or "Default",
                     hierarchy_columns=self.hierarchy_columns,
@@ -506,7 +509,7 @@ class ProcessingSession:
         print(f"📊 Using {proc_workers} ProcessPoolExecutor worker(s) (profiles disabled)")
         
         # Get download root for workers
-        from .lib.config import Config
+        from .config.app_config import Config
         download_root = os.path.abspath(os.path.expanduser(getattr(Config, 'DOWNLOAD_FOLDER', ExperimentalConfig.DOWNLOAD_FOLDER)))
         
         with ProcessPoolExecutor(max_workers=proc_workers, mp_context=mp.get_context("spawn")) as executor:
@@ -763,89 +766,6 @@ def _derive_status_label(result: dict | None) -> str:
     return 'FAILED'
 
 
-def _suffix_for_status(status_code: str) -> str:
-    if status_code == 'COMPLETED':
-        return '_COMPLETED'
-    if status_code == 'FAILED':
-        return '_FAILED'
-    if status_code == 'NO_ATTACHMENTS':
-        return '_NO_ATTACHMENTS'
-    if status_code == 'PARTIAL':
-        return '_PARTIAL'
-    if status_code == 'PO_NOT_FOUND':
-        return '_PO_NOT_FOUND'
-    return f'_{status_code}'
-
-
-def _legacy_rename_folder_with_status(folder_path: str, status_code: str) -> str:
-    """Legacy fallback for folder renaming - now with robust merging support."""
-    try:
-        if not folder_path or not os.path.exists(folder_path):
-            return folder_path
-
-        folder_name = os.path.basename(folder_path)
-        parent_dir = os.path.dirname(folder_path)
-
-        # Normalize __WORK suffix aggressively
-        if folder_name.endswith('__WORK'):
-            folder_name = folder_name[:-6]  # Remove __WORK
-
-        suffix = _suffix_for_status(status_code)
-        new_name = f"{folder_name}{suffix}"
-        new_path = os.path.join(parent_dir, new_name)
-
-        # Cooldown period
-        time.sleep(1.0)
-        
-        if os.path.exists(new_path) and os.path.abspath(folder_path) != os.path.abspath(new_path):
-            # Target exists, we should merge. 
-            # Since this is "legacy", we'll do a simple merge with retries.
-            import shutil
-            for item in os.listdir(folder_path):
-                s = os.path.join(folder_path, item)
-                d = os.path.join(new_path, item)
-                
-                success = False
-                for attempt in range(3):
-                    try:
-                        if os.path.isdir(s):
-                            if os.path.exists(d):
-                                # Merge subdirectory content
-                                for subitem in os.listdir(s):
-                                    shutil.move(os.path.join(s, subitem), os.path.join(d, subitem))
-                                os.rmdir(s)
-                            else:
-                                shutil.move(s, d)
-                        else:
-                            if os.path.exists(d):
-                                os.remove(d)
-                            shutil.move(s, d)
-                        success = True
-                        break
-                    except Exception:
-                        time.sleep(1.0)
-                        
-            try:
-                # Cleanup junk
-                for item in os.listdir(folder_path):
-                    if item in ('.DS_Store', 'Thumbs.db'):
-                        try:
-                            os.remove(os.path.join(folder_path, item))
-                        except Exception:
-                            pass
-                
-                if not os.listdir(folder_path):
-                    os.rmdir(folder_path)
-            except Exception:
-                pass
-            return new_path
-
-        os.rename(folder_path, new_path)
-        return new_path
-    except Exception:
-        return folder_path
-
-
 def process_po_worker(args):
     """Run a single PO in its own process, with its own Edge driver.
 
@@ -902,7 +822,7 @@ def process_po_worker(args):
     os.environ['DOWNLOAD_FOLDER'] = download_root
     try:
         ExperimentalConfig.DOWNLOAD_FOLDER = download_root
-        from .lib.config import Config
+        from .config.app_config import Config
         Config.DOWNLOAD_FOLDER = download_root
     except Exception:
         pass
@@ -1020,7 +940,7 @@ def process_po_worker(args):
             driver = browser_manager.driver
             
             # Navigate once to get into the domain
-            from .lib.config import Config as LibConfig
+            from .config.app_config import Config as LibConfig
             driver.get(LibConfig.BASE_URL)
             
             # Get cookies
@@ -1062,14 +982,9 @@ def process_po_worker(args):
 
         status_code = _derive_status_label(result_payload)
         
-        # Check for batch finalization setting
-        batch_enabled = getattr(ExperimentalConfig, 'BATCH_FINALIZATION_ENABLED', False)
-        if not batch_enabled:
-            try:
-                from .lib.config import Config as LibConfig
-                batch_enabled = getattr(LibConfig, 'BATCH_FINALIZATION_ENABLED', False)
-            except ImportError:
-                pass
+        # This worker handles exactly one PO and has no external batch finalizer.
+        # Finalize immediately to avoid leaving __WORK folders behind.
+        batch_enabled = False
 
         final_folder = folder_path
         if batch_enabled and folder_path.endswith('__WORK'):
@@ -1078,8 +993,9 @@ def process_po_worker(args):
         else:
             try:
                 final_folder = folder_manager.finalize_folder(folder_path, status_code)
-            except Exception:
-                final_folder = _legacy_rename_folder_with_status(folder_path, status_code)
+            except Exception as finalize_error:
+                print(f"[worker] ⚠️ Folder finalization failed for {display_po}: {finalize_error}", flush=True)
+                final_folder = folder_path
         result = {
             'po_number_display': display_po,
             'status_code': status_code,
@@ -1128,22 +1044,17 @@ def process_po_worker(args):
             # Attempt rename with FAILED suffix even on exceptions
             if folder_path:
                 try:
-                    # Only finalize if batching is disabled or not a WORK folder
-                    batch_enabled = getattr(ExperimentalConfig, 'BATCH_FINALIZATION_ENABLED', False)
-                    if not batch_enabled:
-                        try:
-                            from .lib.config import Config as LibConfig
-                            batch_enabled = getattr(LibConfig, 'BATCH_FINALIZATION_ENABLED', False)
-                        except ImportError:
-                            pass
+                    # This worker has no background batch finalizer; always finalize now.
+                    batch_enabled = False
                     
                     if batch_enabled and folder_path.endswith('__WORK'):
                          final_folder = folder_path
                     else:
                         try:
                             final_folder = folder_manager.finalize_folder(folder_path, 'FAILED')
-                        except Exception:
-                            final_folder = _legacy_rename_folder_with_status(folder_path, 'FAILED')
+                        except Exception as finalize_error:
+                            print(f"[worker] ⚠️ Failed finalization after exception for {display_po}: {finalize_error}", flush=True)
+                            final_folder = folder_path
                 except Exception:
                      final_folder = folder_path or ''
             else:
@@ -1247,7 +1158,7 @@ def process_reusable_worker(args):
     os.environ['DOWNLOAD_FOLDER'] = download_root
     try:
         ExperimentalConfig.DOWNLOAD_FOLDER = download_root
-        from .lib.config import Config
+        from .config.app_config import Config
         Config.DOWNLOAD_FOLDER = download_root
     except Exception:
         pass
@@ -1271,6 +1182,122 @@ def process_reusable_worker(args):
     print(f"[reusable_worker_{worker_id}] 🎯 Headless configuration: {headless_config}", flush=True)
 
     results = []  # Store all results from this worker
+    finalization_ack_timeout = float(getattr(ExperimentalConfig, "FINALIZATION_ACK_TIMEOUT_SECONDS", 20))
+    finalization_batch_size = int(getattr(ExperimentalConfig, "FINALIZATION_BATCH_SIZE", 50))
+    local_batch_finalization_enabled = bool(getattr(ExperimentalConfig, "BATCH_FINALIZATION_ENABLED", False))
+    local_folder_finalizer = FolderFinalizer(
+        batch_interval=float(getattr(ExperimentalConfig, "BATCH_FINALIZATION_INTERVAL", 5)),
+        batch_size=finalization_batch_size,
+        ack_timeout_seconds=finalization_ack_timeout,
+        worker_count=1,
+        logger_context=f"reusable_worker_{worker_id}",
+    )
+    local_pending_finalizations: List[Dict[str, Any]] = []
+
+    def _local_ack_requires_fallback(ack: FolderFinalizationResult) -> bool:
+        final_folder = str(getattr(ack, "final_folder", "") or "")
+        return (not bool(getattr(ack, "success", False))) or final_folder.endswith("__WORK")
+
+    def _persist_local_final_folder(result: Dict[str, Any]) -> None:
+        if not csv_handler:
+            return
+        display_po_local = result.get("po_number_display") or result.get("po_number", "")
+        if not display_po_local:
+            return
+        try:
+            csv_handler.update_record(
+                display_po_local,
+                {
+                    "DOWNLOAD_FOLDER": result.get("final_folder", ""),
+                    "STATUS": result.get("status_code", "FAILED"),
+                },
+            )
+        except Exception as storage_error:
+            print(f"[reusable_worker_{worker_id}] ⚠️ Failed to persist final folder for {display_po_local}: {storage_error}", flush=True)
+
+    def _resolve_local_finalizations(force: bool = False) -> None:
+        if not local_pending_finalizations:
+            return
+
+        unresolved: List[Dict[str, Any]] = []
+        for pending in local_pending_finalizations:
+            future = pending["future"]
+            result = pending["result"]
+            task_ref = pending["task_ref"]
+            enqueued_at = pending["enqueued_at"]
+
+            should_resolve = force or future.done() or (time.time() - enqueued_at) >= finalization_ack_timeout
+            if not should_resolve:
+                unresolved.append(pending)
+                continue
+
+            if not future.done():
+                local_folder_finalizer.mark_timeout(1)
+                ack = local_folder_finalizer.finalize_now(
+                    task_ref,
+                    result,
+                    reason="reusable_worker_ack_timeout",
+                )
+            else:
+                try:
+                    ack = future.result(timeout=0)
+                except Exception as ack_error:
+                    ack = local_folder_finalizer.finalize_now(
+                        task_ref,
+                        result,
+                        reason=f"reusable_worker_ack_error:{ack_error}",
+                    )
+
+            if _local_ack_requires_fallback(ack):
+                fallback_reason = (
+                    "reusable_worker_force_ack_unsuccessful"
+                    if force
+                    else "reusable_worker_ack_unsuccessful"
+                )
+                ack = local_folder_finalizer.finalize_now(
+                    task_ref,
+                    result,
+                    reason=fallback_reason,
+                )
+
+            result["final_folder"] = ack.final_folder or result.get("final_folder", "")
+            if not ack.success:
+                result["status_code"] = "FAILED"
+                result["success"] = False
+                result["message"] = ack.error or result.get("message", "")
+            result["finalization"] = {
+                "success": ack.success,
+                "error": ack.error,
+                "final_folder": ack.final_folder,
+            }
+            _persist_local_final_folder(result)
+
+        local_pending_finalizations[:] = unresolved
+
+    def _force_finalize_local_residuals() -> None:
+        """Last-resort sweep for results still pointing to __WORK."""
+        for result in results:
+            folder_path = str(result.get("final_folder", ""))
+            if not folder_path.endswith("__WORK"):
+                continue
+            if not os.path.isdir(folder_path):
+                continue
+
+            status_code = str(result.get("status_code", "FAILED"))
+            try:
+                final_folder = folder_manager.finalize_folder(folder_path, status_code)
+                result["final_folder"] = final_folder
+                result["finalization"] = {
+                    "success": not str(final_folder).endswith("__WORK"),
+                    "error": "",
+                    "final_folder": final_folder,
+                }
+                _persist_local_final_folder(result)
+            except Exception as residual_error:
+                print(
+                    f"[reusable_worker_{worker_id}] ⚠️ Residual local finalization failed for {folder_path}: {residual_error}",
+                    flush=True,
+                )
 
     try:
         # Clone and load the selected profile for this worker (isolated user-data-dir)
@@ -1324,7 +1351,7 @@ def process_reusable_worker(args):
             )
             driver = browser_manager.driver
             # Navigate to get cookies
-            from .lib.config import Config as LibConfig
+            from .config.app_config import Config as LibConfig
             driver.get(LibConfig.BASE_URL)
             selenium_cookies = driver.get_cookies()
             httpx_cookies = {c['name']: c['value'] for c in selenium_cookies}
@@ -1439,15 +1466,7 @@ def process_reusable_worker(args):
 
                 status_code = _derive_status_label(result_payload)
                 
-                # Check for batch finalization setting
-                batch_enabled = getattr(ExperimentalConfig, 'BATCH_FINALIZATION_ENABLED', False)
-                # Also check standard Config if not in Experimental
-                if not batch_enabled:
-                    try:
-                        from .lib.config import Config
-                        batch_enabled = getattr(Config, 'BATCH_FINALIZATION_ENABLED', False)
-                    except ImportError:
-                        pass
+                batch_enabled = local_batch_finalization_enabled
 
                 final_folder = folder_path
                 if batch_enabled and folder_path.endswith('__WORK'):
@@ -1460,8 +1479,9 @@ def process_reusable_worker(args):
                 else:
                     try:
                         final_folder = folder_manager.finalize_folder(folder_path, status_code)
-                    except Exception:
-                        final_folder = _legacy_rename_folder_with_status(folder_path, status_code)
+                    except Exception as finalize_error:
+                        print(f"[reusable_worker_{worker_id}] ⚠️ Folder finalization failed for {display_po}: {finalize_error}", flush=True)
+                        final_folder = folder_path
 
                 result = {
                     'po_number_display': display_po,
@@ -1499,9 +1519,6 @@ def process_reusable_worker(args):
                         }
                         communication_manager.send_metric(metric_data)
                         
-                        # Signal real-time finalization if this was a WORK folder
-                        if communication_manager and final_folder and final_folder.endswith('__WORK'):
-                            communication_manager.signal_finalization(final_folder, status_code)
                     except Exception as e:
                         print(f"[reusable_worker_{worker_id}] ⚠️ Failed to send metric: {e}")
 
@@ -1529,6 +1546,26 @@ def process_reusable_worker(args):
 
                 # Add result to list
                 results.append(result)
+
+                # Batch rename while worker keeps processing next POs.
+                if batch_enabled and str(final_folder).endswith("__WORK"):
+                    task_ref = {
+                        "task_id": result.get("task_id", f"rw-{worker_id}-{po_count}"),
+                        "po_number": result.get("po_number", display_po),
+                    }
+                    local_pending_finalizations.append(
+                        {
+                            "future": local_folder_finalizer.enqueue(task_ref, result),
+                            "task_ref": task_ref,
+                            "result": result,
+                            "enqueued_at": time.time(),
+                        }
+                    )
+                    if len(local_pending_finalizations) >= finalization_batch_size:
+                        local_folder_finalizer.flush(timeout=finalization_ack_timeout)
+                        _resolve_local_finalizations(force=False)
+
+                _resolve_local_finalizations(force=False)
 
                 # Clear session between POs to prevent contamination
                 if hasattr(browser_manager, 'clear_session'):
@@ -1581,6 +1618,19 @@ def process_reusable_worker(args):
                 shutil.rmtree(clone_dir, ignore_errors=True)
             except Exception:
                 pass
+
+        try:
+            local_folder_finalizer.flush(timeout=finalization_ack_timeout)
+            _resolve_local_finalizations(force=True)
+            local_folder_finalizer.shutdown(flush=True, timeout=finalization_ack_timeout)
+        except Exception as finalizer_error:
+            print(f"[reusable_worker_{worker_id}] ⚠️ Local finalizer shutdown error: {finalizer_error}", flush=True)
+        finally:
+            try:
+                _force_finalize_local_residuals()
+            except Exception as residual_error:
+                print(f"[reusable_worker_{worker_id}] ⚠️ Local residual sweep error: {residual_error}", flush=True)
+
         if output_handle:
             try:
                 output_handle.close()
@@ -1676,7 +1726,7 @@ class WorkerManager:
         po_queue: _mp.Queue = manager.Queue()
         for po in po_data_list:
             po_queue.put(po)
-        return self.process_parallel_with_reusable_workers(
+        successful, failed, session_report = self.process_parallel_with_reusable_workers(
             po_queue=po_queue,
             hierarchy_cols=hierarchy_cols,
             has_hierarchy_data=has_hierarchy_data,
@@ -1688,6 +1738,8 @@ class WorkerManager:
             sqlite_db_path=sqlite_db_path,
             execution_mode=execution_mode,
         )
+        self._last_parallel_report = session_report
+        return successful, failed, session_report
 
     def process_parallel_with_session(
         self,
@@ -1793,7 +1845,7 @@ class WorkerManager:
             has_hierarchy_data: Whether hierarchy data is available
             headless_config: Headless configuration
             communication_manager: Communication manager for metrics
-            csv_handler: CSV handler for incremental updates
+            csv_handler: Storage handler used for incremental status updates (SQLite-backed)
             folder_hierarchy: Folder hierarchy manager
             sqlite_db_path: Optional SQLite DB path for persistence
 
@@ -1802,9 +1854,9 @@ class WorkerManager:
         """
         from .core.communication_manager import CommunicationManager
 
-        successful = 0
-        failed = 0
         results: List[Dict[str, Any]] = []
+        storage_handler = csv_handler
+        session_started_at = time.perf_counter()
 
         # Calculate number of workers
         if queue_size is not None:
@@ -1822,58 +1874,130 @@ class WorkerManager:
             os.environ['SUPPRESS_WORKER_OUTPUT'] = 'true'
 
         # Use the ExperimentalConfig.DOWNLOAD_FOLDER that was updated during setup
-        from .lib.config import Config as ExperimentalConfig
+        from .config.app_config import Config as ExperimentalConfig
         download_root = os.path.abspath(os.path.expanduser(ExperimentalConfig.DOWNLOAD_FOLDER))
 
         # Use incoming sqlite_db_path or derive from handler
         effective_sqlite_db_path = sqlite_db_path
-        if not effective_sqlite_db_path and csv_handler and hasattr(csv_handler, 'sqlite_db_path'):
-            effective_sqlite_db_path = csv_handler.sqlite_db_path
+        if not effective_sqlite_db_path and storage_handler and hasattr(storage_handler, 'sqlite_db_path'):
+            effective_sqlite_db_path = storage_handler.sqlite_db_path
 
-        # --- Batch Finalization Setup ---
-        finalization_queue = queue.Queue()
-        stop_finalizer = threading.Event()
+        finalization_ack_timeout = float(getattr(ExperimentalConfig, "FINALIZATION_ACK_TIMEOUT_SECONDS", 20))
+        finalization_batch_size = int(getattr(ExperimentalConfig, "FINALIZATION_BATCH_SIZE", 50))
+        finalization_flush_on_shutdown = bool(getattr(ExperimentalConfig, "FINALIZATION_FLUSH_ON_SHUTDOWN", True))
 
-        def _batch_finalizer_thread():
-            """Background thread to batch finalize folders."""
-            interval = getattr(ExperimentalConfig, 'BATCH_FINALIZATION_INTERVAL', 30)
-            print(f"🔄 Batch finalizer thread started (Interval: {interval}s)")
-            
-            while not stop_finalizer.is_set():
+        folder_finalizer = FolderFinalizer(
+            batch_interval=float(getattr(ExperimentalConfig, "BATCH_FINALIZATION_INTERVAL", 5)),
+            batch_size=finalization_batch_size,
+            ack_timeout_seconds=finalization_ack_timeout,
+            worker_count=1,
+            logger_context="worker_manager_reusable",
+        )
+        pending_finalizations: List[Dict[str, Any]] = []
+
+        def _persist_corrected_final_folder(result: Dict[str, Any]) -> None:
+            """Persist final folder after ACK to avoid stale __WORK in runtime storage."""
+            if not storage_handler:
+                return
+            display_po = result.get("po_number_display") or result.get("po_number", "")
+            if not display_po:
+                return
+            try:
+                storage_handler.update_record(
+                    display_po,
+                    {
+                        "DOWNLOAD_FOLDER": result.get("final_folder", ""),
+                        "STATUS": result.get("status_code", "FAILED"),
+                    },
+                )
+            except Exception as csv_error:
+                print(f"⚠️ Failed to persist final folder for {display_po}: {csv_error}")
+
+        def _resolve_pending_finalizations(force: bool = False) -> None:
+            """Apply ACK results (or deterministic fallback) at synchronization points."""
+            if not pending_finalizations:
+                return
+
+            now = time.time()
+            unresolved: List[Dict[str, Any]] = []
+            for pending in pending_finalizations:
+                future = pending["future"]
+                result = pending["result"]
+                task_ref = pending["task_ref"]
+                enqueued_at = pending["enqueued_at"]
+
+                should_resolve = force or future.done() or (now - enqueued_at) >= finalization_ack_timeout
+                if not should_resolve:
+                    unresolved.append(pending)
+                    continue
+
+                if not future.done() and (now - enqueued_at) >= finalization_ack_timeout:
+                    folder_finalizer.mark_timeout(1)
+                    ack = folder_finalizer.finalize_now(
+                        task_ref,
+                        result,
+                        reason="worker_manager_ack_timeout",
+                    )
+                else:
+                    try:
+                        ack = future.result(timeout=0.2 if force else 0)
+                    except FutureTimeoutError:
+                        folder_finalizer.mark_timeout(1)
+                        ack = folder_finalizer.finalize_now(
+                            task_ref,
+                            result,
+                            reason="worker_manager_force_timeout",
+                        )
+                    except Exception as ack_error:
+                        ack = folder_finalizer.finalize_now(
+                            task_ref,
+                            result,
+                            reason=f"worker_manager_ack_error:{ack_error}",
+                        )
+
+                ack_final_folder = str(getattr(ack, "final_folder", "") or "")
+                if (not ack.success) or ack_final_folder.endswith("__WORK"):
+                    ack = folder_finalizer.finalize_now(
+                        task_ref,
+                        result,
+                        reason="worker_manager_ack_unsuccessful",
+                    )
+
+                result["final_folder"] = ack.final_folder or result.get("final_folder", "")
+                if not ack.success:
+                    result["status_code"] = "FAILED"
+                    result["success"] = False
+                    result["message"] = ack.error or result.get("message", "")
+                result["finalization"] = {
+                    "success": ack.success,
+                    "error": ack.error,
+                    "final_folder": ack.final_folder,
+                }
+                _persist_corrected_final_folder(result)
+
+            pending_finalizations[:] = unresolved
+
+        def _force_finalize_residual_work_folders() -> None:
+            """Last-resort sweep for any unresolved __WORK folders in result payload."""
+            manager = folder_hierarchy or FolderHierarchyManager()
+            for result in results:
+                folder_path = str(result.get("final_folder", ""))
+                if not folder_path.endswith("__WORK"):
+                    continue
+                if not os.path.isdir(folder_path):
+                    continue
+                status_code = str(result.get("status_code", "FAILED"))
                 try:
-                    # Collect pending items
-                    batch = []
-                    while True:
-                        try:
-                            item = finalization_queue.get_nowait()
-                            batch.append(item)
-                        except queue.Empty:
-                            break
-                    
-                    if batch:
-                        if folder_hierarchy:
-                            print(f"📦 Batch finalizing {len(batch)} folders...")
-                            for folder_path, status_code in batch:
-                                try:
-                                    folder_hierarchy.finalize_folder(folder_path, status_code)
-                                except Exception as e:
-                                    print(f"⚠️ Batch finalization failed for {folder_path}: {e}")
-                                    # Fallback
-                                    try:
-                                        _legacy_rename_folder_with_status(folder_path, status_code)
-                                    except:
-                                        pass
-                    
-                    # Sleep for interval or untill stopped
-                    stop_finalizer.wait(timeout=interval)
-                    
-                except Exception as e:
-                    print(f"⚠️ Error in batch finalizer thread: {e}")
-                    time.sleep(1)
-
-        final_thread = threading.Thread(target=_batch_finalizer_thread, daemon=True)
-        final_thread.start()
-        # -------------------------------
+                    final_folder = manager.finalize_folder(folder_path, status_code)
+                    result["final_folder"] = final_folder
+                    result["finalization"] = {
+                        "success": not str(final_folder).endswith("__WORK"),
+                        "error": "",
+                        "final_folder": final_folder,
+                    }
+                    _persist_corrected_final_folder(result)
+                except Exception as fallback_error:
+                    print(f"⚠️ Residual finalization failed for {folder_path}: {fallback_error}")
 
         try:
             with ProcessPoolExecutor(max_workers=num_workers, mp_context=mp.get_context("spawn")) as executor:
@@ -1889,8 +2013,8 @@ class WorkerManager:
                 for i in range(num_workers):
                     # Determine CSV path for worker
                     csv_path = None
-                    if csv_handler and hasattr(csv_handler, 'csv_path'):
-                        csv_path = str(csv_handler.csv_path)
+                    if storage_handler and hasattr(storage_handler, 'csv_path'):
+                        csv_path = str(storage_handler.csv_path)
 
                     task_args = (
                         po_queue,
@@ -1917,189 +2041,57 @@ class WorkerManager:
 
                         # Process results from this worker
                         for result in worker_results:
-                            # Handle batch finalization queueing
                             final_folder = result.get('final_folder')
-                            status_code = result.get('status_code', 'COMPLETED')
                             if final_folder and final_folder.endswith('__WORK'):
-                                 # Queue for finalization
-                                 finalization_queue.put((final_folder, status_code))
-                            
-                            results.append(result)
+                                task_ref = {
+                                    "task_id": result.get("task_id", f"reusable-{worker_id}-{len(results)}"),
+                                    "po_number": result.get("po_number", result.get("po_number_display", "unknown")),
+                                }
+                                pending_finalizations.append(
+                                    {
+                                        "result": result,
+                                        "task_ref": task_ref,
+                                        "future": folder_finalizer.enqueue(task_ref, result),
+                                        "enqueued_at": time.time(),
+                                    }
+                                )
+                                if len(pending_finalizations) >= finalization_batch_size:
+                                    folder_finalizer.flush(timeout=finalization_ack_timeout)
+                                    _resolve_pending_finalizations(force=False)
 
-                            if result.get('success', False) or result.get('status_code') in {'COMPLETED', 'NO_ATTACHMENTS'}:
-                                successful += 1
-                            else:
-                                failed += 1
+                            results.append(result)
 
                     except Exception as exc:
                         print(f"❌ Worker {worker_id} failed: {exc}")
-                        failed += 1
 
         finally:
-             # Stop finalizer thread
-             stop_finalizer.set()
-             final_thread.join(timeout=5)
-             
-             # Process any remaining items in queue
-             while not finalization_queue.empty():
-                 try:
-                     folder_path, status_code = finalization_queue.get_nowait()
-                     if folder_hierarchy:
-                         try:
-                             folder_hierarchy.finalize_folder(folder_path, status_code)
-                         except:
-                             _legacy_rename_folder_with_status(folder_path, status_code)
-                 except:
-                     break
+            if finalization_flush_on_shutdown:
+                folder_finalizer.flush(timeout=finalization_ack_timeout)
+            _resolve_pending_finalizations(force=True)
+            folder_finalizer.shutdown(
+                flush=finalization_flush_on_shutdown,
+                timeout=finalization_ack_timeout,
+            )
+            _force_finalize_residual_work_folders()
+
+        successful = 0
+        failed = 0
+        for result in results:
+            status_code = result.get("status_code", "FAILED")
+            if result.get("success", False) or status_code in {"COMPLETED", "NO_ATTACHMENTS"}:
+                successful += 1
+            else:
+                failed += 1
 
         session_report = {
             'processing_mode': 'parallel_reusable_workers',
             'worker_count': num_workers,
-            'session_duration': (datetime.now() - datetime.now()).total_seconds(),  # Placeholder
+            'session_duration': max(0.0, time.perf_counter() - session_started_at),
             'results': results,
+            'finalization_metrics': folder_finalizer.get_stats(),
         }
-
+        self._last_parallel_report = session_report
         return successful, failed, session_report
-
-    def process_parallel_legacy(
-        self,
-        po_data_list: list[dict],
-        hierarchy_cols: list[str],
-        has_hierarchy_data: bool,
-        headless_config: HeadlessConfiguration,
-        csv_handler: Optional[CSVHandler] = None,
-        folder_hierarchy: Optional[FolderHierarchyManager] = None,
-        sqlite_db_path: Optional[str] = None,
-        execution_mode: Any = None,
-    ) -> tuple[int, int, dict]:
-        """
-        Process PO entries using legacy ProcessPoolExecutor approach.
-
-        Returns:
-            tuple: (successful_count, failed_count)
-        """
-        successful = 0
-        failed = 0
-
-        default_workers = min(2, len(po_data_list))
-        from .lib.config import Config as ExperimentalConfig
-        env_procs = int(getattr(ExperimentalConfig, 'PROC_WORKERS', default_workers))
-        hard_cap = int(getattr(ExperimentalConfig, 'PROC_WORKERS_CAP', 0) or 0)
-        if hard_cap > 0:
-            proc_workers = max(1, min(env_procs, hard_cap, len(po_data_list)))
-        else:
-            proc_workers = max(1, min(env_procs, len(po_data_list)))
-        print(f"📊 Using {proc_workers} process worker(s) (cap={'unlimited' if hard_cap == 0 else hard_cap}), one WebDriver per process")
-
-        # Use the ExperimentalConfig.DOWNLOAD_FOLDER that was updated during setup
-        download_root = os.path.abspath(os.path.expanduser(ExperimentalConfig.DOWNLOAD_FOLDER))
-
-        # --- Batch Finalization Setup ---
-        finalization_queue = queue.Queue()
-        stop_finalizer = threading.Event()
-
-        def _batch_finalizer_thread():
-            """Background thread to batch finalize folders."""
-            interval = getattr(ExperimentalConfig, 'BATCH_FINALIZATION_INTERVAL', 30)
-            print(f"🔄 (Legacy) Batch finalizer thread started (Interval: {interval}s)")
-            
-            while not stop_finalizer.is_set():
-                try:
-                    # Collect pending items
-                    batch = []
-                    while True:
-                        try:
-                            item = finalization_queue.get_nowait()
-                            batch.append(item)
-                        except queue.Empty:
-                            break
-                    
-                    if batch:
-                        if folder_hierarchy:
-                            print(f"📦 (Legacy) Batch finalizing {len(batch)} folders...")
-                            for folder_path, status_code in batch:
-                                try:
-                                    folder_hierarchy.finalize_folder(folder_path, status_code)
-                                except Exception as e:
-                                    print(f"⚠️ Batch finalization failed for {folder_path}: {e}")
-                                    try:
-                                        _legacy_rename_folder_with_status(folder_path, status_code)
-                                    except:
-                                        pass
-                    
-                    stop_finalizer.wait(timeout=interval)
-                except Exception as e:
-                    print(f"⚠️ Error in legacy batch finalizer thread: {e}")
-                    time.sleep(1)
-
-        final_thread = threading.Thread(target=_batch_finalizer_thread, daemon=True)
-        final_thread.start()
-        # -------------------------------
-
-        try:
-            with ProcessPoolExecutor(max_workers=proc_workers, mp_context=mp.get_context("spawn")) as executor:
-                future_map: dict = {}
-                for po_data in po_data_list:
-                    if po_data.get('po_number'):
-                        # Determine CSV path for worker
-                        csv_path = None
-                        if csv_handler and hasattr(csv_handler, 'csv_path'):
-                            csv_path = str(csv_handler.csv_path)
-
-                        future = executor.submit(
-                            process_po_worker,
-                            (po_data, hierarchy_cols, has_hierarchy_data, headless_config, download_root, csv_path, sqlite_db_path, execution_mode.value if hasattr(execution_mode, 'value') else str(execution_mode) if execution_mode else "standard"),
-                        )
-                        future_map[future] = po_data
-
-                for future in as_completed(future_map):
-                    po_data = future_map[future]
-                    display_po = po_data.get('po_number', '')
-                    try:
-                        result = future.result()
-                        
-                        # Handle batch finalization queueing
-                        final_folder = result.get('final_folder')
-                        status_code = result.get('status_code', 'COMPLETED')
-                        if final_folder and final_folder.endswith('__WORK'):
-                             finalization_queue.put((final_folder, status_code))
-                    except Exception as exc:
-                        friendly = _humanize_exception(exc)
-                        print("-" * 60)
-                        print(f"   ❌ Worker error for {display_po}: {friendly}")
-                        if csv_handler:
-                            try:
-                                csv_handler.update_record(display_po, {
-                                    'STATUS': 'FAILED',
-                                    'ERROR_MESSAGE': friendly,
-                                })
-                            except Exception as e:
-                                print(f"[procpool] ⚠️ Failed incremental CSV update (worker error path): {e}")
-                        failed += 1
-                        continue
-
-                    # Process successful result
-                    successful += 1
-                    self._process_worker_result(result, csv_handler, folder_hierarchy or FolderHierarchyManager())
-
-        finally:
-            # Stop finalizer thread
-            stop_finalizer.set()
-            final_thread.join(timeout=5)
-            
-            # Flush queue
-            while not finalization_queue.empty():
-                try:
-                    folder_path, status_code = finalization_queue.get_nowait()
-                    if folder_hierarchy:
-                        try:
-                            folder_hierarchy.finalize_folder(folder_path, status_code)
-                        except:
-                            _legacy_rename_folder_with_status(folder_path, status_code)
-                except:
-                    break
-
-        return successful, failed
 
     def _update_csv_from_session_results(
         self,
@@ -2122,7 +2114,7 @@ class WorkerManager:
             formatted_names = folder_hierarchy.format_attachment_names(
                 result.get('attachment_names', [])
             )
-            csv_message = self._compose_csv_message(result)
+            csv_message = compose_csv_message(result)
 
             if csv_handler:
                 try:
@@ -2167,7 +2159,7 @@ class WorkerManager:
         formatted_names = folder_hierarchy.format_attachment_names(
             result.get('attachment_names', [])
         )
-        csv_message = self._compose_csv_message(result)
+        csv_message = compose_csv_message(result)
 
         if csv_handler:
             try:
@@ -2195,11 +2187,3 @@ class WorkerManager:
         log_text = message or status_reason or status_code
         print("-" * 60)
         print(f"   {emoji} {display_po}: {log_text}")
-
-    def _compose_csv_message(self, result: dict) -> str:
-        """Compose a message for CSV logging from result dict."""
-        message = result.get('message', '')
-        status_reason = result.get('status_reason', '')
-        if message and status_reason:
-            return f"{message} ({status_reason})"
-        return message or status_reason or result.get('status_code', 'UNKNOWN')

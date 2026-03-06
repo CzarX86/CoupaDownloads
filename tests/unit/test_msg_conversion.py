@@ -30,6 +30,21 @@ class DummyExtractMsg:
     def Message(self, _path: str) -> DummyMessage:  # noqa: N802 - keep external API name
         return DummyMessage()
 
+class DummyBytesMessage(DummyMessage):
+    def __init__(self):
+        super().__init__()
+        self.subject = b"Subject in bytes"
+        self.sender = b"sender@example.com"
+        self.to = [b"to@example.com"]
+        self.cc = [b"cc@example.com"]
+        self.body = b"Hello from bytes\x00with null char"
+        self.htmlBody = b""
+
+
+class DummyExtractMsgBytes:
+    def Message(self, _path: str) -> DummyBytesMessage:  # noqa: N802 - keep external API name
+        return DummyBytesMessage()
+
 
 @pytest.fixture(autouse=True)
 def patch_extract_msg(monkeypatch):
@@ -62,3 +77,16 @@ def test_convert_skips_when_pdf_exists(tmp_path: Path):
 
     assert first.status == "converted"
     assert second.status == "skipped"
+
+
+def test_convert_handles_bytes_fields(tmp_path: Path, monkeypatch):
+    msg_path = tmp_path / "mail.msg"
+    msg_path.write_text("dummy")
+    monkeypatch.setitem(sys.modules, "extract_msg", DummyExtractMsgBytes())
+
+    converter = MsgToPdfConverter(overwrite=True)
+    result = converter.convert(msg_path)
+
+    pdf_path = msg_path.with_suffix(".pdf")
+    assert result.status == "converted"
+    assert pdf_path.exists()

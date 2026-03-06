@@ -26,6 +26,7 @@ class PoolConfig:
     
     # Worker configuration
     worker_count: int = 4
+    autoscaling_enabled: bool = False
     headless_mode: bool = True
     execution_mode: str = "standard"  # standard, filtered, no_js, direct_http
     
@@ -159,6 +160,7 @@ class PoolConfig:
         """Convert configuration to dictionary."""
         return {
             'worker_count': self.worker_count,
+            'autoscaling_enabled': self.autoscaling_enabled,
             'headless_mode': self.headless_mode,
             'execution_mode': self.execution_mode,
             'base_profile_path': self.base_profile_path,
@@ -190,6 +192,7 @@ class PoolConfig:
         cls,
         base_profile_path: str,
         worker_count: int = 4,
+        autoscaling_enabled: bool = False,
         headless_mode: bool = True,
         base_profile_name: str = "Default",
         hierarchy_columns: Optional[List[str]] = None,
@@ -202,6 +205,7 @@ class PoolConfig:
         """Create default configuration with required parameters."""
         return cls(
             worker_count=worker_count,
+            autoscaling_enabled=autoscaling_enabled,
             headless_mode=headless_mode,
             base_profile_path=base_profile_path,
             base_profile_name=base_profile_name,

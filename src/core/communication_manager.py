@@ -11,11 +11,16 @@ import multiprocessing as mp
 import queue
 import threading
 import logging
+import time
 from typing import Any, Dict, List, Optional, Set, Tuple
 from dataclasses import dataclass, asdict
 from datetime import datetime
 
+from .eta import ETAEstimator, is_terminal_status
+
 logger = logging.getLogger(__name__)
+
+TERMINAL_RUN_STATES = {"completed", "failed", "interrupted"}
 
 
 @dataclass
@@ -54,6 +59,13 @@ class CommunicationManager:
         self._pos_processing: Set[str] = set()  # Currently active POs
         self._worker_states: Dict[int, Dict[str, Any]] = {}       # Latest state per worker
         self._total_pos_seen: Set[str] = set()   # All PO IDs encountered
+        self._po_statuses: Dict[str, str] = {}
+        self._eta_estimator = ETAEstimator()
+        self._run_state: str = "idle"
+        self._run_started_at: Optional[float] = None
+        self._run_finished_at: Optional[float] = None
+        self._run_summary: Dict[str, Any] = {}
+        self._resource_metrics: Dict[str, Any] = {}
 
     def __getstate__(self) -> Dict[str, Any]:
         """Ensure the manager remains picklable for multiprocessing."""
@@ -68,6 +80,35 @@ class CommunicationManager:
         self.__dict__.update(state)
         if self.__dict__.get('_metrics_lock') is None:
             self._metrics_lock = threading.Lock()
+
+    def configure_total_pos(self, total_pos: int) -> None:
+        """Set the expected total PO count used by ETA estimation."""
+        with self._metrics_lock:
+            self._eta_estimator.configure_total_items(total_pos)
+
+    def set_run_state(self, state: str, *, summary: Optional[Dict[str, Any]] = None, timestamp: Optional[float] = None) -> None:
+        """Publish the lifecycle state of the current processing run."""
+        ts = float(timestamp if timestamp is not None else time.time())
+        normalized_state = str(state or "idle").strip().lower()
+
+        with self._metrics_lock:
+            self._run_state = normalized_state
+            if normalized_state == "running" and self._run_started_at is None:
+                self._run_started_at = ts
+            if normalized_state in TERMINAL_RUN_STATES:
+                self._run_finished_at = ts
+            if summary is not None:
+                self._run_summary = dict(summary)
+
+    def get_run_state(self) -> Dict[str, Any]:
+        """Return a snapshot of the processing run lifecycle state."""
+        with self._metrics_lock:
+            return {
+                "state": self._run_state,
+                "started_at": self._run_started_at,
+                "finished_at": self._run_finished_at,
+                "summary": dict(self._run_summary),
+            }
         
     def send_metric(self, metric_dict: Dict[str, Any]) -> None:
         """
@@ -89,6 +130,30 @@ class CommunicationManager:
                     "po_id": metric_dict.get("po_id"),
                 }
             )
+
+    def publish_activity(
+        self,
+        message: str,
+        *,
+        status: str = "INFO",
+        worker_id: int = -1,
+        po_id: str = "SYSTEM",
+        timestamp: Optional[float] = None,
+        **extra: Any,
+    ) -> None:
+        """Publish a system activity entry so the UI can show non-worker progress."""
+        activity: Dict[str, Any] = {
+            "worker_id": worker_id,
+            "po_id": po_id,
+            "status": status,
+            "timestamp": float(timestamp if timestamp is not None else time.time()),
+            "message": str(message),
+            "attachments_found": 0,
+            "attachments_downloaded": 0,
+        }
+        if extra:
+            activity.update(extra)
+        self.send_metric(activity)
             
     def get_metrics(self) -> List[Dict[str, Any]]:
         """
@@ -129,9 +194,20 @@ class CommunicationManager:
                     po_id = m.get('po_id')
                     status = m.get('status', '').upper()
                     worker_id = m.get('worker_id')
+                    timestamp = float(m.get('timestamp', time.time()))
+                    resource_snapshot = m.get('resource_snapshot')
+
+                    if isinstance(resource_snapshot, dict):
+                        self._resource_metrics = dict(resource_snapshot)
+
+                    self._eta_estimator.set_start_time_if_missing(timestamp)
 
                     if po_id:
                         self._total_pos_seen.add(po_id)
+                        previous_status = self._po_statuses.get(po_id, "")
+                        if is_terminal_status(previous_status) and not is_terminal_status(status):
+                            continue
+                        self._po_statuses[po_id] = status
 
                         # Handle status transitions
                         if status in {'COMPLETED', 'NO_ATTACHMENTS', 'PARTIAL', 'SUCCESS'}:
@@ -145,6 +221,9 @@ class CommunicationManager:
                         else:
                             # Processing or other transient state (STARTED, PROCESSING, etc.)
                             self._pos_processing.add(po_id)
+
+                        if is_terminal_status(status) and not is_terminal_status(previous_status):
+                            self._eta_estimator.record_completion(timestamp)
 
                     if worker_id is not None:
                         # Update worker state with full metric data
@@ -178,14 +257,38 @@ class CommunicationManager:
         self._drain_queue()
 
         with self._metrics_lock:
+            total_processed = len(self._pos_successful) + len(self._pos_failed)
+            eta_state = self._eta_estimator.build_state(
+                processed_items=total_processed,
+                active_items=len(self._pos_processing),
+                now=time.time(),
+            )
             return {
-                'total_processed': len(self._pos_successful) + len(self._pos_failed),
+                'total_processed': total_processed,
                 'total_successful': len(self._pos_successful),
                 'total_failed': len(self._pos_failed),
                 'total_seen': len(self._total_pos_seen),
                 'active_count': len(self._pos_processing),
                 'workers_status': dict(self._worker_states),
-                'recent_metrics': list(self._metrics_buffer[-10:])
+                'recent_metrics': list(self._metrics_buffer[-10:]),
+                'throughput': {
+                    'dynamic_rate_per_minute': eta_state.dynamic_rate_per_minute,
+                    'stability_score': eta_state.stability_score,
+                    'confidence_state': eta_state.confidence_state,
+                },
+                'eta': {
+                    'seconds': eta_state.eta_seconds,
+                    'display': eta_state.eta_display,
+                    'stability_score': eta_state.stability_score,
+                    'confidence_state': eta_state.confidence_state,
+                },
+                'resources': dict(self._resource_metrics),
+                'run': {
+                    'state': self._run_state,
+                    'started_at': self._run_started_at,
+                    'finished_at': self._run_finished_at,
+                    'summary': dict(self._run_summary),
+                },
             }
     def signal_finalization(self, folder_path: str, status_code: str) -> None:
         """Signal that a folder is ready for finalization."""

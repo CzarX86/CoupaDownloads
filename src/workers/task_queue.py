@@ -289,9 +289,8 @@ class TaskQueue:
                             # Best-effort guard; continue if missing fields
                             continue
 
-                # Assign to worker
+                # Reserve task for worker. Processing starts when the worker actually begins execution.
                 task.assign_to_worker(worker_id)
-                task.start_processing()
                 
                 # Track active task
                 self.active_tasks[task.task_id] = task
@@ -310,6 +309,23 @@ class TaskQueue:
                 if self._event_handlers['on_queue_empty']:
                     self._event_handlers['on_queue_empty']()
                 return None
+
+    def release_task_assignment(self, task: ProcessingTask) -> None:
+        """Return a reserved task to the pending queue when dispatch cannot proceed."""
+        with self._lock:
+            tracked_task = self.tasks.get(task.task_id, task)
+            tracked_task.assigned_worker = None
+            tracked_task.status = TaskStatus.PENDING
+            tracked_task.started_at = None
+            tracked_task.completed_at = None
+            tracked_task.error_message = None
+
+            self.active_tasks.pop(tracked_task.task_id, None)
+
+            if self.enable_priority:
+                self._queue.put((tracked_task.priority, time.time(), tracked_task))
+            else:
+                self._queue.put(tracked_task)
     
     def complete_task(
         self,
@@ -437,6 +453,41 @@ class TaskQueue:
                 self.active_tasks.clear()
             
             return cleared_count
+
+    def clear_pending_with_predicate(
+        self,
+        preserve_processing: bool = True,
+        preserve_predicate: Optional[Callable[[ProcessingTask], bool]] = None,
+    ) -> Tuple[int, int]:
+        """Clear pending tasks while preserving tasks accepted by predicate."""
+        with self._lock:
+            cleared_count = 0
+            preserved_count = 0
+            preserved_items = []
+
+            while not self._queue.empty():
+                try:
+                    item = self._queue.get_nowait()
+                except Empty:
+                    break
+
+                task = item[2] if self.enable_priority else item
+                should_preserve = bool(preserve_predicate and preserve_predicate(task))
+
+                if should_preserve:
+                    preserved_items.append(item)
+                    preserved_count += 1
+                else:
+                    cleared_count += 1
+
+            for item in preserved_items:
+                self._queue.put(item)
+
+            if not preserve_processing:
+                cleared_count += len(self.active_tasks)
+                self.active_tasks.clear()
+
+            return cleared_count, preserved_count
     
     def get_tasks_by_status(self, status: TaskStatus) -> List[ProcessingTask]:
         """Get all tasks with specified status."""

@@ -21,7 +21,7 @@ from .models import Tab, TabStatus, SessionStatus
 
 # Resolve Coupa base/login URLs from central config (with .env support)
 try:
-    from ..lib.config import Config as _ExperimentalConfig  # type: ignore
+    from ..config.app_config import Config as _ExperimentalConfig  # type: ignore
     BASE_URL: str = getattr(_ExperimentalConfig, "BASE_URL", "https://unilever.coupahost.com")
     LOGIN_URL: str = getattr(_ExperimentalConfig, "LOGIN_URL", BASE_URL) or BASE_URL
 except Exception:

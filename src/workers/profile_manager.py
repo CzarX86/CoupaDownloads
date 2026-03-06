@@ -22,7 +22,6 @@ from .exceptions import (
     ProfileConflictError,
 )
 from .error_handler import ProfileOperationHandler
-from ..config.defaults import get_default_timeouts
 from ..config.logging_config import get_logger
 from ..config.profile_config import get_platform_config
 from ..core.output import maybe_print as print
@@ -133,8 +132,12 @@ class ProfileManager:
         # Lightweight circuit breaker for profile ops (Phase 3.5)
         self._op_handler = ProfileOperationHandler()
 
-        # Default timeouts for operations
-        self._timeouts = get_default_timeouts()
+        # Centralized operation timeouts (seconds).
+        self._timeouts = {
+            'clone_timeout': 10.0,
+            'verify_timeout': 5.0,
+            'cleanup_timeout': 10.0,
+        }
         self.clone_timeout = clone_timeout
         self.max_concurrent_clones = max_concurrent_clones
         # Default verification config if none provided

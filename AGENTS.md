@@ -2,30 +2,30 @@
 
 ## Visão Geral do Projeto
 - **CoupaDownloads** automatiza o download de anexos e relatórios no Coupa, validando POs a partir de planilhas e gerando arquivos consolidados.
-- Código em **Python 3.12** gerenciado via **Poetry**, combinando Selenium, Playwright, processamento de CSV/Excel (pandas/polars) e pipelines de feedback com Sentence Transformers.
+- Código em **Python 3.12** gerenciado via **uv**, combinando Selenium, Playwright, processamento de CSV/Excel (pandas/polars) e pipelines de feedback com Sentence Transformers.
 - Entrypoints principais: `src/Core_main.py` (fluxo principal) e `tools/feedback_cli.py` (rotinas de treinamento e feedback).
-- A estrutura esperada: dados em `data/`, scripts auxiliares em `tools/`, recursos web em `drivers/` e documentação complementar em `docs/`.
+- A estrutura esperada: dados em `data/`, scripts auxiliares em `tools/`, código-fonte em `src/` e documentação complementar em `docs/`.
 - **Distribuição Futura**: Planejamento para executáveis standalone (Windows/macOS) sem instalação, usando PyInstaller/cx_Freeze com dependências built-in apenas.
 
 ## Setup Rápido
 ### Pré-requisitos
 - Python 3.12 disponível no `PATH` (verifique com `python --version`).
-- Poetry >= 1.8 instalado (`pip install poetry`).
-- Microsoft Edge atualizado; o instalador baixa o EdgeDriver compatível automaticamente.
-- Opcional para testes Playwright: `poetry run playwright install`.
+- `uv` instalado (`curl -LsSf https://astral.sh/uv/install.sh | sh` ou equivalente).
+- Microsoft Edge atualizado; o runtime baixa o EdgeDriver compatível na primeira execução e o reutiliza via cache persistente do usuário.
+- Opcional para testes Playwright: `uv run playwright install`.
 
 ### Provisionamento local
 ```bash
-poetry install                 # instala dependências
-poetry shell                   # ativa o ambiente virtual (opcional)
-poetry run playwright install  # instala navegadores usados por Playwright, se necessário
+uv sync                        # instala dependências do grupo padrão em .venv
+uv sync --all-groups           # instala todos os grupos opcionais
+uv run playwright install      # instala navegadores usados por Playwright, se necessário
 ```
 
 ### Execução rápida
 ```bash
-poetry run python -m src.Core_main         # fluxo principal de download
-poetry run python tools/feedback_cli.py wizard  # assistente guiado para ciclo de feedback
-poetry run python tools/feedback_cli.py --help   # CLI clássica com automações
+uv run python -m src.Core_main         # fluxo principal de download
+uv run python tools/feedback_cli.py wizard  # assistente guiado para ciclo de feedback
+uv run python tools/feedback_cli.py --help   # CLI clássica com automações
 ```
 
 ## Workflow de Desenvolvimento (Proposal -> Design -> Report)
@@ -98,14 +98,15 @@ Para capturar a **memória de longo prazo do projeto**, utilizamos Architecture 
 - **Testes**: Valide que novos componentes funcionam em ambiente empacotado (PyInstaller cria executáveis standalone).
 
 ## Testes e QA
-- Suite principal: `poetry run pytest` (use `-k`, `-m` ou `--maxfail=1` para focar em subconjuntos quando necessário).
+- Suite principal: `uv run pytest` (use `-k`, `-m` ou `--maxfail=1` para focar em subconjuntos quando necessário).
 - Para testes assíncronos, garanta que `pytest-asyncio` esteja configurado via marcadores; siga padrões existentes.
-- Ao alterar pipelines de feedback, valide com `poetry run python tools/feedback_cli.py wizard` e gere relatórios sob `reports/`.
+- Ao alterar pipelines de feedback, valide com `uv run python tools/feedback_cli.py wizard` e gere relatórios sob `reports/`.
 - Se modificar integração Selenium/Playwright, execute um fluxo completo em ambiente controlado e capture evidências.
 
 ## Segurança e Dados
 - Nunca faça commit de credenciais, tokens ou caminhos absolutos do SO.
 - Dados sensíveis devem permanecer fora do repositório; use `storage/` apenas para artefatos locais ignorados pelo Git.
+- SQLite de sessão deve ficar em diretório persistente de estado da aplicação, separado de caches recriáveis como EdgeDriver.
 - Downloads de binários externos precisam de um Documento de Design aprovado.
 - Logs padrão devem evitar PII; use máscaras ao lidar com fornecedores e números de pedido.
 

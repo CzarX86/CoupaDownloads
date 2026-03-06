@@ -9,7 +9,7 @@ from typing import Dict, Any, Optional
 from pathlib import Path
 
 from .lib.excel_processor import ExcelProcessor
-from .lib.config import Config as ExperimentalConfig
+from .config.app_config import Config as ExperimentalConfig
 from .lib.models import InteractiveSetupSession, ExecutionMode
 
 # Global variable to store current setup session (replaces environment variables)
@@ -40,7 +40,7 @@ class SetupManager:
         # If using the old default format, suggest the new timestamped format
         if "CoupaDownloads" in default_download and not any(char.isdigit() for char in os.path.basename(default_download)):
             # Generate a new timestamped folder as suggestion
-            from .lib.config import generate_timestamped_download_folder
+            from .config.app_config import generate_timestamped_download_folder
             suggested_download = generate_timestamped_download_folder("/Users/juliocezar/Downloads")
             print(f"💡 Suggested timestamped folder: {suggested_download}")
             default_download = suggested_download
@@ -56,7 +56,7 @@ class SetupManager:
         self.experimental_config.DOWNLOAD_FOLDER = normalized_download
         # Keep core Config in sync so browser options pick the right path on first init
         try:
-            from .lib.config import Config
+            from .config.app_config import Config
             Config.DOWNLOAD_FOLDER = normalized_download
         except Exception:
             pass
@@ -65,22 +65,28 @@ class SetupManager:
         os.makedirs(normalized_download, exist_ok=True)
         print(f"📁 Downloads will be saved to: {download_path}")
 
-        # 3) Worker count (single question): 1 = sequential, >1 = parallel (one WebDriver per process)
-        default_workers = 1
-        workers_raw = input(f"Number of workers (1=sequential; >1=parallel) [{default_workers}]: ").strip()
+        # 3) Worker count: 0 = automatic scaling, >=1 = fixed worker count
+        default_workers = 0
+        workers_raw = input(
+            f"Number of workers (0=automatic; 1+=fixed parallelism) [{default_workers}]: "
+        ).strip()
         try:
             workers = int(workers_raw) if workers_raw else default_workers
         except ValueError:
             workers = default_workers
-        if workers < 1:
-            workers = 1
-        self.experimental_config.USE_PROCESS_POOL = workers > 1
-        self.experimental_config.PROC_WORKERS = workers if workers > 1 else 1
+        if workers < 0:
+            workers = default_workers
+
+        self.experimental_config.USE_PROCESS_POOL = True
+        self.experimental_config.PROC_WORKERS = workers
+        self.experimental_config.resource_aware_scaling = workers == 0
         # Treat cap as unlimited unless explicitly set elsewhere
         if getattr(self.experimental_config, 'PROC_WORKERS_CAP', None) is None:
             self.experimental_config.PROC_WORKERS_CAP = 0
-        mode_label = "parallel" if self.experimental_config.USE_PROCESS_POOL else "sequential"
-        print(f"⚙️  Execution mode: {mode_label} ({workers} worker{'s' if workers!=1 else ''})")
+        if workers == 0:
+            print("⚙️  Execution mode: automatic worker scaling (starts at 1 and adapts to resources)")
+        else:
+            print(f"⚙️  Execution mode: fixed parallelism ({workers} worker{'s' if workers != 1 else ''})")
 
         # 5) Headless mode (default: Yes) - NEW: Use HeadlessConfiguration instead of env var
         headless_preference = self._prompt_bool("Run browser in headless mode?", default=True)
@@ -142,11 +148,13 @@ class SetupManager:
 
         # Execution model derived from worker count only
         try:
-            workers = int(os.environ.get('PROC_WORKERS', '2'))
+            workers = int(os.environ.get('PROC_WORKERS', '0'))
         except ValueError:
-            workers = 2
-        self.experimental_config.PROC_WORKERS = max(1, workers)
-        self.experimental_config.USE_PROCESS_POOL = self.experimental_config.PROC_WORKERS > 1
+            workers = 0
+        workers = max(0, workers)
+        self.experimental_config.PROC_WORKERS = workers
+        self.experimental_config.USE_PROCESS_POOL = True
+        self.experimental_config.resource_aware_scaling = workers == 0
         cap_env = os.environ.get('PROC_WORKERS_CAP')
         if cap_env is not None:
             try:
@@ -179,7 +187,7 @@ class SetupManager:
         self.experimental_config.DOWNLOAD_FOLDER = os.path.abspath(os.path.expanduser(timestamped_dl))
 
         # IMPORTANT: Also update Config.DOWNLOAD_FOLDER so browser uses the correct path
-        from .lib.config import Config
+        from .config.app_config import Config
         Config.DOWNLOAD_FOLDER = os.path.abspath(os.path.expanduser(timestamped_dl))
         normalized_dl = str(Config.DOWNLOAD_FOLDER)  # Convert Path to str
         os.environ['DOWNLOAD_FOLDER'] = normalized_dl
@@ -215,18 +223,6 @@ class SetupManager:
             "ui_mode": ui_mode,
             "execution_mode": execution_mode
         }
-
-    def scan_local_drivers(self) -> list[str]:
-        """Return a list of plausible local driver paths under 'drivers/' directory."""
-        candidates: list[str] = []
-        base = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'drivers')
-        if not os.path.isdir(base):
-            return candidates
-        for root, _dirs, files in os.walk(base):
-            for name in files:
-                if name.lower().startswith('msedgedriver'):
-                    candidates.append(os.path.join(root, name))
-        return sorted(candidates)
 
     @staticmethod
     def _prompt_bool(prompt: str, default: bool) -> bool:
