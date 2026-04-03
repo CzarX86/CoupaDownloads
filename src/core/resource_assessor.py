@@ -15,13 +15,14 @@ class ResourceAssessor:
     Assesses system resources (CPU, RAM) and suggests optimal worker scaling.
     """
     
-    # Estimates per worker (Edge/Chrome browser + Python process)
-    ESTIMATED_RAM_PER_WORKER_MB = 400  
-    ESTIMATED_CPU_LOAD_PER_WORKER = 0.5  # 50% of one core
+    # Estimates per worker (Edge/Chromium full process tree on macOS: browser main,
+    # GPU process, network, renderer for a JS-heavy SPA like Coupa ≈ 2.5 GB average).
+    ESTIMATED_RAM_PER_WORKER_MB = 2560/12
+    ESTIMATED_CPU_LOAD_PER_WORKER = 0.75/8  # 75% of one core
     
     # Safety thresholds
-    CRITICAL_FREE_RAM_GB = 0.5  # Below this, we should be very loud about risks
-    MINIMUM_FREE_RAM_GB = 0.3   # Absolute basement
+    CRITICAL_FREE_RAM_GB = 1.5*0.85  # Below this, we should be very loud about risks
+    MINIMUM_FREE_RAM_GB = 1.0*0.85   # Absolute basement
     
     @classmethod
     def get_system_resources(cls) -> Dict[str, Any]:
@@ -56,28 +57,19 @@ class ResourceAssessor:
         ram_limit = int(usable_ram_mb // cls.ESTIMATED_RAM_PER_WORKER_MB)
         
         # 2. CPU-based limit
-        cpu_limit = int(cpu_count * 3) 
+        cpu_limit = max(1, int(cpu_count))
         
         # Combined limit (Nominally safe)
         safe_limit = max(1, min(ram_limit, cpu_limit))
         
-        # Permissiveness Logic:
-        # We allow higher counts but upgrade the risk level based on available RAM.
-        is_8gb_system = resources["total_ram_gb"] >= 7.5
         is_memory_critically_low = resources["available_ram_gb"] < cls.CRITICAL_FREE_RAM_GB
         
         if requested_count <= safe_limit:
             risk_level = "LOW"
             suggested_count = requested_count
-        elif requested_count <= 4 and is_8gb_system and not is_memory_critically_low:
-            risk_level = "MEDIUM" # Nominal, but allowed on 8GB machines
-            suggested_count = requested_count
         else:
-            # If memory is critically low, we are much stricter
             risk_level = "HIGH" if is_memory_critically_low else "MEDIUM"
-            # Allow some overflow but cap it more strictly if RAM is low
-            overflow_multiplier = 1.5 if is_memory_critically_low else 3.0
-            suggested_count = min(requested_count, max(1, int(safe_limit * overflow_multiplier)))
+            suggested_count = safe_limit
 
         report = {
             "requested": requested_count,
@@ -87,7 +79,7 @@ class ResourceAssessor:
             "risk_level": risk_level,
             "is_throttled": suggested_count < requested_count,
             "is_memory_critical": is_memory_critically_low,
-            "stagger_delay": 2.0 if risk_level != "LOW" else 0.5 # Suggest a delay between browser spawns
+            "stagger_delay": 3.0 if risk_level != "LOW" else 1.0
         }
         
         return suggested_count, report

@@ -1,21 +1,10 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Dict, List, Any, Optional, Tuple, ClassVar
+from typing import TYPE_CHECKING, Dict, Any, Optional, Tuple, ClassVar
 from datetime import datetime
 import logging
-import os
 
-# Import the working ExcelProcessor
-try:
-    from ..lib.excel_processor import ExcelProcessor
-    EXCEL_PROCESSOR_AVAILABLE = True
-except ImportError:
-    EXCEL_PROCESSOR_AVAILABLE = False
-    ExcelProcessor = None
-    logging.warning("ExcelProcessor not available, CSV updates will be disabled")
-
-# Import SQLiteHandler
 try:
     from .sqlite_handler import SQLiteHandler
     SQLITE_AVAILABLE = True
@@ -27,21 +16,8 @@ if TYPE_CHECKING:
     from .sqlite_handler import SQLiteHandler as SQLiteHandlerType
 
 
-class WriteQueue:
-    """Stub WriteQueue implementation."""
-
-    def __init__(self, csv_handler: Any) -> None:
-        self.csv_handler = csv_handler
-
-    def start_writer_thread(self) -> None:
-        pass
-
-    def stop_writer_thread(self, timeout: float = 15.0) -> None:
-        pass
-
-
 class CSVHandler:
-    """CSV Handler implementation using ExcelProcessor (Legacy) or SQLite (New)."""
+    """CSV handler implementation backed by SQLite persistence."""
 
     _last_backup_path: ClassVar[Optional[Path]] = None
 
@@ -50,15 +26,12 @@ class CSVHandler:
         csv_path: Path,
         backup_dir: Optional[Path] = None,
         sqlite_db_path: Optional[str] = None,
-        enable_legacy_updates: bool = True,
     ):
         self.csv_path = csv_path
         self.backup_dir = backup_dir or (csv_path.parent / "backups")
         self.sqlite_db_path = sqlite_db_path
-        self.enable_legacy_updates = enable_legacy_updates
         self.logger = logging.getLogger(__name__)
         
-        # Initialize SQLite handler if path provided
         self.sqlite_handler = None
         if sqlite_db_path and SQLITE_AVAILABLE:
             try:
@@ -67,14 +40,12 @@ class CSVHandler:
             except Exception as e:
                 self.logger.error(f"⚠️ Failed to initialize SQLite in CSVHandler: {e}")
 
-        if not self.sqlite_handler and (not EXCEL_PROCESSOR_AVAILABLE or not self.enable_legacy_updates):
-            self.logger.error("No persistence engine available (SQLite disabled or failed; legacy updates disabled)")
+        if not self.sqlite_handler:
+            self.logger.error("No persistence engine available (SQLite disabled or failed)")
 
     def is_initialized(self) -> bool:
-        """Check if any persistence engine is initialized."""
-        return self.sqlite_handler is not None or (
-            self.enable_legacy_updates and EXCEL_PROCESSOR_AVAILABLE and ExcelProcessor is not None
-        )
+        """Check if SQLite persistence is initialized."""
+        return self.sqlite_handler is not None
 
     @classmethod
     def create_handler(
@@ -83,14 +54,12 @@ class CSVHandler:
         enable_incremental_updates: bool = True,
         backup_dir: Optional[Path] = None,
         sqlite_db_path: Optional[str] = None,
-        enable_legacy_updates: bool = True,
-    ) -> Tuple["CSVHandler", "WriteQueue", str]:
+    ) -> Tuple["CSVHandler", str]:
         """Factory helper to match CSVManager expectations."""
         handler = cls(
             csv_path,
             backup_dir=backup_dir,
             sqlite_db_path=sqlite_db_path,
-            enable_legacy_updates=enable_legacy_updates,
         )
         session_id = datetime.now().strftime("%Y%m%d-%H%M%S")
         if enable_incremental_updates:
@@ -100,8 +69,7 @@ class CSVHandler:
                 cls._last_backup_path = backup_path
             except Exception:
                 cls._last_backup_path = None
-        write_queue = WriteQueue(handler)
-        return handler, write_queue, session_id
+        return handler, session_id
 
     @staticmethod
     def get_backup_path(csv_path: Path, backup_dir: Optional[Path] = None) -> Path:
@@ -125,56 +93,12 @@ class CSVHandler:
         return self.csv_path
     
     def update_record(self, po_number: str, updates: Dict[str, Any]) -> bool:
-        """Update a record (prefers SQLite, falls back to ExcelProcessor)."""
-        success = False
-        
-        # 1. High Performance: SQLite
+        """Update a record in SQLite persistence."""
         if self.sqlite_handler:
             try:
-                success = self.sqlite_handler.update_record(po_number, updates)
-                if success:
+                if self.sqlite_handler.update_record(po_number, updates):
                     self.logger.debug(f"Successfully updated SQLite record for PO: {po_number}")
-                    # If SQLite succeeded, we might NOT want to call ExcelProcessor (the bottleneck)
-                    # during the parallel phase.
                     return True
             except Exception as e:
                 self.logger.error(f"SQLite update failed for {po_number}: {e}")
-
-        # 2. Legacy / Low Performance: ExcelProcessor
-        if not self.enable_legacy_updates:
-            self.logger.debug("Legacy CSV updates disabled; skipping ExcelProcessor update")
-            return success
-
-        if EXCEL_PROCESSOR_AVAILABLE and ExcelProcessor is not None:
-            try:
-                self.logger.debug(f"Updating Legacy CSV record for PO: {po_number}")
-                
-                status = updates.get('STATUS', 'FAILED')
-                supplier = updates.get('SUPPLIER', '')
-                attachments_found = updates.get('ATTACHMENTS_FOUND', 0)
-                attachments_downloaded = updates.get('ATTACHMENTS_DOWNLOADED', 0)
-                error_message = updates.get('ERROR_MESSAGE', '')
-                download_folder = updates.get('DOWNLOAD_FOLDER', '')
-                coupa_url = updates.get('COUPA_URL', '')
-                
-                attachment_names = updates.get('AttachmentName', [])
-                if isinstance(attachment_names, list):
-                    attachment_names = ', '.join(str(name) for name in attachment_names if name)
-                
-                ExcelProcessor.update_po_status(
-                    po_number=po_number,
-                    status=status,
-                    supplier=supplier,
-                    attachments_found=attachments_found,
-                    attachments_downloaded=attachments_downloaded,
-                    error_message=error_message,
-                    download_folder=download_folder,
-                    coupa_url=coupa_url,
-                    attachment_names=attachment_names
-                )
-                success = True
-                self.logger.debug(f"Successfully updated Legacy CSV for PO: {po_number}")
-            except Exception as e:
-                self.logger.error(f"Legacy CSV update failed for PO {po_number}: {e}")
-        
-        return success
+        return False

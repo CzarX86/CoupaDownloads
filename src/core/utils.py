@@ -24,25 +24,45 @@ def _wait_for_downloads_complete(folder_path: str, timeout: int = 180, poll: flo
     start = time.time()
     quiet_required = 0.4  # Matches standardized aggressive wait
     quiet_start = None
+    # Prevent premature exit before the browser has started writing download files.
+    # Without this, a 0.4 s "quiet" window can expire before any .crdownload file
+    # is created (browser is still processing the click), allowing the next PO's
+    # CDP path update to fire before the current PO's downloads finish.
+    seen_active = False
+    initial_grace = 2.0  # seconds to wait for browser to start downloads
+
     while time.time() - start < timeout:
         active = _has_active_downloads(folder_path)
-        
+
+        if active:
+            seen_active = True
+            quiet_start = None
+            time.sleep(poll)
+            continue
+
         if expected_count is not None:
             try:
                 # Count only finalized files (not matching download suffixes)
                 current_files = len([f for f in os.listdir(folder_path) if not any(f.endswith(s) for s in ('.crdownload', '.tmp', '.partial'))])
-                if current_files >= expected_count and not active:
-                    return
+                if current_files >= expected_count:
+                    if quiet_start is None:
+                        quiet_start = time.time()
+                    elif time.time() - quiet_start >= quiet_required:
+                        return
+                    time.sleep(poll)
+                    continue
             except Exception:
                 pass
 
-        if not active:
+        # Only allow a quiet exit once we have evidence that downloads started,
+        # or no downloads were expected, or the grace window elapsed.
+        downloads_expected = expected_count is None or expected_count > 0
+        confirmed_started = seen_active or not downloads_expected or (time.time() - start >= initial_grace)
+        if confirmed_started:
             if quiet_start is None:
                 quiet_start = time.time()
             elif time.time() - quiet_start >= quiet_required:
                 return
-        else:
-            quiet_start = None
         time.sleep(poll)
 
 
@@ -117,48 +137,6 @@ def _suffix_for_status(status_code: str) -> str:
         'TIMEOUT': '_TIMEOUT',
     }
     return mapping.get(status_code, f'_{status_code}')
-
-
-
-
-
-
-def _build_csv_updates(result: Dict[str, Any]) -> Dict[str, Any]:
-    """Translate a processing result into CSV column updates."""
-    from datetime import datetime
-    status_code = (result.get('status_code') or '').upper() or 'FAILED'
-    attachment_names = result.get('attachment_names') or []
-    if isinstance(attachment_names, str):
-        attachment_names = [name for name in attachment_names.split(';') if name]
-
-    error_message = ''
-    success = result.get('success')
-    if success is None:
-        success = status_code in {'COMPLETED', 'NO_ATTACHMENTS', 'PARTIAL'}
-    if not success:
-        error_message = result.get('message', '') or result.get('error', '')
-
-    updates: Dict[str, Any] = {
-        'STATUS': status_code,
-        'ATTACHMENTS_FOUND': result.get('attachments_found', 0),
-        'ATTACHMENTS_DOWNLOADED': result.get('attachments_downloaded', 0),
-        'AttachmentName': attachment_names,
-        'DOWNLOAD_FOLDER': result.get('final_folder', ''),
-        'COUPA_URL': result.get('coupa_url', ''),
-        'ERROR_MESSAGE': error_message,
-    }
-
-    supplier_name = result.get('supplier_name')
-    if supplier_name:
-        updates['SUPPLIER'] = supplier_name
-
-    last_processed = result.get('last_processed')
-    if isinstance(last_processed, datetime):
-        updates['LAST_PROCESSED'] = last_processed.isoformat()
-    elif isinstance(last_processed, str) and last_processed:
-        updates['LAST_PROCESSED'] = last_processed
-
-    return updates
 
 
 def _compose_csv_message(result_payload: dict) -> str:

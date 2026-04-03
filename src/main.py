@@ -48,7 +48,7 @@ if project_root_str not in sys.path:
 # Project corelib imports are handled via relative imports within the src package.
 
 from .lib.browser import BrowserManager
-from .lib.config import Config as ExperimentalConfig
+from .config.app_config import Config as ExperimentalConfig
 from .lib.downloader import Downloader
 from .lib.excel_processor import ExcelProcessor
 from .lib.folder_hierarchy import FolderHierarchyManager
@@ -59,17 +59,27 @@ from .setup_manager import SetupManager
 from .worker_manager import WorkerManager, ProcessingSession
 from .core.communication_manager import CommunicationManager
 from .processing_controller import ProcessingController
-from .csv_manager import CSVManager
+from .persistence_manager import CSVManager
 from .core.resource_assessor import ResourceAssessor
-from .core.telemetry import TelemetryProvider, ConsoleTelemetryListener
+from .core.telemetry import TelemetryProvider, ConsoleTelemetryListener, FunctionalTelemetryListener
 from .core.status import StatusLevel
 from .services.processing_service import ProcessingService
 from .services.msg_conversion_service import MsgToPdfConverter, find_msg_files
-from .core.utils import _humanize_exception, _wait_for_downloads_complete, _derive_status_label
+from .core.utils import (
+    _humanize_exception,
+    _wait_for_downloads_complete,
+    _derive_status_label,
+)
 from .orchestrators import BrowserOrchestrator, ResultAggregator
 
 # Module logger
 logger = logging.getLogger(__name__)
+
+AUTO_WORKER_HARD_CAP = 6
+POST_PROCESS_ACTION_CONVERT = "convert"
+POST_PROCESS_ACTION_REPORT = "report"
+POST_PROCESS_ACTION_ALL = "all"
+POST_PROCESS_ACTION_QUIT = "quit"
 
 # Enable interactive UI mode.
 # Behavior:
@@ -156,6 +166,9 @@ class MainApp:
         self.telemetry.add_listener(ConsoleTelemetryListener())
         # Use a plain multiprocessing.Queue for broader compatibility with spawn
         self.communication_manager = CommunicationManager(use_manager=True)  # Use Manager for spawn compatibility
+        self.telemetry.add_listener(
+            FunctionalTelemetryListener(on_status_fn=self._forward_status_to_recent_activity)
+        )
 
         # Initialize orchestrators (extracted from monolithic MainApp)
         self.browser_orchestrator = BrowserOrchestrator(self.browser_manager)
@@ -170,15 +183,194 @@ class MainApp:
             storage_manager=self.csv_manager,
             telemetry=self.telemetry,
         )
-        # Deprecated: Use browser_orchestrator instead
-        self.driver = None
-        self.lock = threading.Lock()  # Thread safety for browser operations (now in browser_orchestrator)
         self._run_start_time: float | None = None
         self._current_po_start_time: float | None = None
         self._completed_po_count = 0
         self._total_po_count = 0
         self._accumulated_po_seconds = 0.0
         self._headless_config: HeadlessConfiguration | None = None
+
+    def _forward_status_to_recent_activity(self, status_message) -> None:
+        """Mirror telemetry status updates into the UI activity feed."""
+        from src.core.status import StatusLevel
+        if status_message.level == StatusLevel.INFO:
+            return
+        try:
+            self.communication_manager.publish_activity(
+                status_message.message,
+                status=status_message.level.name,
+                timestamp=status_message.timestamp.timestamp(),
+                operation_id=status_message.operation_id,
+                progress=status_message.progress,
+            )
+        except Exception:
+            logger.debug("Failed to forward telemetry status to recent activity", exc_info=True)
+
+    def _execute_msg_conversion(self) -> Dict[str, Any]:
+        """Convert downloaded .msg files to PDF without prompting."""
+        try:
+            download_root = Path(ExperimentalConfig.DOWNLOAD_FOLDER)
+            enabled = ExperimentalConfig.MSG_TO_PDF_ENABLED
+            overwrite = ExperimentalConfig.MSG_TO_PDF_OVERWRITE
+        except Exception:
+            logger.warning("MSG to PDF: unable to resolve configuration")
+            return {"available": False, "executed": False, "reason": "config_error"}
+
+        if not enabled:
+            logger.info("MSG to PDF conversion disabled via configuration")
+            return {"available": False, "executed": False, "reason": "disabled"}
+
+        msg_files = find_msg_files(download_root)
+        total = len(msg_files)
+        if total == 0:
+            logger.info("MSG to PDF: no .msg files found", extra={"root": str(download_root)})
+            return {"available": False, "executed": False, "reason": "no_msg_files", "total": 0}
+
+        converter = MsgToPdfConverter(overwrite=overwrite, telemetry=self.telemetry)
+        summary = converter.convert_all(msg_files)
+        summary["available"] = True
+        summary["executed"] = True
+        summary["total"] = total
+
+        converted = summary.get("converted", 0)
+        skipped = summary.get("skipped", 0)
+        failed = summary.get("failed", 0)
+        print(f"  ✅ MSG to PDF complete: {converted} converted, {skipped} skipped, {failed} failed.")
+        if failed and summary.get("errors"):
+            print("  ⚠️  Errors:")
+            for err in summary["errors"][:5]:
+                print(f"    - {err['file']}: {err['error']}")
+        return summary
+
+    def _execute_final_report(self) -> Optional[Path]:
+        """Generate the final Excel report without prompting."""
+        try:
+            download_root = Path(ExperimentalConfig.DOWNLOAD_FOLDER)
+        except Exception:
+            download_root = None
+        return self.csv_manager.generate_final_report(download_root)
+
+    def _build_final_run_summary(
+        self,
+        successful: int,
+        failed: int,
+        *,
+        session_report: Optional[Dict[str, Any]] = None,
+        post_process_outcome: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Build a single payload consumed by the premium UI final screen."""
+        try:
+            download_root = Path(ExperimentalConfig.DOWNLOAD_FOLDER)
+        except Exception:
+            download_root = None
+
+        duration_seconds = 0.0
+        if self._run_start_time is not None:
+            duration_seconds = max(0.0, time.perf_counter() - self._run_start_time)
+        elif session_report:
+            duration_seconds = float(session_report.get("session_duration", 0.0) or 0.0)
+
+        msg_files = find_msg_files(download_root) if download_root else []
+        summary = {
+            "successful": successful,
+            "failed": failed,
+            "processed": successful + failed,
+            "duration_seconds": duration_seconds,
+            "download_root": str(download_root) if download_root else "",
+            "msg_files_available": len(msg_files),
+            "report_available": bool(self.csv_manager.has_results()),
+            "processing_mode": (session_report or {}).get("processing_mode", ""),
+            "worker_count": (session_report or {}).get("worker_count", 0),
+        }
+        if post_process_outcome:
+            summary["post_process"] = dict(post_process_outcome)
+        return summary
+
+    def _publish_run_progress(
+        self,
+        state: str,
+        successful: int,
+        failed: int,
+        *,
+        session_report: Optional[Dict[str, Any]] = None,
+        post_process_outcome: Optional[Dict[str, Any]] = None,
+        extra_summary: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Build and publish a run summary snapshot for the premium UI."""
+        summary = self._build_final_run_summary(
+            successful,
+            failed,
+            session_report=session_report,
+            post_process_outcome=post_process_outcome,
+        )
+        if extra_summary:
+            summary.update(extra_summary)
+        self.communication_manager.set_run_state(state, summary=summary)
+        return summary
+
+    def _execute_post_processing_action(self, action: Optional[str]) -> Dict[str, Any]:
+        """Execute the post-processing action selected by the user."""
+        normalized = (action or POST_PROCESS_ACTION_QUIT).strip().lower()
+        outcome: Dict[str, Any] = {"action": normalized, "msg_conversion": None, "report_path": None}
+
+        if normalized == POST_PROCESS_ACTION_CONVERT:
+            outcome["msg_conversion"] = self._execute_msg_conversion()
+        elif normalized == POST_PROCESS_ACTION_REPORT:
+            outcome["report_path"] = self._execute_final_report()
+        elif normalized == POST_PROCESS_ACTION_ALL:
+            outcome["msg_conversion"] = self._execute_msg_conversion()
+            outcome["report_path"] = self._execute_final_report()
+
+        return outcome
+
+    def _execute_automatic_post_processing(
+        self,
+        successful: int,
+        failed: int,
+        *,
+        session_report: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Run conversion/report automatically while updating the premium UI state."""
+        outcome: Dict[str, Any] = {
+            "action": POST_PROCESS_ACTION_ALL,
+            "stage": "starting",
+            "status_message": "Preparing automatic post-processing...",
+            "msg_conversion": None,
+            "report_path": None,
+        }
+        self._publish_run_progress(
+            "finalizing",
+            successful,
+            failed,
+            session_report=session_report,
+            post_process_outcome=outcome,
+        )
+
+        outcome["stage"] = "converting_msg"
+        outcome["status_message"] = "Converting MSG files to PDF..."
+        self._publish_run_progress(
+            "finalizing",
+            successful,
+            failed,
+            session_report=session_report,
+            post_process_outcome=outcome,
+        )
+        outcome["msg_conversion"] = self._execute_msg_conversion()
+
+        outcome["stage"] = "saving_report"
+        outcome["status_message"] = "Saving final Excel report..."
+        self._publish_run_progress(
+            "finalizing",
+            successful,
+            failed,
+            session_report=session_report,
+            post_process_outcome=outcome,
+        )
+        outcome["report_path"] = self._execute_final_report()
+
+        outcome["stage"] = "done"
+        outcome["status_message"] = "Automatic post-processing completed."
+        return outcome
 
     def set_headless_configuration(self, headless_config: HeadlessConfiguration) -> None:
         """
@@ -195,175 +387,16 @@ class MainApp:
 
     # (Deprecated) _rename_folder_with_status removed in favor of folder_hierarchy.finalize_folder
 
-    def initialize_browser_once(self) -> None:
-        """
-        Inicializa o browser uma única vez e mantém aberto para todos os POs.
-        
-        Método depreciado: Use browser_orchestrator diretamente.
-        
-        Este método garante que o browser seja inicializado apenas uma vez
-        para processamento sequencial, evitando overhead de reinicialização.
-        
-        Exemplo:
-            ```python
-            app.initialize_browser_once()
-            # Browser agora está disponível em app.browser_orchestrator.driver
-            ```
-        """
+    def _initialize_browser_once(self) -> None:
+        """Initialize the browser once for sequential in-process mode."""
         if not self.browser_orchestrator.is_initialized():
             self.browser_orchestrator.initialize_browser(headless=self._headless_config.get_effective_headless_mode())
 
-
-    @staticmethod
-    def _build_csv_updates(result: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Traduz um resultado de processamento em atualizações para colunas CSV.
-        
-        Args:
-            result: Dicionário com resultado do processamento contendo:
-                - status_code: Código de status (COMPLETED, FAILED, etc.)
-                - attachment_names: Lista ou string de nomes de anexos
-                - attachments_found: Quantidade de anexos encontrados
-                - attachments_downloaded: Quantidade de anexos baixados
-                - final_folder: Pasta final dos downloads
-                - coupa_url: URL do PO no Coupa
-                - supplier_name: Nome do fornecedor (opcional)
-                - last_processed: Data/hora do processamento (opcional)
-                
-        Returns:
-            Dicionário com mapeamento de colunas CSV:
-                - STATUS: Código de status
-                - ATTACHMENTS_FOUND: Quantidade encontrada
-                - ATTACHMENTS_DOWNLOADED: Quantidade baixada
-                - AttachmentName: Lista de nomes de anexos
-                - DOWNLOAD_FOLDER: Pasta de download
-                - COUPA_URL: URL do Coupa
-                - ERROR_MESSAGE: Mensagem de erro (se falhou)
-                - SUPPLIER: Nome do fornecedor (se disponível)
-                - LAST_PROCESSED: Data/hora formatada (se disponível)
-                
-        Exemplo:
-            ```python
-            result = {'status_code': 'COMPLETED', 'attachments_found': 3, ...}
-            updates = MainApp._build_csv_updates(result)
-            # updates = {'STATUS': 'COMPLETED', 'ATTACHMENTS_FOUND': 3, ...}
-            ```
-        """
-        status_code = (result.get('status_code') or '').upper() or 'FAILED'
-        attachment_names = result.get('attachment_names') or []
-        if isinstance(attachment_names, str):
-            attachment_names = [name for name in attachment_names.split(';') if name]
-
-        error_message = ''
-        success = result.get('success')
-        if success is None:
-            success = status_code in {'COMPLETED', 'NO_ATTACHMENTS', 'PARTIAL'}
-        if not success:
-            error_message = result.get('message', '') or result.get('error', '')
-
-        updates: Dict[str, Any] = {
-            'STATUS': status_code,
-            'ATTACHMENTS_FOUND': result.get('attachments_found', 0),
-            'ATTACHMENTS_DOWNLOADED': result.get('attachments_downloaded', 0),
-            'AttachmentName': attachment_names,
-            'DOWNLOAD_FOLDER': result.get('final_folder', ''),
-            'COUPA_URL': result.get('coupa_url', ''),
-            'ERROR_MESSAGE': error_message,
-        }
-
-        supplier_name = result.get('supplier_name')
-        if supplier_name:
-            updates['SUPPLIER'] = supplier_name
-
-        last_processed = result.get('last_processed')
-        if isinstance(last_processed, datetime):
-            updates['LAST_PROCESSED'] = last_processed.isoformat()
-        elif isinstance(last_processed, str) and last_processed:
-            updates['LAST_PROCESSED'] = last_processed
-
-        return updates
-
-    def _compose_csv_message(self, result_payload: dict) -> str:
-        """
-        Compõe mensagem de erro para CSV a partir do payload de resultado.
-        
-        Args:
-            result_payload: Dicionário com resultado do processamento contendo:
-                - status_code: Código de status
-                - status_reason: Razão do status
-                - fallback_used: Se usou fallback PR
-                - fallback_details: Detalhes do fallback
-                - message: Mensagem de erro
-                
-        Returns:
-            String formatada para coluna ERROR_MESSAGE no CSV.
-            Retorna string vazia para processamentos bem-sucedidos.
-            
-        Exemplo:
-            ```python
-            payload = {
-                'status_code': 'FAILED',
-                'message': 'Timeout',
-                'fallback_used': True,
-                'fallback_details': {'source': 'PR::link', 'url': '...'}
-            }
-            message = app._compose_csv_message(payload)
-            # message = "Timeout — PR link source: PR via link"
-            ```
-        """
-        status_code = (result_payload.get('status_code') or '').upper()
-        status_reason = result_payload.get('status_reason', '') or ''
-        fallback_used = bool(result_payload.get('fallback_used'))
-        fallback_details = result_payload.get('fallback_details') or {}
-        trigger_reason = (
-            result_payload.get('fallback_trigger_reason')
-            or fallback_details.get('trigger_reason')
-            or ''
-        )
-        message = result_payload.get('message', '') or ''
-
-        if fallback_used:
-            parts: list[str] = []
-            if message:
-                parts.append(message)
-
-            if trigger_reason == 'po_without_pdf':
-                parts.append('PO page did not expose PDF attachments.')
-            elif trigger_reason == 'po_without_attachments':
-                parts.append('PO page did not expose attachments.')
-
-            source = (fallback_details.get('source') or '').strip()
-            if source:
-                friendly_source = source.replace('::', ' via ')
-                parts.append(f"PR link source: {friendly_source}")
-
-            pr_url = (fallback_details.get('url') or '').strip()
-            if pr_url:
-                parts.append(f"PR URL: {pr_url}")
-
-            if not parts:
-                parts.append('PR fallback used to retrieve documents.')
-            return ' — '.join(parts)
-
-        if status_code == 'COMPLETED':
-            return ''
-        if message:
-            return message
-        if status_code == 'NO_ATTACHMENTS':
-            return status_reason.replace('_', ' ').title() if status_reason else 'No attachments found.'
-        if status_reason:
-            return status_reason.replace('_', ' ').title()
-        return ''
 
     def process_single_po(self, po_data, hierarchy_cols, has_hierarchy_data, index, total, execution_mode=None):
         """Process a single PO using the processing service."""
         from .lib.models import ExecutionMode
         execution_mode = execution_mode or ExecutionMode.STANDARD
-        
-        # Ensure the service has the current driver/lock context from MainApp if needed
-        # (Though MainApp will eventually be refactored further)
-        self.processing_service.driver = self.driver
-        self.processing_service.lock = self.lock
         
         try:
             return self.processing_service.process_single_po(
@@ -437,17 +470,21 @@ class MainApp:
                 self.execution_mode = config.get("execution_mode", "standard")
         
         self.set_headless_configuration(headless_config)
+        self.telemetry.emit_status(StatusLevel.INFO, "Startup: preparing input and download directories")
 
         os.makedirs(ExperimentalConfig.INPUT_DIR, exist_ok=True)
         os.makedirs(ExperimentalConfig.DOWNLOAD_FOLDER, exist_ok=True)
 
         try:
+            self.telemetry.emit_status(StatusLevel.INFO, "Startup: locating input workbook")
             excel_path = self.excel_processor.get_excel_file_path()
             # Inform which input file will be processed (CSV or Excel)
             _, ext = os.path.splitext(excel_path.lower())
             file_kind = "CSV" if ext == ".csv" else "Excel"
             self.telemetry.emit_status(StatusLevel.INFO, f"Processing input file: {excel_path} ({file_kind})")
+            self.telemetry.emit_status(StatusLevel.INFO, "Startup: reading PO entries from input file")
             po_entries, original_cols, hierarchy_cols, has_hierarchy_data = self.excel_processor.read_po_numbers_from_excel(excel_path)
+            self.telemetry.emit_status(StatusLevel.INFO, "Startup: validating PO entries")
             valid_entries = self.excel_processor.process_po_numbers(po_entries)
         except Exception as e:
             self.telemetry.emit_status(StatusLevel.ERROR, f"Failed to read or process input file: {e}")
@@ -470,11 +507,13 @@ class MainApp:
         # Initialize CSV handler if input file is CSV
         csv_input_path = Path(excel_path)
         if csv_input_path.suffix.lower() == '.csv':
+            self.telemetry.emit_status(StatusLevel.INFO, "Startup: initializing CSV persistence")
             self.csv_manager.initialize_csv_handler(csv_input_path)
             
             # Seed SQLite if used (high performance persistence for parallel processes)
             if self.csv_manager.sqlite_handler:
                 try:
+                    self.telemetry.emit_status(StatusLevel.INFO, "Startup: seeding SQLite state for run tracking")
                     df_seed = pd.DataFrame(po_entries)
                     self.csv_manager.seed_sqlite(df_seed)
                 except Exception as e:
@@ -490,25 +529,32 @@ class MainApp:
 
         self.telemetry.emit_status(StatusLevel.SUCCESS, f"PO Data Conversion complete. {len(po_data_list)} POs ready.")
         self.telemetry.emit_status(StatusLevel.INFO, f"Starting processing with {len(po_data_list)} POs...")
-        use_process_pool = bool(getattr(ExperimentalConfig, 'USE_PROCESS_POOL', False))  # Derived from worker count
+        self.communication_manager.set_run_state("idle", summary={})
+        use_process_pool = ExperimentalConfig.USE_PROCESS_POOL
 
-        requested_workers = getattr(ExperimentalConfig, 'PROC_WORKERS', self.max_workers)
+        requested_workers = ExperimentalConfig.PROC_WORKERS
         try:
             configured_workers_raw = int(requested_workers)
         except (TypeError, ValueError):
             configured_workers_raw = self.max_workers
 
+        auto_worker_mode = configured_workers_raw == 0
+
         # Resource-Aware Scaling Assessment
-        if getattr(ExperimentalConfig, 'RESOURCE_AWARE_SCALING', True):
-            logger.info("Performing resource-aware risk assessment", extra={"target_workers": configured_workers_raw})
-            min_free_ram = float(getattr(ExperimentalConfig, 'MIN_FREE_RAM_GB', 0.3))
-            configured_workers, report = ResourceAssessor.calculate_safe_worker_count(configured_workers_raw, min_free_ram_gb=min_free_ram)
+        if auto_worker_mode:
+            self.telemetry.emit_status(StatusLevel.INFO, "Startup: assessing safe worker count")
+            cap = int(ExperimentalConfig.PROC_WORKERS_CAP or 0)
+            configured_auto_cap = cap if cap > 0 else AUTO_WORKER_HARD_CAP
+            requested_ceiling = min(AUTO_WORKER_HARD_CAP, max(2, configured_auto_cap))
+            logger.info("Performing resource-aware risk assessment", extra={"target_workers": requested_ceiling})
+            min_free_ram = float(ExperimentalConfig.MIN_FREE_RAM_GB)
+            configured_workers, report = ResourceAssessor.calculate_safe_worker_count(requested_ceiling, min_free_ram_gb=min_free_ram)
             logger.info(ResourceAssessor.get_risk_message(report))
 
             if report["is_throttled"]:
                 logger.warning(
                     "Worker count adjusted due to resource constraints",
-                    extra={"original": configured_workers_raw, "adjusted": configured_workers}
+                    extra={"original": requested_ceiling, "adjusted": configured_workers}
                 )
 
             # Use suggested stagger delay to mitigate startup spikes
@@ -516,18 +562,18 @@ class MainApp:
             if hasattr(self.worker_manager, 'stagger_delay'):
                 self.worker_manager.stagger_delay = stagger_delay
         else:
-            cap = int(getattr(ExperimentalConfig, 'PROC_WORKERS_CAP', 0) or 0)
-            if cap > 0:
-                configured_workers = max(1, min(configured_workers_raw, cap))
-            else:
-                configured_workers = max(1, configured_workers_raw)
+            configured_workers = max(1, configured_workers_raw)
             logger.info(
-                "Resource-aware scaling disabled, using configured cap",
+                "Using fixed worker count provided by user/config",
                 extra={"workers": configured_workers}
             )
 
         self.max_workers = configured_workers
         self.worker_manager.max_workers = self.max_workers
+        self.telemetry.emit_status(
+            StatusLevel.INFO,
+            f"Startup: configured {self.max_workers} worker(s) for processing",
+        )
 
         if use_process_pool and not self.enable_parallel:
             self.enable_parallel = True
@@ -554,7 +600,7 @@ class MainApp:
                     self.max_workers,
                     self.csv_manager.csv_handler,
                     self.folder_hierarchy,
-                    self.initialize_browser_once,
+                    self._initialize_browser_once,
                     None, # _prepare_progress_tracking removed
                     self.process_single_po,
                     communication_manager=self.communication_manager,
@@ -564,8 +610,10 @@ class MainApp:
             finally:
                 if use_process_pool and self.enable_parallel:
                     self.worker_manager.shutdown()
+            session_report = self.worker_manager._last_parallel_report or {}
         else:
             # Default to Premium UI (Textual)
+            self.telemetry.emit_status(StatusLevel.INFO, "Startup: launching premium UI and background processing")
             self._run_premium_ui(
                 po_data_list,
                 hierarchy_cols,
@@ -576,6 +624,7 @@ class MainApp:
             agg = self.communication_manager.get_aggregated_metrics()
             successful = agg.get("total_successful", 0)
             failed = agg.get("total_failed", 0)
+            session_report = self.worker_manager._last_parallel_report or {}
 
         # --- Final Report Prompt ---
         # Keep SQLite alive for report generation (cleanup_sqlite=False).
@@ -584,12 +633,8 @@ class MainApp:
         self.telemetry.emit_stats(successful, failed, successful + failed)
         self.telemetry.emit_status(StatusLevel.SUCCESS, f"Processing complete! {successful} successful, {failed} failed.")
 
-        # Offer .msg → .pdf conversion before report generation
-        self._offer_msg_conversion()
-
-        # Offer to generate a final Excel report if there are results
-        if self.csv_manager.has_results():
-            self._offer_final_report()
+        if self.ui_mode == "none":
+            self._execute_post_processing_action(POST_PROCESS_ACTION_ALL)
 
         # Now fully clean up SQLite temp files
         self.csv_manager.shutdown_csv_handler(cleanup_sqlite=True)
@@ -600,6 +645,8 @@ class MainApp:
         import threading
         import os
         from .core.output import OutputSuppressor
+
+        result_holder: Dict[str, Any] = {"successful": 0, "failed": 0, "session_report": None, "error": None}
 
         # Premium UI requires parallel/process-pool mode because processing runs
         # in a background thread while Textual owns the terminal.  Sequential
@@ -616,8 +663,9 @@ class MainApp:
         # Start processing in a background thread
         def run_processing():
             try:
+                self.communication_manager.set_run_state("running")
                 _debug_log(f"run_processing started: parallel={self.enable_parallel}, workers={self.max_workers}, pool={use_process_pool}, pos={len(po_data_list)}")
-                self.processing_controller.process_po_entries(
+                successful, failed = self.processing_controller.process_po_entries(
                     po_data_list,
                     hierarchy_cols,
                     has_hierarchy_data,
@@ -627,15 +675,45 @@ class MainApp:
                     self.max_workers,
                     self.csv_manager.csv_handler,
                     self.folder_hierarchy,
-                    self.initialize_browser_once,
+                    self._initialize_browser_once,
                     None,  # _prepare_progress_tracking removed
                     self.process_single_po,
                     communication_manager=self.communication_manager,
                     sqlite_db_path=self.csv_manager.sqlite_db_path,
                     execution_mode=getattr(self, 'execution_mode', 'standard'),
                 )
+                result_holder["successful"] = successful
+                result_holder["failed"] = failed
+                result_holder["session_report"] = self.worker_manager._last_parallel_report or {}
+                self._publish_run_progress(
+                    "finalizing",
+                    successful,
+                    failed,
+                    session_report=result_holder["session_report"],
+                    extra_summary={"message": "Downloads finished. Final cleanup in progress."},
+                )
+                post_process_outcome = self._execute_automatic_post_processing(
+                    successful,
+                    failed,
+                    session_report=result_holder["session_report"],
+                )
+                self._publish_run_progress(
+                    "completed",
+                    successful,
+                    failed,
+                    session_report=result_holder["session_report"],
+                    post_process_outcome=post_process_outcome,
+                )
                 _debug_log("run_processing completed successfully")
             except Exception as e:
+                result_holder["error"] = str(e)
+                summary = self._build_final_run_summary(
+                    result_holder.get("successful", 0),
+                    result_holder.get("failed", 0),
+                    session_report=result_holder.get("session_report") or {},
+                )
+                summary["error"] = str(e)
+                self.communication_manager.set_run_state("failed", summary=summary)
                 _debug_log(f"run_processing FAILED: {e}")
                 import traceback
                 _debug_log(traceback.format_exc())
@@ -651,14 +729,16 @@ class MainApp:
             app = CoupaTextualUI(self.communication_manager, total_pos=len(po_data_list))
             app.run()
 
+        proc_thread.join(timeout=1.0)
+
     # ---- Final Report -------------------------------------------------------------------
 
     def _offer_msg_conversion(self) -> None:
         """Offer to convert downloaded .msg files to PDF."""
         try:
             download_root = Path(ExperimentalConfig.DOWNLOAD_FOLDER)
-            enabled = bool(getattr(ExperimentalConfig, 'MSG_TO_PDF_ENABLED', True))
-            overwrite = bool(getattr(ExperimentalConfig, 'MSG_TO_PDF_OVERWRITE', False))
+            enabled = ExperimentalConfig.MSG_TO_PDF_ENABLED
+            overwrite = ExperimentalConfig.MSG_TO_PDF_OVERWRITE
         except Exception:
             logger.warning("MSG to PDF: unable to resolve configuration")
             return
@@ -694,18 +774,7 @@ class MainApp:
             print("  ℹ️  MSG to PDF conversion skipped.")
             return
 
-        converter = MsgToPdfConverter(overwrite=overwrite, telemetry=self.telemetry)
-        summary = converter.convert_all(msg_files)
-
-        converted = summary.get("converted", 0)
-        skipped = summary.get("skipped", 0)
-        failed = summary.get("failed", 0)
-
-        print(f"  ✅ MSG to PDF complete: {converted} converted, {skipped} skipped, {failed} failed.")
-        if failed and summary.get("errors"):
-            print("  ⚠️  Errors:")
-            for err in summary["errors"][:5]:
-                print(f"    - {err['file']}: {err['error']}")
+        self._execute_msg_conversion()
 
     def _offer_final_report(self) -> None:
         """Ask the user whether to save a final Excel report.
@@ -738,7 +807,7 @@ class MainApp:
             answer = "n"
 
         if answer in ("", "y", "yes", "s", "sim"):
-            self.csv_manager.generate_final_report(download_root)
+            self._execute_final_report()
         else:
             print("  ℹ️  Report generation skipped.")
 
@@ -781,6 +850,12 @@ class MainApp:
         """
         if emergency:
             logger.warning("Accelerated shutdown initiated")
+            try:
+                summary = self._build_final_run_summary(0, 0, session_report=self.worker_manager._last_parallel_report or {})
+                summary["message"] = "Interrupted by user"
+                self.communication_manager.set_run_state("interrupted", summary=summary)
+            except Exception:
+                pass
 
         # 1. Shutdown active sessions
 
@@ -806,14 +881,6 @@ class MainApp:
                 self.browser_orchestrator.cleanup(emergency=emergency)
             except Exception as e:
                 logger.warning("Error closing browser orchestrator", extra={"error": str(e)})
-        
-        # Legacy cleanup (for backward compatibility)
-        if self.driver:
-            try:
-                self.browser_manager.cleanup()
-            except Exception:
-                pass
-            self.driver = None
 
 
 def main() -> None:

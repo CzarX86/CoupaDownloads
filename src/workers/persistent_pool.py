@@ -15,35 +15,74 @@ import multiprocessing as mp
 import os
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
-from pathlib import Path
-from typing import Dict, List, Optional, Any, Callable
+from concurrent.futures import Future, ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from datetime import datetime
+from typing import Any, Callable, Dict, List, Optional
 import structlog
 import psutil
 
-from .models import (
-    PoolConfig, TaskHandle, POTask, Worker, Profile,
-    TaskStatus, WorkerStatus, TaskPriority
-)
+from .models import PoolConfig, TaskHandle, POTask, Profile, TaskStatus, WorkerStatus, TaskPriority
 from .worker_process import WorkerProcess
 from .task_queue import TaskQueue, ProcessingTask, TaskResult
 from .profile_manager import ProfileManager
 from .shutdown_handler import GracefulShutdown
+from ..core.folder_finalizer import FolderFinalizer, FolderFinalizationResult
 
 logger = structlog.get_logger(__name__)
 
 
+def _sweep_orphaned_driver_processes() -> None:
+    """Kill any leftover msedgedriver + orphaned Edge browser processes from previous runs.
 
-# Debug helper
-def _debug_log(msg: str):
+    msedgedriver is only ever spawned by Selenium/WebDriver automation — it is
+    never opened by human users — so it is safe to kill every instance that no
+    longer has a live Python parent when the pool starts fresh.
+    """
     try:
-        with open('/tmp/worker_debug.log', 'a') as f:
-            import datetime
-            ts = datetime.datetime.now().isoformat()
-            f.write(f"[{ts}] [POOL] {msg}\n")
-    except:
-        pass
+        current_pid = os.getpid()
+        killed: list[int] = []
+
+        for proc in psutil.process_iter(['pid', 'name', 'ppid']):
+            try:
+                name = (proc.info.get('name') or '').lower()
+                if 'msedgedriver' not in name:
+                    continue
+
+                # Only kill drivers that are NOT children of the current process
+                # (our freshly-started drivers will be children of this PID).
+                ppid = proc.info.get('ppid') or 0
+                if ppid == current_pid:
+                    continue
+
+                # Kill the driver and all its Edge browser children.
+                try:
+                    children = proc.children(recursive=True)
+                    for child in children:
+                        try:
+                            child.kill()
+                        except (psutil.NoSuchProcess, psutil.AccessDenied):
+                            pass
+                    proc.kill()
+                    killed.append(proc.pid)
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    pass
+
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+
+        if killed:
+            logger.info("Swept orphaned msedgedriver processes at startup", pids=killed)
+
+    except Exception as err:
+        logger.debug("Orphaned driver sweep failed (non-fatal)", error=str(err))
+
+
+def _env_flag(name: str, default: bool = False) -> bool:
+    """Parse a boolean environment flag with safe defaults."""
+    raw_value = os.environ.get(name)
+    if raw_value is None:
+        return default
+    return raw_value.strip().lower() in {"1", "true", "yes", "on"}
 
 class PersistentWorkerPool:
     """
@@ -111,12 +150,8 @@ class PersistentWorkerPool:
         self.completed_tasks = 0
         self.failed_tasks = 0
 
-        # Transient/global restart coordination
-        self._last_global_timeout_restart: Optional[float] = None
-        try:
-            self._timeout_global_restart_cooldown = float(os.environ.get('TIMEOUT_GLOBAL_RESTART_COOLDOWN', '60'))
-        except Exception:
-            self._timeout_global_restart_cooldown = 60.0
+        # Prevent concurrent double-restarts of the same worker
+        self._restarting_workers: set = set()
         
         # Thread pool for async operations
         self.executor = ThreadPoolExecutor(max_workers=config.worker_count + 2)
@@ -126,21 +161,206 @@ class PersistentWorkerPool:
         if result_callbacks:
             self._result_callbacks.extend(result_callbacks)
         if csv_handler is not None:
-            self._result_callbacks.append(self._persist_result_to_csv)
+            self._result_callbacks.append(self._persist_result_to_storage)
+        self._target_worker_count = max(1, config.worker_count)
+        self._autoscaling_enabled = bool(config.autoscaling_enabled and self._target_worker_count > 1)
+        self._active_worker_target = 1 if self._autoscaling_enabled else self._target_worker_count
 
         logger.info(
             "PersistentWorkerPool initialized",
             worker_count=config.worker_count,
+            initial_worker_count=self._active_worker_target,
+            autoscaling_enabled=self._autoscaling_enabled,
             headless_mode=config.headless_mode,
             memory_threshold=config.memory_threshold,
             csv_handler_attached=csv_handler is not None,
             result_callback_count=len(self._result_callbacks),
         )
 
-        # Pending finalization registry (PO_TASK, RESULT)
-        self._pending_finalizations: List[tuple[POTask, Dict[str, Any]]] = []
+        from ..config.app_config import Config
+
+        self._finalization_ack_timeout_seconds = float(Config.FINALIZATION_ACK_TIMEOUT_SECONDS)
+        self._finalization_flush_on_shutdown = Config.FINALIZATION_FLUSH_ON_SHUTDOWN
+        self._batch_finalization_enabled = Config.BATCH_FINALIZATION_ENABLED
+        self._max_finalization_retry_attempts = 6
+        self.folder_finalizer = FolderFinalizer(
+            batch_interval=float(Config.BATCH_FINALIZATION_INTERVAL),
+            batch_size=int(Config.FINALIZATION_BATCH_SIZE),
+            ack_timeout_seconds=self._finalization_ack_timeout_seconds,
+            worker_count=1,
+            logger_context="persistent_pool",
+        )
+
+        # Task-id keyed pending finalization registry.
+        self._pending_finalizations: Dict[str, tuple[POTask, Dict[str, Any], Future[FolderFinalizationResult], float]] = {}
         self._finalizer_lock = threading.Lock()
         self.communication_manager = communication_manager
+        self._debug_runtime_enabled = _env_flag("COUPA_DEBUG_RUNTIME", False)
+        self._resource_check_interval = float(os.environ.get("COUPA_RESOURCE_CHECK_INTERVAL", "5.0"))
+        self._scale_cooldown_seconds = float(os.environ.get("COUPA_WORKER_SCALE_COOLDOWN", "5"))
+        self._last_scale_action_at = 0.0
+        self._scale_up_cpu_threshold = float(os.environ.get("COUPA_SCALE_UP_CPU_PCT", "82"))
+        self._scale_down_cpu_threshold = float(os.environ.get("COUPA_SCALE_DOWN_CPU_PCT", "80"))
+        self._min_free_ram_gb = float(os.environ.get("COUPA_MIN_FREE_RAM_GB", "1.2"))
+        self._estimated_ram_per_worker_gb = float(os.environ.get("COUPA_ESTIMATED_RAM_PER_WORKER_GB", "0.85"))
+        self._task_dispatch_interval = float(os.environ.get("COUPA_TASK_DISPATCH_INTERVAL", "0.1"))
+        self._finalization_poll_interval = 1.0
+        self._required_scale_up_streak = 2
+        self._scale_up_pressure_streak = 0
+        psutil.cpu_percent(interval=None)
+
+    def _pending_finalization_count(self) -> int:
+        """Return pending finalization count."""
+        with self._finalizer_lock:
+            return len(self._pending_finalizations)
+
+    def _register_pending_finalization(
+        self,
+        task_id: str,
+        po_task: POTask,
+        result: Dict[str, Any],
+    ) -> None:
+        """Queue a task for asynchronous finalization and ACK tracking."""
+        future = self.folder_finalizer.enqueue(po_task, result)
+        enqueued_at = time.time()
+
+        with self._finalizer_lock:
+            self._pending_finalizations[task_id] = (po_task, result, future, enqueued_at)
+
+    def _finalize_pending_task(
+        self,
+        task_id: str,
+        po_task: POTask,
+        result: Dict[str, Any],
+        finalization: FolderFinalizationResult,
+    ) -> None:
+        """Apply finalization ACK/fallback and release the task handle."""
+        final_folder = str(getattr(finalization, "final_folder", "") or "")
+        if (not finalization.success) or final_folder.endswith("__WORK"):
+            finalization = self.folder_finalizer.finalize_now(
+                po_task,
+                result,
+                reason="persistent_pool_ack_unsuccessful",
+            )
+
+        if not finalization.success and self._should_retry_finalization(result):
+            retry_count = int(result.get("_finalization_retry_count", 0)) + 1
+            result["_finalization_retry_count"] = retry_count
+            logger.warning(
+                "finalization_retry",
+                task_id=task_id,
+                po_number=po_task.po_number,
+                retry_count=retry_count,
+                max_retries=self._max_finalization_retry_attempts,
+                error=finalization.error,
+            )
+            self._register_pending_finalization(task_id, po_task, result)
+            return
+
+        if finalization.success and finalization.final_folder:
+            result["final_folder"] = finalization.final_folder
+            po_task.status = TaskStatus.COMPLETED
+            result.pop("_finalization_retry_count", None)
+        else:
+            po_task.status = TaskStatus.FAILED
+            result["success"] = False
+            result["status_code"] = "FAILED"
+            if finalization.error:
+                result["message"] = finalization.error
+
+        result["finalization"] = {
+            "success": finalization.success,
+            "error": finalization.error,
+            "final_folder": finalization.final_folder,
+        }
+
+        handle = self._task_handles.get(task_id)
+        if handle:
+            handle._result = result
+
+        self._publish_terminal_task_metric(po_task, result)
+        self._dispatch_task_result(po_task, result)
+        self._task_handles.pop(task_id, None)
+        self._po_tasks.pop(task_id, None)
+
+    def _should_retry_finalization(self, result: Dict[str, Any]) -> bool:
+        """Retry finalization while work folder still exists and retry budget remains."""
+        retry_count = int(result.get("_finalization_retry_count", 0))
+        folder_path = str(result.get("final_folder", ""))
+        if retry_count >= self._max_finalization_retry_attempts:
+            return False
+        if not folder_path.endswith("__WORK"):
+            return False
+        return os.path.isdir(folder_path)
+
+    def _resolve_pending_finalizations(self, force: bool = False) -> int:
+        """Resolve completed/expired finalizations and apply deterministic fallback."""
+        completed: List[tuple[str, POTask, Dict[str, Any], FolderFinalizationResult]] = []
+        timed_out: List[tuple[str, POTask, Dict[str, Any], Future[FolderFinalizationResult], float]] = []
+        now = time.time()
+
+        with self._finalizer_lock:
+            for task_id, (po_task, result, future, enqueued_at) in list(self._pending_finalizations.items()):
+                if future.done():
+                    try:
+                        finalization = future.result()
+                    except Exception as err:  # pragma: no cover - defensive
+                        finalization = FolderFinalizationResult(
+                            task_id=task_id,
+                            po_number=po_task.po_number,
+                            work_folder=str(result.get("final_folder", "")),
+                            status_code=str(result.get("status_code", "")),
+                            final_folder=str(result.get("final_folder", "")),
+                            success=False,
+                            error=str(err),
+                        )
+                    completed.append((task_id, po_task, result, finalization))
+                    self._pending_finalizations.pop(task_id, None)
+                elif (now - enqueued_at) >= self._finalization_ack_timeout_seconds:
+                    timed_out.append((task_id, po_task, result, future, enqueued_at))
+                    self._pending_finalizations.pop(task_id, None)
+                elif force:
+                    try:
+                        finalization = future.result(timeout=0.2)
+                        # BUG-1 fix: success path MUST append to completed; previously the
+                        # successful result was silently discarded, leaking task_handles /
+                        # _po_tasks and leaving every handle.wait_for_completion hanging.
+                        completed.append((task_id, po_task, result, finalization))
+                    except FutureTimeoutError:
+                        timed_out.append((task_id, po_task, result, future, enqueued_at))
+                    except Exception as err:  # pragma: no cover - defensive
+                        finalization = FolderFinalizationResult(
+                            task_id=task_id,
+                            po_number=po_task.po_number,
+                            work_folder=str(result.get("final_folder", "")),
+                            status_code=str(result.get("status_code", "")),
+                            final_folder=str(result.get("final_folder", "")),
+                            success=False,
+                            error=str(err),
+                        )
+                        completed.append((task_id, po_task, result, finalization))
+                    self._pending_finalizations.pop(task_id, None)
+                else:
+                    continue
+
+        for task_id, po_task, result, _future, enqueued_at in timed_out:
+            self.folder_finalizer.mark_timeout(1)
+            logger.warning(
+                "finalization_timeout",
+                task_id=task_id,
+                po_number=po_task.po_number,
+                age_seconds=round(now - enqueued_at, 2),
+                timeout_seconds=self._finalization_ack_timeout_seconds,
+            )
+            finalization = self.folder_finalizer.finalize_now(
+                po_task, result, reason="ack_timeout_or_forced"
+            )
+            completed.append((task_id, po_task, result, finalization))
+
+        for task_id, po_task, result, finalization in completed:
+            self._finalize_pending_task(task_id, po_task, result, finalization)
+
+        return len(completed)
     
     def _validate_config(self) -> None:
         """Validate pool configuration."""
@@ -169,7 +389,9 @@ class PersistentWorkerPool:
         
         try:
             logger.info("Starting PersistentWorkerPool...")
-            _debug_log(f"Starting pool. Config execution_mode: {getattr(self.config, 'execution_mode', 'UNKNOWN')}")
+            self._runtime_debug_log(
+                f"Starting pool. Config execution_mode: {getattr(self.config, 'execution_mode', 'UNKNOWN')}"
+            )
             # Extended startup diagnostics (previous version had bad indentation causing error)
             env_cap = os.environ.get('PERSISTENT_WORKERS_MAX')
             logger.info(
@@ -186,6 +408,7 @@ class PersistentWorkerPool:
                 self._loop = None
             
             # Initialize components in order
+            _sweep_orphaned_driver_processes()
             await self._initialize_profile_manager()
             await self._setup_shutdown_handlers()
             await self._start_workers()
@@ -195,11 +418,8 @@ class PersistentWorkerPool:
             # Start background tasks
             asyncio.create_task(self._monitor_worker_health())
             asyncio.create_task(self._process_task_queue())
-            
-            # Start batch finalizer if enabled
-            from ..lib.config import Config
-            if getattr(Config, 'BATCH_FINALIZATION_ENABLED', False):
-                asyncio.create_task(self._batch_finalizer_loop())
+            asyncio.create_task(self._monitor_resource_scaling())
+            asyncio.create_task(self._monitor_finalizations())
             
             uptime = time.time() - self.start_time
             logger.info("PersistentWorkerPool started successfully", 
@@ -212,6 +432,40 @@ class PersistentWorkerPool:
             logger.error("Failed to start PersistentWorkerPool", error=str(e))
             await self._emergency_cleanup()
             raise RuntimeError(f"Pool startup failed: {e}") from e
+
+    def _runtime_debug_log(self, message: str) -> None:
+        """Write runtime debug traces only when explicitly enabled."""
+        if not self._debug_runtime_enabled:
+            return
+        try:
+            with open("/tmp/worker_debug.log", "a", encoding="utf-8") as debug_log:
+                timestamp = datetime.now().isoformat()
+                debug_log.write(f"[{timestamp}] [POOL] {message}\n")
+        except Exception:
+            pass
+
+    def _publish_pool_activity(self, message: str, *, status: str = "INFO", po_id: str = "SYSTEM", **extra: Any) -> None:
+        """Publish pool-level activity without polluting worker state snapshots."""
+        if not self.communication_manager:
+            return
+        self.communication_manager.publish_activity(
+            message,
+            status=status,
+            worker_id=-1,
+            po_id=po_id,
+            **extra,
+        )
+
+    def _publish_terminal_task_metric(self, po_task: POTask, result: Dict[str, Any]) -> None:
+        """Publish final task outcome once retries/finalization are decided."""
+        self._publish_pool_activity(
+            result.get("message", "") or f"{po_task.po_number} {result.get('status_code', 'FAILED')}",
+            status=str(result.get("status_code") or ("COMPLETED" if result.get("success") else "FAILED")),
+            po_id=po_task.po_number,
+            duration=result.get("processing_time", 0.0),
+            attachments_found=result.get("attachments_found", 0),
+            attachments_downloaded=result.get("attachments_downloaded", 0),
+        )
 
     def register_result_callback(
         self, callback: Callable[[POTask, Dict[str, Any]], None]
@@ -237,14 +491,14 @@ class PersistentWorkerPool:
                     callback=getattr(callback, "__name__", repr(callback)),
                 )
 
-    def _persist_result_to_csv(self, po_task: POTask, result: Dict[str, Any]) -> None:
-        """Persist worker result into CSV handler if configured."""
+    def _persist_result_to_storage(self, po_task: POTask, result: Dict[str, Any]) -> None:
+        """Persist worker result into storage handler if configured."""
         if not self.csv_handler:
             return
 
         po_number = po_task.po_number or result.get("po_number")
         if not po_number:
-            logger.warning("Skipping CSV update: missing PO number", task_id=po_task.task_id)
+            logger.warning("Skipping storage update: missing PO number", task_id=po_task.task_id)
             return
 
         try:
@@ -289,30 +543,39 @@ class PersistentWorkerPool:
                 updates["SUPPLIER"] = supplier_name
 
             self.csv_handler.update_record(po_number, updates)
-        except Exception as csv_error:  # pragma: no cover - defensive logging
+        except Exception as storage_error:  # pragma: no cover - defensive logging
             logger.error(
-                "Failed to update CSV record",
-                error=str(csv_error),
+                "Failed to update storage record",
+                error=str(storage_error),
                 po_number=po_number,
             )
-    
     async def _initialize_profile_manager(self) -> None:
-        """Initialize profile manager and create base profiles."""
+        """Initialize profile manager and create base profiles concurrently."""
         logger.debug("Initializing ProfileManager...")
-        
+
         if self.config.base_profile_path:
             # Set base profile path in profile manager
             self.profile_manager.set_base_profile(
-                self.config.base_profile_path, 
+                self.config.base_profile_path,
                 self.config.base_profile_name or "Default"
             )
-        
-        # Pre-create worker profiles
-        for i in range(self.config.worker_count):
-            worker_id = f"worker-{i+1}"
-            profile_path = self.profile_manager.create_profile(worker_id)
-            logger.debug("Created worker profile", worker_id=worker_id, 
-                        profile_path=profile_path)
+
+        # Create all initial worker profiles concurrently in the thread-pool executor.
+        # ProfileManager._clone_semaphore caps concurrent file copies at
+        # max_concurrent_clones (default 2), so disk I/O stays bounded.
+        loop = asyncio.get_running_loop()
+        worker_ids = [f"worker-{i+1}" for i in range(self._active_worker_target)]
+
+        async def _create_one(wid: str) -> None:
+            try:
+                profile_path = await loop.run_in_executor(
+                    None, self.profile_manager.create_profile, wid
+                )
+                logger.debug("Created worker profile", worker_id=wid, profile_path=profile_path)
+            except Exception as exc:
+                logger.warning("Profile creation failed during init", worker_id=wid, error=str(exc))
+
+        await asyncio.gather(*[_create_one(wid) for wid in worker_ids])
     
 
     async def _setup_shutdown_handlers(self) -> None:
@@ -328,14 +591,14 @@ class PersistentWorkerPool:
     
     async def _start_workers(self) -> None:
         """Start all worker processes."""
-        logger.info("Starting worker processes...", count=self.config.worker_count)
+        logger.info("Starting worker processes...", count=self._active_worker_target)
         
-        for i in range(self.config.worker_count):
+        for i in range(self._active_worker_target):
             worker_id = f"worker-{i+1}"
             await self._start_worker(worker_id)
             
             # Apply stagger delay between worker starts (except for the last one)
-            if i < self.config.worker_count - 1 and self.config.stagger_delay > 0:
+            if i < self._active_worker_target - 1 and self.config.stagger_delay > 0:
                 logger.debug(f"Waiting {self.config.stagger_delay}s before starting next worker", 
                              worker_id=worker_id)
                 await asyncio.sleep(self.config.stagger_delay)
@@ -348,7 +611,7 @@ class PersistentWorkerPool:
             ready_workers = sum(1 for w in self.workers.values() 
                               if w.get_status()['status'] == WorkerStatus.READY.value)
             
-            if ready_workers == self.config.worker_count:
+            if ready_workers == self._active_worker_target:
                 break
                 
             await asyncio.sleep(0.5)
@@ -356,11 +619,236 @@ class PersistentWorkerPool:
         ready_count = sum(1 for w in self.workers.values() 
                          if w.get_status()['status'] == WorkerStatus.READY.value)
         
-        if ready_count < self.config.worker_count:
+        if ready_count < self._active_worker_target:
             logger.warning("Not all workers started successfully", 
-                          ready=ready_count, expected=self.config.worker_count)
+                          ready=ready_count, expected=self._active_worker_target)
         else:
             logger.info("All workers started successfully", count=ready_count)
+
+    def _next_worker_id(self) -> str:
+        """Return the next available worker identifier."""
+        used_numbers: List[int] = []
+        for worker_id in self.workers:
+            try:
+                used_numbers.append(int(str(worker_id).rsplit("-", 1)[-1]))
+            except (TypeError, ValueError):
+                continue
+        return f"worker-{(max(used_numbers) + 1) if used_numbers else 1}"
+
+    def _collect_resource_snapshot(self) -> Dict[str, float]:
+        """Collect a lightweight snapshot of host CPU and RAM pressure."""
+        vm = psutil.virtual_memory()
+        return {
+            "cpu_percent": float(psutil.cpu_percent(interval=None) or 0.0),
+            "available_ram_gb": float(vm.available / (1024 ** 3)),
+            "memory_percent": float(vm.percent),
+        }
+
+    def _publish_resource_snapshot(self, snapshot: Dict[str, float], queue_stats: Dict[str, Any]) -> None:
+        """Send current scaling/resource status to the UI metrics stream."""
+        if not self.communication_manager:
+            return
+
+        self.communication_manager.send_metric({
+            "timestamp": time.time(),
+            "status": "RESOURCE",
+            "message": "Resource snapshot updated",
+            "resource_snapshot": {
+                "cpu_percent": round(float(snapshot.get("cpu_percent", 0.0)), 1),
+                "memory_percent": round(float(snapshot.get("memory_percent", 0.0)), 1),
+                "available_ram_gb": round(float(snapshot.get("available_ram_gb", 0.0)), 2),
+                "worker_count": len(self.workers),
+                "target_worker_count": self._target_worker_count,
+                "autoscaling_enabled": self._autoscaling_enabled,
+                "pending_tasks": int(queue_stats.get("pending_tasks", 0)),
+                "processing_tasks": int(queue_stats.get("processing_tasks", 0)),
+            },
+        })
+
+    def _calculate_worker_adjustment(
+        self,
+        queue_stats: Dict[str, Any],
+        snapshot: Dict[str, float],
+    ) -> int:
+        """Return +1, 0 or -1 according to queue pressure and host headroom."""
+        current_workers = max(1, len(self.workers))
+        pending_tasks = int(queue_stats.get("pending_tasks", 0))
+        processing_tasks = int(queue_stats.get("processing_tasks", 0))
+        total_demand = pending_tasks + processing_tasks
+        cpu_percent = float(snapshot.get("cpu_percent", 100.0))
+        available_ram_gb = float(snapshot.get("available_ram_gb", 0.0))
+        min_pending_for_scale_up = 1 if current_workers < 3 else 2
+
+        if (
+            current_workers < self._target_worker_count
+            and pending_tasks >= min_pending_for_scale_up
+            and total_demand > current_workers
+            and processing_tasks >= current_workers
+            and cpu_percent <= self._scale_up_cpu_threshold
+            and available_ram_gb >= (self._min_free_ram_gb + self._estimated_ram_per_worker_gb)
+        ):
+            return 1
+
+        if (
+            current_workers > 1
+            and (
+                cpu_percent >= self._scale_down_cpu_threshold
+                or available_ram_gb < (self._min_free_ram_gb + (self._estimated_ram_per_worker_gb * 0.5))
+                or (pending_tasks == 0 and processing_tasks < current_workers)
+            )
+        ):
+            return -1
+
+        return 0
+
+    async def _monitor_resource_scaling(self) -> None:
+        """Publish host resource metrics continuously and scale when enabled."""
+        while self._running:
+            try:
+                if self._shutdown_initiated:
+                    return
+
+                queue_stats = self.task_queue.get_queue_status()
+                snapshot = self._collect_resource_snapshot()
+                self._publish_resource_snapshot(snapshot, queue_stats)
+
+                if self._autoscaling_enabled:
+                    if (time.time() - self._last_scale_action_at) < self._scale_cooldown_seconds:
+                        await asyncio.sleep(self._resource_check_interval)
+                        continue
+
+                    adjustment = self._calculate_worker_adjustment(queue_stats, snapshot)
+                    if adjustment > 0:
+                        self._scale_up_pressure_streak += 1
+                    else:
+                        self._scale_up_pressure_streak = 0
+
+                    if adjustment > 0 and self._scale_up_pressure_streak >= self._required_scale_up_streak:
+                        scaled = await self._scale_up_one(snapshot, queue_stats)
+                        if scaled:
+                            self._scale_up_pressure_streak = 0
+                    elif adjustment < 0:
+                        await self._scale_down_one(snapshot, queue_stats)
+
+                await asyncio.sleep(self._resource_check_interval)
+            except Exception as err:
+                logger.error("Error in resource scaling monitor", error=str(err))
+                await asyncio.sleep(self._resource_check_interval)
+
+    async def _scale_up_one(self, snapshot: Dict[str, float], queue_stats: Dict[str, Any]) -> bool:
+        """Start one extra worker when resources and queue pressure allow it."""
+        if len(self.workers) >= self._target_worker_count:
+            return False
+
+        worker_id = self._next_worker_id()
+        await self._start_worker(worker_id)
+        self._active_worker_target = len(self.workers)
+        self._last_scale_action_at = time.time()
+        logger.info(
+            "Scaled worker pool up",
+            worker_id=worker_id,
+            worker_count=len(self.workers),
+            target_workers=self._target_worker_count,
+            pending_tasks=queue_stats.get("pending_tasks", 0),
+            cpu_percent=round(snapshot.get("cpu_percent", 0.0), 1),
+            available_ram_gb=round(snapshot.get("available_ram_gb", 0.0), 2),
+        )
+        self._publish_pool_activity(
+            f"Scaled up to {len(self.workers)} workers",
+            status="INFO",
+            pending_tasks=queue_stats.get("pending_tasks", 0),
+        )
+        return True
+
+    def _pick_idle_worker_for_scale_down(self) -> Optional[str]:
+        """Choose an idle/ready worker so scale-down does not interrupt active work."""
+        for worker_id in sorted(self.workers.keys(), reverse=True):
+            worker = self.workers.get(worker_id)
+            if worker is None:
+                continue
+            try:
+                status = worker.get_status().get("status")
+            except Exception:
+                continue
+            if worker.has_pending_assignment():
+                continue
+            if status in {WorkerStatus.READY.value, WorkerStatus.IDLE.value}:
+                return worker_id
+        return None
+
+    def _release_reserved_worker_tasks(self, worker: WorkerProcess) -> int:
+        """Return non-started worker assignments to the shared queue."""
+        released = 0
+        for task in worker.drain_assigned_tasks():
+            try:
+                self.task_queue.release_task_assignment(task)
+                released += 1
+            except Exception as err:
+                logger.error(
+                    "Failed to release reserved worker task",
+                    worker_id=worker.worker_id,
+                    task_id=getattr(task, "task_id", "unknown"),
+                    error=str(err),
+                )
+        return released
+
+    async def _stop_worker(self, worker_id: str, emergency: bool = False) -> bool:
+        """Stop a single worker and remove it from pool tracking."""
+        worker = self.workers.get(worker_id)
+        thread = self.worker_threads.get(worker_id)
+        if worker is None:
+            return False
+
+        released_assignments = self._release_reserved_worker_tasks(worker)
+
+        if emergency:
+            worker.force_stop()
+        else:
+            worker.stop()
+
+        if thread is not None:
+            thread.join(timeout=min(10.0, self.config.shutdown_timeout * 0.3))
+            if thread.is_alive():
+                logger.warning("Worker thread did not stop during scale down", worker_id=worker_id)
+                return False
+
+        self.workers.pop(worker_id, None)
+        self.worker_threads.pop(worker_id, None)
+        self._active_worker_target = len(self.workers)
+        if released_assignments:
+            logger.info(
+                "Released reserved assignments during worker stop",
+                worker_id=worker_id,
+                released_assignments=released_assignments,
+            )
+        return True
+
+    async def _scale_down_one(self, snapshot: Dict[str, float], queue_stats: Dict[str, Any]) -> bool:
+        """Stop one idle worker when the pool has excess capacity."""
+        worker_id = self._pick_idle_worker_for_scale_down()
+        if worker_id is None:
+            return False
+
+        stopped = await self._stop_worker(worker_id)
+        if not stopped:
+            return False
+
+        self._last_scale_action_at = time.time()
+        logger.info(
+            "Scaled worker pool down",
+            worker_id=worker_id,
+            worker_count=len(self.workers),
+            target_workers=self._target_worker_count,
+            pending_tasks=queue_stats.get("pending_tasks", 0),
+            cpu_percent=round(snapshot.get("cpu_percent", 0.0), 1),
+            available_ram_gb=round(snapshot.get("available_ram_gb", 0.0), 2),
+        )
+        self._publish_pool_activity(
+            f"Scaled down to {len(self.workers)} workers",
+            status="INFO",
+            pending_tasks=queue_stats.get("pending_tasks", 0),
+        )
+        return True
     
     async def _start_worker(self, worker_id: str) -> None:
         """Start a single worker process."""
@@ -412,6 +900,27 @@ class PersistentWorkerPool:
         except Exception as e:
             logger.error("Failed to start worker", worker_id=worker_id, error=str(e))
             raise
+
+    def _dispatch_tasks_to_idle_workers(self) -> int:
+        """Assign one shared-queue task to each free worker."""
+        dispatched = 0
+
+        for worker_id in sorted(self.workers.keys()):
+            worker = self.workers.get(worker_id)
+            if worker is None or not worker.can_accept_task():
+                continue
+
+            task = self.task_queue.get_next_task(worker.worker_id)
+            if task is None:
+                continue
+
+            if not worker.submit_task_assignment(task):
+                self.task_queue.release_task_assignment(task)
+                continue
+
+            dispatched += 1
+
+        return dispatched
     
     def _run_worker_process(self, worker: WorkerProcess) -> None:
         """Run worker process in dedicated thread."""
@@ -419,10 +928,11 @@ class PersistentWorkerPool:
             worker.start()
             
             while self._running and not worker.should_stop():
-                # Get task from queue
-                task = self.task_queue.get_next_task(worker.worker_id)
-                
+                task = worker.get_assigned_task(timeout=self._task_dispatch_interval)
+
                 if task:
+                    task.start_processing()
+
                     # Reuse the live POTask that the handle tracks, or create one if missing
                     po_task = self._po_tasks.get(task.task_id)
                     if not po_task:
@@ -463,35 +973,28 @@ class PersistentWorkerPool:
                     if handle:
                         handle._task_ref = po_task
 
-                    try:
-                        print(f"[Pool] {worker.worker_id} starting task {task.task_id} (PO={po_task.po_number})")
-                    except Exception:
-                        pass
-
-                    # Process task
+                    # Process task directly — the health monitor detects stuck workers
+                    # via heartbeat staleness and force-stops them from the event loop.
+                    # Running process_task() in the worker thread (not a sub-executor)
+                    # avoids the double-restart bug caused by CRASHED status races.
                     result = worker.process_task(po_task)
-                    
+
                     # Update statistics
                     if result['success']:
                         self.completed_tasks += 1
                     else:
                         self.failed_tasks += 1
-                    
+
                     # Handle task completion
                     self._handle_task_completion(task, result, po_task)
-
-                    try:
-                        print(f"[Pool] {worker.worker_id} finished task {task.task_id} (PO={po_task.po_number}) -> {result.get('status_code', 'UNKNOWN')}")
-                    except Exception:
-                        pass
-                else:
-                    # No tasks available, brief sleep
-                    time.sleep(0.1)
                     
         except Exception as e:
-            logger.error("Worker process failed", 
-                        worker_id=worker.worker_id, error=str(e))
-            
+            try:
+                logger.error("Worker process failed",
+                            worker_id=worker.worker_id, error=str(e))
+            except (ValueError, OSError):
+                pass
+
             # Attempt worker restart if not shutting down
             if self._running and not self._shutdown_initiated:
                 if self._loop and not self._loop.is_closed():
@@ -500,34 +1003,70 @@ class PersistentWorkerPool:
                         self._loop
                     )
                 else:
-                    logger.error(
-                        "Cannot restart worker; event loop unavailable",
-                        worker_id=worker.worker_id
-                    )
-        
+                    try:
+                        logger.error(
+                            "Cannot restart worker; event loop unavailable",
+                            worker_id=worker.worker_id
+                        )
+                    except (ValueError, OSError):
+                        pass
+
         finally:
-            logger.debug("Worker process exited", worker_id=worker.worker_id)
+            try:
+                logger.debug("Worker process exited", worker_id=worker.worker_id)
+            except (ValueError, OSError):
+                pass
     
     async def _restart_worker(self, worker_id: str) -> None:
         """Restart a failed worker process."""
-        logger.info("Restarting failed worker", worker_id=worker_id)
-        
+        # Guard: if a restart is already in-flight for this worker, skip.
+        # asyncio is single-threaded so this check + add is atomic between awaits.
+        if worker_id in self._restarting_workers:
+            try:
+                logger.debug("Restart already in progress, skipping duplicate", worker_id=worker_id)
+            except (ValueError, OSError):
+                pass
+            return
+        self._restarting_workers.add(worker_id)
+        try:
+            await self._do_restart_worker(worker_id)
+        finally:
+            self._restarting_workers.discard(worker_id)
+
+    async def _do_restart_worker(self, worker_id: str) -> None:
+        """Internal restart implementation (called only from _restart_worker)."""
+        try:
+            logger.info("Restarting failed worker", worker_id=worker_id)
+        except (ValueError, OSError):
+            pass
+
         # Clean up old worker
         if worker_id in self.workers:
             old_worker = self.workers[worker_id]
+            self._release_reserved_worker_tasks(old_worker)
             old_worker.stop()
             del self.workers[worker_id]
-        
+
         if worker_id in self.worker_threads:
-            # Let thread cleanup naturally
-            del self.worker_threads[worker_id]
-        
+            # Join the old thread before discarding it.  Without this, the old
+            # thread's exception handler can fire _restart_worker a second time
+            # once _restarting_workers.discard() clears the guard, stopping the
+            # freshly-started replacement worker (ghost restart / flap loop).
+            old_thread = self.worker_threads.pop(worker_id)
+            old_thread.join(timeout=5.0)  # bounded; old worker.stop() was already called
+
         # Start new worker
         try:
             await self._start_worker(worker_id)
-            logger.info("Worker restarted successfully", worker_id=worker_id)
+            try:
+                logger.info("Worker restarted successfully", worker_id=worker_id)
+            except (ValueError, OSError):
+                pass
         except Exception as e:
-            logger.error("Failed to restart worker", worker_id=worker_id, error=str(e))
+            try:
+                logger.error("Failed to restart worker", worker_id=worker_id, error=str(e))
+            except (ValueError, OSError):
+                pass
     
     def submit_task(
         self,
@@ -653,7 +1192,6 @@ class PersistentWorkerPool:
             deduplicated=len(unique_po_list),
             priority=priority.value,
         )
-        print(f"[Pool] Task submission summary: {len(po_list)} requested -> {len(unique_po_list)} unique -> {len(handles)} handles created")
 
         return handles
     
@@ -668,125 +1206,108 @@ class PersistentWorkerPool:
                     
                     if status['status'] in ['failed', 'crashed']:
                         failed_workers.append(worker_id)
+                        continue
                     
                     # Check if worker thread is alive
                     thread = self.worker_threads.get(worker_id)
                     if thread and not thread.is_alive():
-                        logger.warning("Worker thread died", worker_id=worker_id)
+                        try:
+                            logger.warning("Worker thread died", worker_id=worker_id)
+                        except (ValueError, OSError):
+                            pass
                         failed_workers.append(worker_id)
-                
+                        continue
+
+                    # Non-blocking heartbeat staleness check.
+                    # NEVER call worker.is_healthy() here — it makes blocking
+                    # Selenium calls that would freeze this entire event loop.
+                    heartbeat_age = status.get('heartbeat_age', 0)
+                    if status['status'] == 'processing' and heartbeat_age > self.config.task_timeout:
+                        try:
+                            logger.warning(
+                                "Worker heartbeat stale — forcing restart",
+                                worker_id=worker_id,
+                                heartbeat_age_s=round(heartbeat_age, 1),
+                                task_timeout=self.config.task_timeout,
+                            )
+                        except (ValueError, OSError):
+                            pass
+                        worker.force_stop()
+                        failed_workers.append(worker_id)
+
                 # Restart failed workers
-                for worker_id in failed_workers:
+                for worker_id in set(failed_workers):
                     await self._restart_worker(worker_id)
-                
+
                 await asyncio.sleep(5)  # Health check every 5 seconds
-                
+
             except Exception as e:
-                logger.error("Error in worker health monitoring", error=str(e))
+                try:
+                    logger.error("Error in worker health monitoring", error=str(e))
+                except (ValueError, OSError):
+                    pass
                 await asyncio.sleep(1)
-    
-    async def _process_task_queue(self) -> None:
-        """Background task queue processing coordinator."""
+
+    async def _monitor_finalizations(self) -> None:
+        """Resolve folder finalization ACKs outside of the dispatch hot path."""
         while self._running:
             try:
-                # Check queue size and worker utilization
-                queue_stats = self.task_queue.get_queue_status()
+                if self._shutdown_initiated:
+                    return
+                self._resolve_pending_finalizations()
+                await asyncio.sleep(self._finalization_poll_interval)
+            except Exception as error:
+                logger.error("Error in finalization monitor", error=str(error))
+                await asyncio.sleep(self._finalization_poll_interval)
+    
+    async def _process_task_queue(self) -> None:
+        """Dispatch pending tasks to free workers."""
+        while self._running:
+            try:
+                dispatched = self._dispatch_tasks_to_idle_workers()
+                if dispatched:
+                    logger.debug("Dispatched tasks to idle workers", dispatched=dispatched)
                 
-                if queue_stats['pending_tasks'] > 0:
-                    logger.debug("Processing task queue", 
-                               pending=queue_stats['pending_tasks'])
-                
-                # Add any queue management logic here
-                # (e.g., load balancing, priority reordering)
-                
-                await asyncio.sleep(1)
+                await asyncio.sleep(self._task_dispatch_interval)
                 
             except Exception as e:
                 logger.error("Error in task queue processing", error=str(e))
-                await asyncio.sleep(1)
+                await asyncio.sleep(self._task_dispatch_interval)
 
-    async def _batch_finalizer_loop(self) -> None:
-        """Background loop to process ready_to_finalize tasks in batches."""
-        from ..lib.config import Config
-        interval = getattr(Config, 'BATCH_FINALIZATION_INTERVAL', 30)
-        
-        logger.info("Batch finalizer loop started", interval=interval)
-        
-        while self._running:
-            try:
-                await asyncio.sleep(interval)
-                
-                # Snapshot pending tasks
-                with self._finalizer_lock:
-                    if not self._pending_finalizations:
-                        continue
-                    to_process = list(self._pending_finalizations)
-                    self._pending_finalizations.clear()
-                
-                logger.info("Batch finalization cycle starting", count=len(to_process))
-                
-                # Process each task in the executor to avoid blocking the loop
-                for po_task, result in to_process:
-                    await self._loop.run_in_executor(
-                        self.executor,
-                        self._finalize_task_folder,
-                        po_task,
-                        result
-                    )
-                    
-                logger.info("Batch finalization cycle completed", count=len(to_process))
-                
-            except Exception as e:
-                logger.error("Error in batch finalizer loop", error=str(e))
-
-    def _finalize_task_folder(self, po_task: POTask, result: Dict[str, Any]) -> None:
-        """Perform actual folder renaming for a task."""
-        from ..lib.po_processing import _rename_folder_with_status
-        
-        folder_path = result.get('final_folder')
-        status_code = result.get('status_code', 'FAILED')
-        po_number = po_task.po_number
-        
-        if not folder_path or not os.path.exists(folder_path):
-            logger.warning("Cannot finalize folder: path missing or non-existent", 
-                         po_number=po_number, path=folder_path)
-            # Finalize the POTask anyway
-            po_task.status = TaskStatus.COMPLETED
-            return
-
-        try:
-            logger.info("Finalizing folder for PO", po_number=po_number, old_path=folder_path)
-            new_path = _rename_folder_with_status(folder_path, status_code)
-            result['final_folder'] = new_path
-            
-            # Update POTask
-            po_task.status = TaskStatus.COMPLETED
-            logger.info("Folder finalized for PO", po_number=po_number, new_path=new_path)
-        except Exception as e:
-            logger.error("Failed to finalize folder for PO", po_number=po_number, error=str(e))
-            po_task.status = TaskStatus.FAILED
-    
     def _handle_task_completion(self, task: ProcessingTask, result: Dict[str, Any], po_task: POTask) -> None:
         """Handle task completion and update tracking."""
         handle = self._task_handles.get(task.task_id)
         if handle and handle._task_ref is not po_task:
             handle._task_ref = po_task
 
+        # Track whether the task has been put back into the pending queue already
+        # (either by task_queue.retry_task or by the rate-limit requeue path below).
+        # Used to prevent double-requeue of the same PO (data corruption / double CSV write).
+        _pending_requeue = False
+
         if result['success']:
-            # Determine if we should defer finalization
-            from ..lib.config import Config
-            batch_enabled = getattr(Config, 'BATCH_FINALIZATION_ENABLED', False)
-            
+            deferred_finalization = (
+                self._batch_finalization_enabled
+                and str(result.get("final_folder", "")).endswith("__WORK")
+            )
+
             po_task.complete_successfully(
                 result_data=result.get('data', {}),
                 downloaded_files=result.get('files', [])
             )
-            # If batching is enabled and it IS a work folder (might not be for NO_ATTACHMENTS)
-            if batch_enabled and result.get('final_folder', '').endswith('__WORK'):
+            if deferred_finalization:
                 po_task.status = TaskStatus.READY_TO_FINALIZE
-                with self._finalizer_lock:
-                    self._pending_finalizations.append((po_task, result))
-                logger.info("Task ready to finalize (deferred)", po_number=po_task.po_number)
+                self._register_pending_finalization(task.task_id, po_task, result)
+                self._publish_pool_activity(
+                    f"Queued finalization for {po_task.po_number}",
+                    status="FINALIZING",
+                    po_id=po_task.po_number,
+                )
+                logger.info(
+                    "Task ready to finalize (deferred)",
+                    po_number=po_task.po_number,
+                    task_id=task.task_id,
+                )
             
             po_task.metadata['result_payload'] = result
 
@@ -798,35 +1319,39 @@ class PersistentWorkerPool:
                 additional_data=result.get('data', {})
             )
 
-            self.task_queue.complete_task(
-                task_id=task.task_id,
-                worker_id=task.assigned_worker or 'unknown',
-                result=task_result
-            )
+            try:
+                self.task_queue.complete_task(
+                    task_id=task.task_id,
+                    worker_id=task.assigned_worker or 'unknown',
+                    result=task_result
+                )
+            except Exception as _cte:
+                # If complete_task raises (e.g. worker-id mismatch after a restart),
+                # the task would stay in active_tasks forever, keeping
+                # processing_tasks > 0 and causing wait_for_completion to hang.
+                # Evict it here so the counter can reach zero.
+                logger.error(
+                    "complete_task raised; evicting from active_tasks to prevent hang",
+                    task_id=task.task_id,
+                    assigned_worker=task.assigned_worker,
+                    error=str(_cte),
+                )
+                with self.task_queue._lock:
+                    self.task_queue.active_tasks.pop(task.task_id, None)
 
-            # Send COMPLETED metric with results (supplements worker-level metrics)
-            if self.communication_manager:
-                metric_data = {
-                    'worker_id': task.assigned_worker or 0,
-                    'po_id': po_task.po_number,
-                    'status': 'COMPLETED',
-                    'timestamp': time.time(),
-                    'duration': result.get('processing_time', 0.0),
-                    'attachments_found': result.get('attachments_found', 0),
-                    'attachments_downloaded': result.get('attachments_downloaded', 0),
-                    'message': result.get('message', ''),
-                }
-                self.communication_manager.send_metric(metric_data)
-
-            if handle:
+            if handle and not deferred_finalization:
                 handle._result = result
 
-            self._task_handles.pop(task.task_id, None)
-            self._po_tasks.pop(task.task_id, None)
+            if not deferred_finalization:
+                self._publish_terminal_task_metric(po_task, result)
+                self._dispatch_task_result(po_task, result)
+                self._task_handles.pop(task.task_id, None)
+                self._po_tasks.pop(task.task_id, None)
 
             logger.debug("Task completed successfully", 
                         po_number=task.po_data.get('po_number', 'unknown'), 
-                        task_id=task.task_id)
+                        task_id=task.task_id,
+                        deferred_finalization=deferred_finalization)
         else:
             error_message = result.get('error', 'Unknown error')
             requeued = self.task_queue.retry_task(
@@ -838,21 +1363,8 @@ class PersistentWorkerPool:
             if not requeued:
                 po_task.metadata['result_payload'] = result
 
-            # Send FAILED metric (supplements worker-level metrics)
-            if self.communication_manager:
-                metric_data = {
-                    'worker_id': task.assigned_worker or 0,
-                    'po_id': po_task.po_number,
-                    'status': 'FAILED',
-                    'timestamp': time.time(),
-                    'duration': result.get('processing_time', 0.0),
-                    'attachments_found': 0,
-                    'attachments_downloaded': 0,
-                    'message': error_message,
-                }
-                self.communication_manager.send_metric(metric_data)
-
             if requeued:
+                _pending_requeue = True
                 try:
                     po_task.reset_for_retry()
                 except ValueError:
@@ -868,9 +1380,16 @@ class PersistentWorkerPool:
                 logger.warning("Task failed, scheduled for retry", 
                               po_number=task.po_data.get('po_number', 'unknown'),
                               error=error_message)
+                self._publish_pool_activity(
+                    f"Retry scheduled for {po_task.po_number}: {error_message}",
+                    status="RETRYING",
+                    po_id=po_task.po_number,
+                )
             else:
                 if handle:
                     handle._result = result
+                self._publish_terminal_task_metric(po_task, result)
+                self._dispatch_task_result(po_task, result)
                 self._task_handles.pop(task.task_id, None)
                 self._po_tasks.pop(task.task_id, None)
 
@@ -878,14 +1397,21 @@ class PersistentWorkerPool:
                               po_number=task.po_data.get('po_number', 'unknown'),
                               error=error_message)
 
-        # Notify result callbacks (CSV persistence, observers, etc.)
-        self._dispatch_task_result(po_task, result)
-
-        # --- Rate limit handling: restart workers to refresh sessions ---
+        # --- Rate limit / access denied: restart the affected worker to refresh session ---
+        # TIMEOUT is intentionally excluded: stuck workers are detected and restarted by
+        # _monitor_worker_health via heartbeat staleness, which avoids the double-restart
+        # race that killed freshly-started workers.
+        #
+        # BUG-3 guard: only fire _delayed_requeue when task_queue has NOT already put the
+        # task back in the pending queue (requeued=True path sets _pending_requeue=True).
+        # Without this guard the same PO would be processed twice — once via the task_queue
+        # retry item still in _queue, and once via a brand-new submit_task() call here.
         try:
+            if self._shutdown_initiated or not self._running:
+                return
+
             status_code = (result.get('status_code') or '').upper()
-            transient_flag = bool(result.get('transient'))
-            if status_code in {'RATE_LIMIT', 'ACCESS_DENIED', 'TIMEOUT'} or (transient_flag and not status_code):
+            if status_code in {'RATE_LIMIT', 'ACCESS_DENIED'} and not _pending_requeue:
                 worker_id = task.assigned_worker or po_task.assigned_worker_id
                 if worker_id and worker_id in self.workers:
                     logger.warning(
@@ -894,57 +1420,22 @@ class PersistentWorkerPool:
                         status_code=status_code,
                         po_number=po_task.po_number,
                     )
-                    # Schedule async restart (don't await inside completion path)
                     if self._loop and not self._loop.is_closed():
                         asyncio.run_coroutine_threadsafe(self._restart_worker(worker_id), self._loop)
-
-                    # If TIMEOUT we escalate to global restart (all workers) with cooldown
-                    if status_code == 'TIMEOUT':
-                        now = time.time()
-                        should_global = False
-                        if self._last_global_timeout_restart is None:
-                            should_global = True
-                        else:
-                            if now - self._last_global_timeout_restart >= self._timeout_global_restart_cooldown:
-                                should_global = True
-                        if should_global:
-                            self._last_global_timeout_restart = now
-                            logger.warning(
-                                "TIMEOUT detected – performing global worker restart",
-                                worker_count=len(self.workers),
-                                cooldown_seconds=self._timeout_global_restart_cooldown,
-                            )
-                            if self._loop and not self._loop.is_closed():
-                                for wid in list(self.workers.keys()):
-                                    # Avoid double scheduling for the already scheduled worker; _restart_worker is idempotent
-                                    asyncio.run_coroutine_threadsafe(self._restart_worker(wid), self._loop)
-                        else:
-                            logger.info(
-                                "Global timeout restart suppressed by cooldown",
-                                seconds_since_last=now - (self._last_global_timeout_restart or 0.0),
-                                cooldown=self._timeout_global_restart_cooldown,
-                            )
 
                     # Automatic requeue policy differentiation
                     # RATE_LIMIT: retry up to 3x with linear backoff 5s,10s,15s
                     # ACCESS_DENIED: single immediate retry (5s) only
-                    # TIMEOUT: retry up to 2x with linear backoff 3s,6s
                     rl_meta_key = 'rate_limit_attempts'
                     attempts = int(getattr(po_task, rl_meta_key, 0))
                     if status_code == 'RATE_LIMIT':
                         max_attempts = 3; base_delay = 5
-                    elif status_code == 'ACCESS_DENIED':
+                    else:  # ACCESS_DENIED
                         max_attempts = 1; base_delay = 5
-                    else:  # TIMEOUT
-                        rl_meta_key = 'timeout_attempts'
-                        attempts = int(getattr(po_task, rl_meta_key, 0))
-                        max_attempts = 2; base_delay = 3
 
                     if attempts < max_attempts:
                         setattr(po_task, rl_meta_key, attempts + 1)
                         if status_code == 'RATE_LIMIT':
-                            delay_seconds = base_delay * (attempts + 1)
-                        elif status_code == 'TIMEOUT':
                             delay_seconds = base_delay * (attempts + 1)
                         else:  # ACCESS_DENIED
                             delay_seconds = base_delay
@@ -958,7 +1449,16 @@ class PersistentWorkerPool:
                         )
 
                         def _delayed_requeue():
+                            if self._shutdown_initiated or not self._running:
+                                return
                             time.sleep(delay_seconds)
+                            if self._shutdown_initiated or not self._running:
+                                logger.info(
+                                    "Skipping transient requeue because shutdown is in progress",
+                                    po_number=po_task.po_number,
+                                    status_code=status_code,
+                                )
+                                return
                             try:
                                 handle = self.submit_task(
                                     po_data={'po_number': po_task.po_number},
@@ -966,15 +1466,9 @@ class PersistentWorkerPool:
                                     metadata=po_task.metadata,
                                 )
                                 # annotate new submission with attempts for CSV persistence hook
-                                if status_code in {'RATE_LIMIT','ACCESS_DENIED'}:
-                                    result['rate_limit_attempts'] = attempts + 1
-                                elif status_code == 'TIMEOUT':
-                                    result['timeout_attempts'] = attempts + 1
+                                result['rate_limit_attempts'] = attempts + 1
                                 # store attempts in handle metadata if needed later
-                                if status_code in {'RATE_LIMIT','ACCESS_DENIED'}:
-                                    handle.po_data['rate_limit_attempts'] = attempts + 1
-                                elif status_code == 'TIMEOUT':
-                                    handle.po_data['timeout_attempts'] = attempts + 1
+                                handle.po_data['rate_limit_attempts'] = attempts + 1
                             except Exception as sub_err:
                                 logger.error(
                                     "Failed to requeue blocked task",
@@ -1008,12 +1502,15 @@ class PersistentWorkerPool:
             'startup_complete': self._startup_complete,
             'uptime_seconds': uptime,
             'worker_count': len(self.workers),
+            'target_worker_count': self._target_worker_count,
+            'autoscaling_enabled': self._autoscaling_enabled,
             'completed_tasks': self.completed_tasks,
             'failed_tasks': self.failed_tasks,
             'workers': worker_stats,
             'task_queue': queue_stats,
             'memory': memory_info,
             'profiles': profile_stats,
+            'finalization': self.folder_finalizer.get_stats(),
             'config': self.config.to_dict()
         }
     
@@ -1031,11 +1528,41 @@ class PersistentWorkerPool:
         
         while self._running:
             stats = self.task_queue.get_queue_status()
+            self._resolve_pending_finalizations()
             
             if stats['pending_tasks'] == 0 and stats['processing_tasks'] == 0:
-                logger.info("All tasks completed")
-                return True
-            
+                pending_finalizations = self._pending_finalization_count()
+                inflight_finalizations = self.folder_finalizer.pending_count()
+                if pending_finalizations == 0 and inflight_finalizations == 0:
+                    logger.info("All tasks completed")
+                    return True
+
+                logger.info(
+                    "Tasks done; waiting for finalization ACKs",
+                    pending_finalizations=pending_finalizations,
+                    inflight_finalizations=inflight_finalizations,
+                )
+                # The outer timeout check below is never reached from this branch
+                # (the `continue` bypasses it), so guard against infinite waits here.
+                if timeout and (time.time() - start_time) > timeout:
+                    logger.warning(
+                        "Timeout waiting for finalization ACKs",
+                        pending_finalizations=pending_finalizations,
+                        inflight_finalizations=inflight_finalizations,
+                    )
+                    return False
+                # flush() blocks on a threading.Condition; calling it directly from
+                # an `async def` stalls the entire event loop and prevents
+                # _monitor_finalizations (and other async tasks) from running —
+                # causing an infinite hang.  Run it in an executor thread instead.
+                loop = asyncio.get_running_loop()
+                await loop.run_in_executor(
+                    None, self.folder_finalizer.flush, self._finalization_ack_timeout_seconds
+                )
+                self._resolve_pending_finalizations(force=True)
+                await asyncio.sleep(0.1)  # yield so async background tasks can run
+                continue
+
             if timeout and (time.time() - start_time) > timeout:
                 logger.warning(
                     "Timeout waiting for task completion",
@@ -1067,32 +1594,45 @@ class PersistentWorkerPool:
         try:
             # Stop accepting new tasks
             self.task_queue.stop()
-            
-            # Wait for current tasks to complete (with timeout)
+            dropped_tasks = self.task_queue.clear(preserve_processing=True)
+            if dropped_tasks:
+                logger.info(
+                    "Shutdown queue drain applied",
+                    dropped_tasks=dropped_tasks,
+                    emergency=emergency,
+                )
+
             if emergency:
-                completion_timeout = 5.0  # Just a few seconds for very quick tasks
+                logger.info(
+                    "Emergency shutdown requested; waiting for active tasks to finish without starting new ones"
+                )
+                # BUG-4 fix: timeout=None made emergency shutdown wait forever when a
+                # worker was hung (which is exactly when emergency is used).  Use a hard
+                # 30 s cap so stop_processing(emergency=True) can actually return.
+                completed = await self.wait_for_completion(timeout=30.0)
             else:
                 completion_timeout = min(self.config.shutdown_timeout * 0.7, 120)
-                
-            completed = await self.wait_for_completion(completion_timeout)
-            
+                completed = await self.wait_for_completion(completion_timeout)
+
             if not completed:
                 logger.warning("Some tasks did not complete before shutdown timeout")
-            
-            # Process remaining pending finalizations before stopping
-            if not emergency:
-                with self._finalizer_lock:
-                    if self._pending_finalizations:
-                        logger.info("Processing pending finalizations before shutdown", count=len(self._pending_finalizations))
-                        to_process = list(self._pending_finalizations)
-                        self._pending_finalizations.clear()
-                        
-                        for po_task, result in to_process:
-                            self._finalize_task_folder(po_task, result)
-            
-            # Stop workers
+
             logger.info("Stopping workers...", emergency=emergency)
-            await self._stop_workers(emergency=emergency)
+            await self._stop_workers(emergency=False)
+
+            # Process remaining pending finalizations after workers stop to avoid browser file locks.
+            pending_finalizations = self._pending_finalization_count()
+            inflight_finalizations = self.folder_finalizer.pending_count()
+            if pending_finalizations or inflight_finalizations:
+                logger.info(
+                    "Processing pending finalizations during shutdown",
+                    count=pending_finalizations,
+                    inflight=inflight_finalizations,
+                    emergency=emergency,
+                )
+                if self._finalization_flush_on_shutdown:
+                    self.folder_finalizer.flush(timeout=self._finalization_ack_timeout_seconds)
+                self._resolve_pending_finalizations(force=True)
             
             # Cleanup components
             await self._cleanup_components()
@@ -1138,8 +1678,37 @@ class PersistentWorkerPool:
                 thread.join(timeout=remaining_time)
                 
                 if thread.is_alive():
-                    logger.warning("Worker thread did not stop gracefully", 
+                    logger.warning("Worker thread did not stop gracefully",
                                   worker_id=worker_id)
+                    # Escalate: kill the browser process directly so the stalled
+                    # thread can unblock from its blocking selenium/OS call.
+                    stalled_worker = self.workers.get(worker_id)
+                    if stalled_worker is not None:
+                        browser_pid = getattr(stalled_worker, '_browser_pid', None)
+                        if browser_pid:
+                            try:
+                                import psutil  # noqa: PLC0415
+                                try:
+                                    ps = psutil.Process(browser_pid)
+                                    for child in ps.children(recursive=True):
+                                        try:
+                                            child.kill()
+                                        except (psutil.NoSuchProcess, psutil.AccessDenied):
+                                            pass
+                                    ps.kill()
+                                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                                    pass
+                                logger.warning(
+                                    "Force-killed browser for stalled worker thread",
+                                    worker_id=worker_id,
+                                    pid=browser_pid,
+                                )
+                            except Exception as kill_err:
+                                logger.debug(
+                                    "Could not force-kill stalled worker browser",
+                                    worker_id=worker_id,
+                                    error=str(kill_err),
+                                )
         
         self.workers.clear()
         self.worker_threads.clear()
@@ -1147,6 +1716,14 @@ class PersistentWorkerPool:
     async def _cleanup_components(self) -> None:
         """Cleanup all pool components."""
         # Memory monitoring removed
+
+        try:
+            self.folder_finalizer.shutdown(
+                flush=self._finalization_flush_on_shutdown,
+                timeout=self._finalization_ack_timeout_seconds,
+            )
+        except Exception as finalizer_error:  # pragma: no cover - defensive logging
+            logger.warning("Folder finalizer shutdown failed", error=str(finalizer_error))
         
         # Cleanup profiles if configured
         if self.config.profile_cleanup_on_shutdown:
@@ -1168,6 +1745,11 @@ class PersistentWorkerPool:
             
             # Force cleanup profiles
             self.profile_manager.cleanup_all_profiles()
+
+            try:
+                self.folder_finalizer.shutdown(flush=False)
+            except Exception:
+                pass
             
             # Memory monitoring removed
             

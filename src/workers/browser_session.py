@@ -21,7 +21,7 @@ from .models import Tab, TabStatus, SessionStatus
 
 # Resolve Coupa base/login URLs from central config (with .env support)
 try:
-    from ..lib.config import Config as _ExperimentalConfig  # type: ignore
+    from ..config.app_config import Config as _ExperimentalConfig  # type: ignore
     BASE_URL: str = getattr(_ExperimentalConfig, "BASE_URL", "https://unilever.coupahost.com")
     LOGIN_URL: str = getattr(_ExperimentalConfig, "LOGIN_URL", BASE_URL) or BASE_URL
 except Exception:
@@ -167,9 +167,10 @@ class BrowserSession:
             logger.info("Authenticating with Coupa...", base_url=BASE_URL, login_url=LOGIN_URL)
             self.status = SessionStatus.INITIALIZING
             
-            # Navigate to Coupa login page
-            # This is configured per instance; prefer explicit COUPA_LOGIN_URL, else BASE_URL (SSO-friendly)
-            self.driver.get(LOGIN_URL)
+            # Navigate to base URL first to trigger the SSO redirect chain.
+            # Navigating directly to LOGIN_URL (/sessions/new) bypasses SSO and shows
+            # the native Coupa form, which breaks profile-based cookie authentication.
+            self.driver.get(BASE_URL)
             
             # Wait for login page to load
             wait = WebDriverWait(self.driver, 10)
@@ -295,7 +296,6 @@ class BrowserSession:
 
             # Keeper tab must exist before we spawn worker tabs
             self.ensure_keeper_tab()
-            self.focus_main_window()
 
             # Capture current handles and open a new tab
             prev_handles = set(self.driver.window_handles)
@@ -329,7 +329,6 @@ class BrowserSession:
             self.active_tabs[task_id] = tab
 
             self.last_activity = time.time()
-            self._log_window_handles("Worker tab created")
             logger.debug("Tab created successfully", task_id=task_id, handle=new_handle)
 
             return new_handle
@@ -340,6 +339,52 @@ class BrowserSession:
             self.last_error = error_msg
             self.error_count += 1
             raise RuntimeError(error_msg) from e
+
+    def trim_to_single_tab(self, preferred_handle: Optional[str] = None) -> bool:
+        """Close restored tabs/windows and keep exactly one lightweight keeper tab."""
+        if not self.driver:
+            logger.warning("Cannot trim tabs without WebDriver")
+            return False
+
+        try:
+            handles = list(self.driver.window_handles)
+            if not handles:
+                return False
+
+            keeper = preferred_handle if preferred_handle in handles else None
+            if not keeper and self.keeper_handle in handles:
+                keeper = self.keeper_handle
+            if not keeper and self.main_window_handle in handles:
+                keeper = self.main_window_handle
+            if not keeper:
+                try:
+                    keeper = self.driver.current_window_handle
+                except Exception:
+                    keeper = handles[0]
+            if keeper not in handles:
+                keeper = handles[0]
+
+            closed_count = 0
+            for handle in list(handles):
+                if handle == keeper:
+                    continue
+                try:
+                    self.driver.switch_to.window(handle)
+                    self.driver.close()
+                    closed_count += 1
+                except Exception as close_err:
+                    logger.debug("Failed to close restored tab", handle=handle, error=str(close_err))
+
+            self.driver.switch_to.window(keeper)
+            self.keeper_handle = keeper
+            self.main_window_handle = keeper
+            self.active_tabs.clear()
+            self.last_activity = time.time()
+            logger.info("Collapsed browser session to a single keeper tab", closed_tabs=closed_count)
+            return True
+        except Exception as exc:
+            logger.warning("Failed to collapse browser tabs", error=str(exc))
+            return False
     
     def close_tab(self, tab_handle: str) -> None:
         """
@@ -382,10 +427,6 @@ class BrowserSession:
             
             # Always refocus the main window after closing a tab
             self.focus_main_window()
-            self._log_window_handles("Worker tab closed")
-            # Ensure keeper tab still exists after close
-            if not self.ensure_keeper_tab():
-                logger.warning("Keeper tab missing after close; attempted recreation failed")
 
             self.last_activity = time.time()
             

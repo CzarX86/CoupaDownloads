@@ -7,7 +7,7 @@ This release includes everything you need to run CoupaDownloads on Windows with 
 - ✅ **Parallel Processing** - Process multiple POs simultaneously with configurable workers
 - ✅ **Profile Isolation** - Independent browser profiles prevent worker conflicts
 - ✅ **Performance Scaling** - Up to 6x faster processing with optimal worker configuration
-- ✅ **Automatic EdgeDriver download** - No manual driver management needed
+- ✅ **Automatic EdgeDriver cache** - First run downloads the compatible EdgeDriver, later runs reuse the per-user cache
 - ✅ **Enhanced driver compatibility** - Works with Edge 116-120
 - ✅ **One-click setup** - Just run `setup_windows.bat`
 - ✅ **All dependencies included** - No internet required after setup
@@ -44,7 +44,7 @@ Supported columns (CSV/Excel) — the app fills these when available:
 **Standard Mode (Sequential):**
 ```cmd
 # Run the application (module mode)
-poetry run python -m src.Core_main
+uv run python -m src.Core_main
 ```
 
 **Parallel Processing Mode:**
@@ -52,10 +52,10 @@ poetry run python -m src.Core_main
 # Enable parallel processing with environment variables
 export COUPA_ENABLE_PARALLEL=true
 export COUPA_MAX_WORKERS=4
-poetry run python -m src.Core_main
+uv run python -m src.Core_main
 
 # Or configure directly in interactive mode
-poetry run python -m src.Core_main --parallel --workers 4
+uv run python -m src.Core_main --parallel --workers 4
 ```
 
 **Parallel Processing Configuration:**
@@ -67,9 +67,9 @@ poetry run python -m src.Core_main --parallel --workers 4
 For detailed configuration options, see: `EXPERIMENTAL/docs/parallel-processing.md`
 
 ### Feedback and training loop
-- 🪄 **Guided wizard** — `poetry run python tools/feedback_cli.py wizard`
+- 🪄 **Guided wizard** — `uv run python tools/feedback_cli.py wizard`
   - Launches an interactive, English-only walkthrough for preparing review CSVs, ingesting annotations, evaluating metrics, training Sentence Transformers, and exporting Label Studio tasks.
-- ⚙️ **Classic CLI** — `poetry run python tools/feedback_cli.py --help`
+- ⚙️ **Classic CLI** — `uv run python tools/feedback_cli.py --help`
   - Ideal for automation; uses the same handlers that the wizard calls behind the scenes.
 
 ### Conversão opcional de .msg para .pdf
@@ -89,7 +89,7 @@ For a complete end-to-end manual (installation, configuration, running, outputs,
 ## 🔧 What the Setup Does
 
 1. **Checks Python installation**
-2. **Downloads EdgeDrivers automatically**
+2. **Checks the per-user EdgeDriver cache and downloads only when needed**
 3. **Creates virtual environment**
 4. **Installs all dependencies**
 5. **Sets up sample files**
@@ -101,10 +101,8 @@ For a complete end-to-end manual (installation, configuration, running, outputs,
 ```
 CoupaDownloads/
 ├── setup_windows.bat          # Windows installer
-├── download_drivers.bat       # Driver download script
-├── pyproject.toml             # Manifesto de dependências (Poetry)
-├── poetry.lock                # Versões travadas das dependências
-├── drivers/                   # EdgeDriver versions (downloaded)
+├── pyproject.toml             # Manifesto PEP 621 usado pelo uv
+├── uv.lock                    # Versões travadas das dependências
 ├── src/                      # Application source code
 ├── EXPERIMENTAL/             # Parallel processing implementation
 │   ├── docs/parallel-processing.md  # Parallel processing guide
@@ -133,6 +131,12 @@ CoupaDownloads/
 - Check internet connection
 - Run Command Prompt as Administrator
 - Disable antivirus temporarily
+- The app stores EdgeDriver in the user cache, not inside the project folder
+
+### SQLite Session Storage
+- Session SQLite databases are stored in the app state directory, not in the driver cache
+- macOS default: `~/Library/Application Support/CoupaDownloads/sqlite/`
+- This database is kept after execution for inspection/reporting
 
 ### Permission Errors
 - Run Command Prompt as Administrator
@@ -144,7 +148,7 @@ CoupaDownloads/
 - **Memory issues**: Lower worker count or increase system RAM
 - **Performance not improving**: Check system specs and network latency
 
-Run performance validation: `poetry run pytest tests/integration/parallel/test_performance_validation.py -v`
+Run performance validation: `uv run pytest tests/integration/parallel/test_performance_validation.py -v`
 
 ### 📁 Folder Naming (New Convention)
 During processing each PO now uses a canonical working directory ending with `__WORK` (e.g. `PO_123456__WORK`).
@@ -163,8 +167,8 @@ Older runs may still contain multiple suffixed variants; new executions won’t 
 
 You'll know it's working when:
 - ✅ Python version shows (3.8 or higher)
-- ✅ EdgeDrivers download successfully
-- ✅ Virtual environment activates (shows `(venv)` in prompt)
+- ✅ EdgeDriver is downloaded on first run or reused from cache on subsequent runs
+- ✅ `uv sync` completes and creates/updates `.venv`
 - ✅ Dependencies install without errors
 - ✅ Browser opens when running the application
 - ✅ Parallel processing shows worker count > 1 in logs (when enabled)
@@ -195,10 +199,10 @@ To update to a new release:
 This repo includes an isolated RAG module under `embeddinggemma_feasibility`.
 
 - Instale todas as dependências (core, ML, anotação, testes) com:
-  - `poetry install`
+  - `uv sync --all-groups`
 
 Run the interactive RAG CLI:
-- `poetry run rag-cli`
+- `uv run rag-cli`
 
 Notes:
 - The RAG stack uses LlamaIndex + HNSWLib. Internet may be required on first run to download small HF models unless cached.

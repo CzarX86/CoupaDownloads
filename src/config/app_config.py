@@ -30,6 +30,37 @@ class ExecutionMode(str, Enum):
     DIRECT_HTTP = "direct_http"
 
 
+def generate_timestamped_download_folder(base_path: Optional[str] = None) -> str:
+    """Generate a timestamped CoupaDownloads folder path."""
+    if base_path is None:
+        base_path = str(Path.home() / "Downloads")
+
+    timestamp = datetime.now().strftime("%Y%m%d-%Hh%M")
+    folder_name = f"{timestamp}_CoupaDownloads"
+    return str(Path(base_path) / folder_name)
+
+
+def default_app_state_dir() -> Path:
+    """Return the persistent application state directory for the current OS."""
+    home = Path.home()
+    system = os.name
+
+    if system == "nt":
+        appdata = os.environ.get("APPDATA") or os.environ.get("LOCALAPPDATA")
+        if appdata:
+            return Path(appdata) / "CoupaDownloads"
+        return home / "AppData" / "Roaming" / "CoupaDownloads"
+
+    platform_name = os.uname().sysname.lower() if hasattr(os, "uname") else ""
+    if platform_name == "darwin":
+        return home / "Library" / "Application Support" / "CoupaDownloads"
+
+    xdg_state_home = os.environ.get("XDG_STATE_HOME")
+    if xdg_state_home:
+        return Path(xdg_state_home) / "CoupaDownloads"
+    return home / ".local" / "state" / "CoupaDownloads"
+
+
 class AppConfig(BaseSettings):
     """
     Unified application configuration loaded from .env and defaults.
@@ -39,7 +70,7 @@ class AppConfig(BaseSettings):
     """
     
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=str(Path(__file__).resolve().parents[2] / ".env"),
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",  # Ignore extra env vars
@@ -86,7 +117,11 @@ class AppConfig(BaseSettings):
     )
     
     edge_profile_dir: str = Field(
-        default_factory=lambda: str(Path.home() / "Library" / "Application Support" / "Microsoft Edge") if os.name != 'nt' else "%LOCALAPPDATA%/Microsoft Edge/User Data",
+        default_factory=lambda: str(
+            Path.home() / "Library" / "Application Support" / "Microsoft Edge"
+            if os.name != 'nt'
+            else Path(os.environ.get("LOCALAPPDATA") or (Path.home() / "AppData" / "Local")) / "Microsoft Edge" / "User Data"
+        ),
         description="Directory for Edge browser profiles"
     )
     
@@ -98,6 +133,11 @@ class AppConfig(BaseSettings):
     use_profile: bool = Field(
         default=True,
         description="Whether to use browser profiles"
+    )
+
+    close_edge_processes: bool = Field(
+        default=True,
+        description="Close existing Edge processes before starting automation"
     )
     
     headless: bool = Field(
@@ -197,6 +237,25 @@ class AppConfig(BaseSettings):
         le=60,
         description="Interval for batch finalization in seconds"
     )
+
+    finalization_ack_timeout_seconds: int = Field(
+        default=20,
+        ge=1,
+        le=300,
+        description="Maximum wait for folder finalization ACK before fallback"
+    )
+
+    finalization_batch_size: int = Field(
+        default=50,
+        ge=1,
+        le=500,
+        description="Maximum number of folders processed per finalization batch"
+    )
+
+    finalization_flush_on_shutdown: bool = Field(
+        default=True,
+        description="Flush finalization queue before worker shutdown"
+    )
     
     # =========================================================================
     # Driver Configuration
@@ -204,12 +263,27 @@ class AppConfig(BaseSettings):
     
     driver_auto_download: bool = Field(
         default=True,
-        description="Automatically download EdgeDriver if not found"
+        description="Automatically download and cache EdgeDriver when needed"
     )
     
     edge_driver_path: Optional[Path] = Field(
         default=None,
         description="Explicit path to EdgeDriver"
+    )
+
+    edge_driver_cache_dir: Optional[Path] = Field(
+        default=None,
+        description="Optional override for the persistent EdgeDriver cache directory"
+    )
+
+    driver_cache_enabled: bool = Field(
+        default=True,
+        description="Enable persistent per-user EdgeDriver cache"
+    )
+
+    driver_cache_cleanup_enabled: bool = Field(
+        default=True,
+        description="Clean up stale cached EdgeDriver versions after successful resolution"
     )
 
     page_load_timeout: int = Field(
@@ -406,6 +480,50 @@ class AppConfig(BaseSettings):
         default=True,
         description="Suppress worker output during execution"
     )
+
+    # =========================================================================
+    # Output and Persistence
+    # =========================================================================
+
+    msg_to_pdf_enabled: bool = Field(
+        default=True,
+        description="Enable MSG to PDF conversion in post-processing"
+    )
+
+    msg_to_pdf_overwrite: bool = Field(
+        default=False,
+        description="Overwrite existing PDF files when converting MSG files"
+    )
+
+    sqlite_only_persistence: bool = Field(
+        default=True,
+        description="Persist processing status only in SQLite during execution"
+    )
+
+    csv_output_suffix: str = Field(
+        default="_processed",
+        description="Suffix for processed CSV output copy names"
+    )
+
+    csv_output_include_timestamp: bool = Field(
+        default=True,
+        description="Include timestamp in processed CSV output copy names"
+    )
+
+    csv_output_dir: Optional[Path] = Field(
+        default=None,
+        description="Optional output directory for processed CSV copies"
+    )
+
+    application_state_dir: Path = Field(
+        default_factory=default_app_state_dir,
+        description="Persistent application state directory"
+    )
+
+    sqlite_session_dir: Optional[Path] = Field(
+        default=None,
+        description="Optional override for the persistent SQLite session directory"
+    )
     
     # =========================================================================
     # Parallel Processing (Legacy Support)
@@ -432,6 +550,14 @@ class AppConfig(BaseSettings):
     # Validators
     # =========================================================================
     
+    @field_validator('edge_profile_dir', mode='before')
+    @classmethod
+    def expand_edge_profile_dir(cls, v):
+        """Expand ~ in Edge profile directory path."""
+        if isinstance(v, str):
+            return str(Path(v).expanduser())
+        return v
+
     @field_validator('download_folder', mode='before')
     @classmethod
     def expand_download_folder(cls, v):
@@ -452,6 +578,30 @@ class AppConfig(BaseSettings):
     @classmethod
     def expand_driver_path(cls, v):
         """Expand ~ in driver path."""
+        if isinstance(v, str):
+            return Path(v).expanduser()
+        return v
+
+    @field_validator('edge_driver_cache_dir', mode='before')
+    @classmethod
+    def expand_driver_cache_dir(cls, v):
+        """Expand ~ in driver cache path."""
+        if isinstance(v, str):
+            return Path(v).expanduser()
+        return v
+
+    @field_validator('csv_output_dir', mode='before')
+    @classmethod
+    def expand_csv_output_dir(cls, v):
+        """Expand ~ in CSV output directory path."""
+        if isinstance(v, str):
+            return Path(v).expanduser()
+        return v
+
+    @field_validator('application_state_dir', 'sqlite_session_dir', mode='before')
+    @classmethod
+    def expand_state_paths(cls, v):
+        """Expand ~ in persistent state paths."""
         if isinstance(v, str):
             return Path(v).expanduser()
         return v
@@ -500,7 +650,10 @@ class AppConfig(BaseSettings):
     
     @EXCEL_FILE_PATH.setter
     def EXCEL_FILE_PATH(self, value: Optional[Path]):
-        self.excel_file_path = value
+        if isinstance(value, str):
+            self.excel_file_path = Path(value).expanduser()
+        else:
+            self.excel_file_path = value
     
     @property
     def DOWNLOAD_FOLDER(self) -> Path:
@@ -509,7 +662,10 @@ class AppConfig(BaseSettings):
     
     @DOWNLOAD_FOLDER.setter
     def DOWNLOAD_FOLDER(self, value: Path):
-        self.download_folder = value
+        if isinstance(value, str):
+            self.download_folder = Path(value).expanduser()
+        else:
+            self.download_folder = value
     
     @property
     def EDGE_PROFILE_DIR(self) -> str:
@@ -570,11 +726,24 @@ class AppConfig(BaseSettings):
     def LOGIN_TIMEOUT(self) -> int:
         """Legacy compatibility for Config.LOGIN_TIMEOUT."""
         return self.login_timeout
+
+    @property
+    def PAGE_DELAY(self) -> float:
+        """Legacy compatibility for Config.PAGE_DELAY."""
+        return self.page_delay
+
+    @PAGE_DELAY.setter
+    def PAGE_DELAY(self, value: float):
+        self.page_delay = value
     
     @property
     def USE_PROFILE(self) -> bool:
         """Legacy compatibility for Config.USE_PROFILE."""
         return self.use_profile
+
+    @USE_PROFILE.setter
+    def USE_PROFILE(self, value: bool):
+        self.use_profile = value
     
     @property
     def ENABLE_PARALLEL_PROCESSING(self) -> bool:
@@ -585,11 +754,30 @@ class AppConfig(BaseSettings):
     def MAX_PARALLEL_WORKERS(self) -> int:
         """Legacy compatibility for Config.MAX_PARALLEL_WORKERS."""
         return self.max_workers
+
+    @property
+    def PROC_WORKERS_CAP(self) -> int:
+        """Legacy compatibility for Config.PROC_WORKERS_CAP."""
+        return self.proc_workers_cap
+
+    @PROC_WORKERS_CAP.setter
+    def PROC_WORKERS_CAP(self, value: int):
+        self.proc_workers_cap = value
     
     @property
     def PARALLEL_MIN_POS_THRESHOLD(self) -> int:
         """Legacy compatibility for Config.PARALLEL_MIN_POS_THRESHOLD."""
         return self.parallel_min_pos_threshold
+
+    @property
+    def PARALLEL_WORKER_TIMEOUT(self) -> int:
+        """Legacy compatibility for Config.PARALLEL_WORKER_TIMEOUT."""
+        return self.parallel_worker_timeout
+
+    @property
+    def PARALLEL_PROFILE_CLEANUP(self) -> bool:
+        """Legacy compatibility for Config.PARALLEL_PROFILE_CLEANUP."""
+        return self.parallel_profile_cleanup
     
     @property
     def RESOURCE_AWARE_SCALING(self) -> bool:
@@ -620,16 +808,85 @@ class AppConfig(BaseSettings):
     def SHOW_SELENIUM_LOGS(self) -> bool:
         """Legacy compatibility for Config.SHOW_SELENIUM_LOGS."""
         return self.show_selenium_logs
+
+    @property
+    def CLOSE_EDGE_PROCESSES(self) -> bool:
+        """Legacy compatibility for Config.CLOSE_EDGE_PROCESSES."""
+        return self.close_edge_processes
+
+    @CLOSE_EDGE_PROCESSES.setter
+    def CLOSE_EDGE_PROCESSES(self, value: bool):
+        self.close_edge_processes = value
     
     @property
     def DRIVER_AUTO_DOWNLOAD(self) -> bool:
         """Legacy compatibility for Config.DRIVER_AUTO_DOWNLOAD."""
         return self.driver_auto_download
+
+    @property
+    def DRIVER_CACHE_ENABLED(self) -> bool:
+        """Legacy compatibility for Config.DRIVER_CACHE_ENABLED."""
+        return self.driver_cache_enabled
+
+    @property
+    def DRIVER_CACHE_CLEANUP_ENABLED(self) -> bool:
+        """Legacy compatibility for Config.DRIVER_CACHE_CLEANUP_ENABLED."""
+        return self.driver_cache_cleanup_enabled
+
+    @property
+    def BATCH_FINALIZATION_ENABLED(self) -> bool:
+        """Legacy compatibility for Config.BATCH_FINALIZATION_ENABLED."""
+        return self.batch_finalization_enabled
+
+    @BATCH_FINALIZATION_ENABLED.setter
+    def BATCH_FINALIZATION_ENABLED(self, value: bool):
+        self.batch_finalization_enabled = value
+
+    @property
+    def BATCH_FINALIZATION_INTERVAL(self) -> int:
+        """Legacy compatibility for Config.BATCH_FINALIZATION_INTERVAL."""
+        return self.batch_finalization_interval
+
+    @BATCH_FINALIZATION_INTERVAL.setter
+    def BATCH_FINALIZATION_INTERVAL(self, value: int):
+        self.batch_finalization_interval = value
+
+    @property
+    def FINALIZATION_ACK_TIMEOUT_SECONDS(self) -> int:
+        """Legacy compatibility for Config.FINALIZATION_ACK_TIMEOUT_SECONDS."""
+        return self.finalization_ack_timeout_seconds
+
+    @FINALIZATION_ACK_TIMEOUT_SECONDS.setter
+    def FINALIZATION_ACK_TIMEOUT_SECONDS(self, value: int):
+        self.finalization_ack_timeout_seconds = value
+
+    @property
+    def FINALIZATION_BATCH_SIZE(self) -> int:
+        """Legacy compatibility for Config.FINALIZATION_BATCH_SIZE."""
+        return self.finalization_batch_size
+
+    @FINALIZATION_BATCH_SIZE.setter
+    def FINALIZATION_BATCH_SIZE(self, value: int):
+        self.finalization_batch_size = value
+
+    @property
+    def FINALIZATION_FLUSH_ON_SHUTDOWN(self) -> bool:
+        """Legacy compatibility for Config.FINALIZATION_FLUSH_ON_SHUTDOWN."""
+        return self.finalization_flush_on_shutdown
+
+    @FINALIZATION_FLUSH_ON_SHUTDOWN.setter
+    def FINALIZATION_FLUSH_ON_SHUTDOWN(self, value: bool):
+        self.finalization_flush_on_shutdown = value
     
     @property
     def EDGE_DRIVER_PATH(self) -> Optional[Path]:
         """Legacy compatibility for Config.EDGE_DRIVER_PATH."""
         return self.edge_driver_path
+
+    @property
+    def EDGE_DRIVER_CACHE_DIR(self) -> Optional[Path]:
+        """Legacy compatibility for Config.EDGE_DRIVER_CACHE_DIR."""
+        return self.edge_driver_cache_dir
     
     @property
     def ATTACHMENT_WAIT_TIMEOUT(self) -> int:
@@ -730,6 +987,54 @@ class AppConfig(BaseSettings):
     def PR_LINK_TEXT_CANDIDATES(self) -> List[str]:
         """Legacy compatibility for Config.PR_LINK_TEXT_CANDIDATES."""
         return self.pr_link_text_candidates
+
+    @property
+    def MSG_TO_PDF_ENABLED(self) -> bool:
+        """Legacy compatibility for Config.MSG_TO_PDF_ENABLED."""
+        return self.msg_to_pdf_enabled
+
+    @MSG_TO_PDF_ENABLED.setter
+    def MSG_TO_PDF_ENABLED(self, value: bool):
+        self.msg_to_pdf_enabled = value
+
+    @property
+    def MSG_TO_PDF_OVERWRITE(self) -> bool:
+        """Legacy compatibility for Config.MSG_TO_PDF_OVERWRITE."""
+        return self.msg_to_pdf_overwrite
+
+    @MSG_TO_PDF_OVERWRITE.setter
+    def MSG_TO_PDF_OVERWRITE(self, value: bool):
+        self.msg_to_pdf_overwrite = value
+
+    @property
+    def SQLITE_ONLY_PERSISTENCE(self) -> bool:
+        """Legacy compatibility for Config.SQLITE_ONLY_PERSISTENCE."""
+        return self.sqlite_only_persistence
+
+    @property
+    def CSV_OUTPUT_SUFFIX(self) -> str:
+        """Legacy compatibility for Config.CSV_OUTPUT_SUFFIX."""
+        return self.csv_output_suffix
+
+    @property
+    def CSV_OUTPUT_INCLUDE_TIMESTAMP(self) -> bool:
+        """Legacy compatibility for Config.CSV_OUTPUT_INCLUDE_TIMESTAMP."""
+        return self.csv_output_include_timestamp
+
+    @property
+    def CSV_OUTPUT_DIR(self) -> Optional[Path]:
+        """Legacy compatibility for Config.CSV_OUTPUT_DIR."""
+        return self.csv_output_dir
+
+    @property
+    def APPLICATION_STATE_DIR(self) -> Path:
+        """Legacy compatibility for Config.APPLICATION_STATE_DIR."""
+        return self.application_state_dir
+
+    @property
+    def SQLITE_SESSION_DIR(self) -> Optional[Path]:
+        """Legacy compatibility for Config.SQLITE_SESSION_DIR."""
+        return self.sqlite_session_dir
     
     @property
     def INPUT_DIR(self) -> Path:
@@ -760,5 +1065,6 @@ def get_config() -> AppConfig:
 
 
 # Backward compatibility: Allow imports like `from src.config.app_config import Config`
-Config = AppConfig
+Config: AppConfig = get_config()
+ExperimentalConfig: AppConfig = Config
 ExperimentalSettings = AppConfig

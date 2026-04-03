@@ -17,7 +17,7 @@ from ..lib.models import ExecutionMode, HeadlessConfiguration
 from ..config.app_config import get_config
 from ..core.telemetry import TelemetryProvider
 from ..core.status import StatusLevel
-from ..csv_manager import CSVManager
+from ..persistence_manager import CSVManager
 
 # Utility functions from core.utils
 from ..core.utils import (
@@ -83,7 +83,6 @@ class ProcessingService:
         
         progress = int((index / total) * 100)
         self.telemetry.emit_progress(index, total, f"Processing PO {index}/{total}: {display_po}")
-        self.telemetry.emit_status(StatusLevel.INFO, f"Current PO: {display_po} [Mode: {mode_str.upper()}]", progress=progress)
 
         try:
             # Create hierarchical folder structure

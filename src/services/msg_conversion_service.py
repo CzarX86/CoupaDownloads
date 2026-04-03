@@ -13,7 +13,7 @@ import re
 from dataclasses import dataclass
 from html import unescape
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from ..core.protocols import TelemetryEmitter
 from ..core.status import StatusLevel
@@ -57,6 +57,49 @@ def _coerce_latin1(text: str) -> str:
         return text
 
 
+def _to_text(value: Any) -> str:
+    """Best-effort conversion from MSG fields to plain text."""
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        try:
+            return value.decode("utf-8")
+        except Exception:
+            return value.decode("latin-1", errors="replace")
+    if isinstance(value, str):
+        return value
+    return str(value)
+
+
+def _clean_for_pdf(value: Any) -> str:
+    """
+    Normalize text for PDF generation.
+
+    fpdf2 may fail when width calculations hit control chars; we strip ASCII
+    controls while preserving common whitespace.
+    """
+    text = _to_text(value)
+    # Keep tab/newline/carriage return; replace remaining control chars.
+    text = "".join(ch if ch in ("\t", "\n", "\r") or ord(ch) >= 32 else " " for ch in text)
+    return _coerce_latin1(text)
+
+
+def _write_full_width_text(pdf: Any, text: str, h: int = 8) -> None:
+    """
+    Write text in a full-width multiline block and reset cursor safely.
+
+    fpdf2 defaults can keep x-position on the right edge after `multi_cell`,
+    which causes follow-up `w=0` writes to fail with width=0.
+    """
+    pdf.set_x(pdf.l_margin)
+    try:
+        pdf.multi_cell(0, h, text, new_x="LMARGIN", new_y="NEXT")
+    except TypeError:
+        # Compatibility fallback for older signatures.
+        pdf.multi_cell(0, h, text)
+        pdf.set_x(pdf.l_margin)
+
+
 class MsgToPdfConverter:
     """Convert Outlook .msg files to simple PDF documents."""
 
@@ -83,23 +126,23 @@ class MsgToPdfConverter:
 
         try:
             message = extract_msg.Message(str(msg_path))
-            subject = getattr(message, "subject", "") or ""
-            sender = getattr(message, "sender", "") or getattr(message, "sender_email", "")
+            subject = _to_text(getattr(message, "subject", "") or "")
+            sender = _to_text(getattr(message, "sender", "") or getattr(message, "sender_email", ""))
             to_list = getattr(message, "to", []) or []
             cc_list = getattr(message, "cc", []) or []
-            to = ", ".join(to_list) if isinstance(to_list, list) else str(to_list)
-            cc = ", ".join(cc_list) if isinstance(cc_list, list) else str(cc_list)
-            date = getattr(message, "date", "") or ""
-            body = getattr(message, "body", "") or ""
+            to = ", ".join(_to_text(v) for v in to_list) if isinstance(to_list, (list, tuple)) else _to_text(to_list)
+            cc = ", ".join(_to_text(v) for v in cc_list) if isinstance(cc_list, (list, tuple)) else _to_text(cc_list)
+            date = _to_text(getattr(message, "date", "") or "")
+            body = _to_text(getattr(message, "body", "") or "")
             if not body and hasattr(message, "htmlBody"):
-                body = _strip_html(getattr(message, "htmlBody") or "")
+                body = _strip_html(_to_text(getattr(message, "htmlBody") or ""))
 
             attachments: List[str] = []
             try:
                 for att in getattr(message, "attachments", []) or []:
                     name = getattr(att, "longFilename", "") or getattr(att, "shortFilename", "") or getattr(att, "filename", "")
                     if name:
-                        attachments.append(str(name))
+                        attachments.append(_to_text(name))
             except Exception:
                 # Attachment listing is best-effort; continue on failure.
                 pass
@@ -112,49 +155,33 @@ class MsgToPdfConverter:
             pdf.add_page()
 
             pdf.set_font("Helvetica", "B", 14)
-            pdf.cell(0, 10, _coerce_latin1("Message Summary"), ln=1)
+            pdf.cell(0, 10, "Message Summary", ln=1)
 
-            pdf.set_font("Helvetica", "B", 11)
-            pdf.cell(30, 8, _coerce_latin1("From:"), ln=0)
             pdf.set_font("Helvetica", "", 11)
-            pdf.multi_cell(0, 8, _coerce_latin1(sender or ""))
-
-            pdf.set_font("Helvetica", "B", 11)
-            pdf.cell(30, 8, _coerce_latin1("To:"), ln=0)
-            pdf.set_font("Helvetica", "", 11)
-            pdf.multi_cell(0, 8, _coerce_latin1(to or ""))
+            _write_full_width_text(pdf, _clean_for_pdf(f"From: {sender or ''}"), h=8)
+            _write_full_width_text(pdf, _clean_for_pdf(f"To: {to or ''}"), h=8)
 
             if cc:
-                pdf.set_font("Helvetica", "B", 11)
-                pdf.cell(30, 8, _coerce_latin1("Cc:"), ln=0)
-                pdf.set_font("Helvetica", "", 11)
-                pdf.multi_cell(0, 8, _coerce_latin1(cc))
+                _write_full_width_text(pdf, _clean_for_pdf(f"Cc: {cc}"), h=8)
 
             if date:
-                pdf.set_font("Helvetica", "B", 11)
-                pdf.cell(30, 8, _coerce_latin1("Date:"), ln=0)
-                pdf.set_font("Helvetica", "", 11)
-                pdf.multi_cell(0, 8, _coerce_latin1(str(date)))
-
-            pdf.set_font("Helvetica", "B", 11)
-            pdf.cell(30, 8, _coerce_latin1("Subject:"), ln=0)
-            pdf.set_font("Helvetica", "", 11)
-            pdf.multi_cell(0, 8, _coerce_latin1(subject or ""))
+                _write_full_width_text(pdf, _clean_for_pdf(f"Date: {date}"), h=8)
+            _write_full_width_text(pdf, _clean_for_pdf(f"Subject: {subject or ''}"), h=8)
 
             if attachments:
                 pdf.set_font("Helvetica", "B", 11)
-                pdf.cell(0, 8, _coerce_latin1("Attachments:"), ln=1)
+                pdf.cell(0, 8, "Attachments:", ln=1)
                 pdf.set_font("Helvetica", "", 11)
                 for att in attachments:
-                    pdf.multi_cell(0, 6, f"- {_coerce_latin1(att)}")
+                    _write_full_width_text(pdf, _clean_for_pdf(f"- {att}"), h=6)
 
             # Body
             if body:
                 pdf.ln(4)
                 pdf.set_font("Helvetica", "B", 12)
-                pdf.cell(0, 8, _coerce_latin1("Body"), ln=1)
+                pdf.cell(0, 8, "Body", ln=1)
                 pdf.set_font("Helvetica", "", 11)
-                pdf.multi_cell(0, 6, _coerce_latin1(body))
+                _write_full_width_text(pdf, _clean_for_pdf(body), h=6)
 
             target.parent.mkdir(parents=True, exist_ok=True)
             pdf.output(str(target))
