@@ -137,24 +137,38 @@ class WorkerStatusGrid(Static):
                 bytes_done = fd.get("bytes_done")
                 error_reason = fd.get("error_reason") or ""
 
+                # Build a 10-segment bar.
+                # For downloading: bytes are capped at 10 MB for display
+                # (total size is unknown for browser-managed downloads).
+                # For done: full bar. For queued: empty bar.
+                _BAR_LEN = 10
+                _MAX_BYTES = 10 * 1024 * 1024  # 10 MB cap
+
                 if state == "done":
-                    sub = f"   {branch} [green]✓[/] {name}"
+                    bar = "█" * _BAR_LEN
+                    sub = f"   {branch} [green]✓[/] {name}  [green][{bar}][/]"
                 elif state == "failed":
                     reason_text = f"  {error_reason[:40]}" if error_reason else ""
                     sub = f"   {branch} [red]✗[/] {name}[red]{reason_text}[/]"
                 elif state == "downloading":
                     if bytes_done is not None:
+                        filled = int(min(bytes_done / _MAX_BYTES, 1.0) * _BAR_LEN)
+                        # Always show at least 1 filled segment so the bar looks active
+                        filled = max(filled, 1)
+                        bar = "█" * filled + "░" * (_BAR_LEN - filled)
                         if bytes_done >= 1_048_576:
                             size_str = f"{bytes_done / 1_048_576:.1f} MB"
                         elif bytes_done >= 1024:
                             size_str = f"{bytes_done / 1024:.0f} KB"
                         else:
                             size_str = f"{bytes_done} B"
-                        sub = f"   {branch} [yellow]↓[/] {name}  [yellow]{size_str}\u2026[/]"
+                        sub = f"   {branch} [yellow]↓[/] {name}  [yellow][{bar}] {size_str}[/]"
                     else:
-                        sub = f"   {branch} [yellow]↓[/] {name}  [yellow]downloading\u2026[/]"
+                        bar = "░" * _BAR_LEN
+                        sub = f"   {branch} [yellow]↓[/] {name}  [yellow][{bar}] downloading\u2026[/]"
                 else:  # found / queued
-                    sub = f"   {branch} {name}  [dim]queued[/]"
+                    bar = "░" * _BAR_LEN
+                    sub = f"   {branch} {name}  [dim][{bar}] queued[/]"
 
                 lines.append(sub)
             
