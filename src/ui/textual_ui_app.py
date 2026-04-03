@@ -5,6 +5,7 @@ Provides a modern, reactive terminal interface with real-time graphs,
 system monitoring, and smooth animations.
 """
 
+import os
 import time
 import psutil
 from datetime import datetime
@@ -35,12 +36,10 @@ class SystemMetrics(Static):
             f"MEM: [{mem_color}]{self.mem_percent:>5.1f}%[/]"
         )
 
-    def on_mount(self) -> None:
-        self.set_interval(2.0, self.update_metrics)
-
-    def update_metrics(self) -> None:
-        self.cpu_percent = psutil.cpu_percent()
-        self.mem_percent = psutil.virtual_memory().percent
+    def update_snapshot(self, *, cpu_percent: float, mem_percent: float) -> None:
+        """Apply the latest resource snapshot already collected by the runtime."""
+        self.cpu_percent = cpu_percent
+        self.mem_percent = mem_percent
 
 
 class PerformanceGraph(Static):
@@ -111,9 +110,11 @@ class WorkerStatusGrid(Static):
                 "SUCCESS": "bold green",
                 "PROCESSING": "bold yellow",
                 "STARTED": "bold yellow",
+                "STARTING": "bold yellow",
                 "FAILED": "bold red",
                 "ERROR": "bold red",
                 "IDLE": "dim white",
+                "READY": "dim white",
             }.get(status.upper(), "white")
             
             efficiency_score = w.get("efficiency_score", 0.0)
@@ -339,6 +340,7 @@ class CoupaTextualUI(App):
         self.perf_history = []
         self.last_perf_update = 0
         self._recent_logs: List[str] = []
+        self._ui_refresh_seconds = float(os.environ.get("COUPA_UI_REFRESH_SECONDS", "1.0"))
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -357,7 +359,7 @@ class CoupaTextualUI(App):
     def on_mount(self) -> None:
         self.title = "Coupa Downloads Premium"
         self.sub_title = "v2.0 Beta (Textual Edition)"
-        self.set_interval(1.0, self.update_data)
+        self.set_interval(self._ui_refresh_seconds, self.update_data)
 
     def _is_terminal_run_state(self, run_state: str) -> bool:
         return run_state in {"completed", "failed", "interrupted"}
@@ -372,6 +374,22 @@ class CoupaTextualUI(App):
     def _build_header_block(self, *rows: List[str]) -> str:
         """Render the header in logical KPI rows."""
         return "\n".join(self._format_header_line(row) for row in rows if row)
+
+    def _resolve_resource_metrics(self, resources: Dict[str, Any]) -> tuple[float, float, float]:
+        """Prefer pool snapshots and only fall back to local psutil when unavailable."""
+        if resources:
+            cpu_percent = float(resources.get("cpu_percent", 0.0) or 0.0)
+            memory_percent = float(resources.get("memory_percent", 0.0) or 0.0)
+            available_ram_gb = float(resources.get("available_ram_gb", 0.0) or 0.0)
+            if cpu_percent or memory_percent or available_ram_gb:
+                return cpu_percent, memory_percent, available_ram_gb
+
+        vm = psutil.virtual_memory()
+        return (
+            float(psutil.cpu_percent(interval=None) or 0.0),
+            float(vm.percent or 0.0),
+            float(vm.available / (1024 ** 3)),
+        )
 
     def action_quit_flow(self) -> None:
         if self._can_accept_final_action():
@@ -435,7 +453,9 @@ class CoupaTextualUI(App):
                         "status": m.get("status", "Idle"),
                         "attachments_found": m.get("attachments_found", 0),
                         "attachments_downloaded": m.get("attachments_downloaded", 0),
-                        "efficiency_score": m.get("efficiency_score", 0.0)
+                        "efficiency_score": m.get("efficiency_score", 0.0),
+                        "tasks_processed": m.get("tasks_processed", 0),
+                        "tasks_failed": m.get("tasks_failed", 0),
                     })
 
                 resources = agg.get("resources", {})
@@ -452,6 +472,8 @@ class CoupaTextualUI(App):
                         "attachments_found": 0,
                         "attachments_downloaded": 0,
                         "efficiency_score": 0.0,
+                        "tasks_processed": 0,
+                        "tasks_failed": 0,
                     })
 
                 displayed_workers.sort(
@@ -489,6 +511,9 @@ class CoupaTextualUI(App):
                 metric_source = metrics or agg.get("recent_metrics", [])
                 new_logs = []
                 for m in metric_source:
+                    # Skip resource telemetry — it updates internal state only, not an activity event
+                    if m.get("resource_snapshot") or m.get("status", "").upper() == "RESOURCE":
+                        continue
                     if m.get("message"):
                         timestamp = datetime.fromtimestamp(m.get("timestamp", time.time())).strftime("%H:%M:%S")
                         new_logs.append(f"[{timestamp}] {m['message']}")
@@ -530,6 +555,14 @@ class CoupaTextualUI(App):
                         perf_graph.history = perf_graph.history[-50:]
                     self.last_perf_update = time.time()
 
+            resources = agg.get("resources", {})
+            cpu_percent, memory_percent, available_ram_gb = self._resolve_resource_metrics(resources)
+            try:
+                metrics_widget = self.query_one("#metrics", SystemMetrics)
+                metrics_widget.update_snapshot(cpu_percent=cpu_percent, mem_percent=memory_percent)
+            except Exception:
+                pass
+
             # Update Header Stats
             header_stats = self.query_one("#header-stats", Static)
             total_goal = self.total_pos
@@ -540,11 +573,6 @@ class CoupaTextualUI(App):
             started = agg.get("total_seen", 0)
             eta_info = agg.get("eta", {})
             eta_display = eta_info.get("display", "calculating")
-            resources = agg.get("resources", {})
-            vm = psutil.virtual_memory()
-            cpu_percent = float(psutil.cpu_percent(interval=None) or 0.0)
-            memory_percent = float(vm.percent or 0.0)
-            available_ram_gb = float(vm.available / (1024 ** 3))
             current_workers = int(resources.get("worker_count", len(agg.get("workers_status", {}))) or 0)
             target_workers = int(resources.get("target_worker_count", current_workers) or current_workers)
             autoscaling_enabled = bool(resources.get("autoscaling_enabled", False))

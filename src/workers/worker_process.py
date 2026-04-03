@@ -12,17 +12,12 @@ worker processes with support for:
 import datetime
 import os
 import queue
-import subprocess
 import threading
 import time
-from typing import Dict, Any, Optional, Callable
+from typing import Any, Callable, Dict, Optional
 
-import structlog
-from selenium import webdriver
-from selenium.webdriver.edge.options import Options
-from selenium.webdriver.edge.service import Service
 import requests
-from requests.adapters import HTTPAdapter
+import structlog
 
 # Configure urllib3 connection pools globally to prevent "connection pool full" errors
 # import urllib3
@@ -44,37 +39,14 @@ from requests.adapters import HTTPAdapter
 
 # urllib3.connectionpool.HTTPConnectionPool.__init__ = patched_init
 
-import datetime
-import os
-import queue
-import threading
-import time
-from typing import Dict, Any, Optional, Callable
-
-import structlog
-from selenium import webdriver
-from selenium.webdriver.edge.options import Options
-from selenium.webdriver.edge.service import Service
-import requests
-from requests.adapters import HTTPAdapter
-
 from .models import Worker, Profile, POTask, PoolConfig, WorkerStatus
 from .browser_session import BrowserSession
 from .task_queue import ProcessingTask
 
 from ..lib.browser import BrowserManager
-from ..lib.downloader import Downloader
-from ..lib.folder_hierarchy import FolderHierarchyManager
 from ..lib.po_processing import process_single_po  # shared utility
 from ..lib.driver_manager import DriverManager
-from ..core.utils import (
-    _has_active_downloads,
-    _wait_for_downloads_complete,
-    _derive_status_label,
-    _parse_counts_from_message
-)
 from ..core.protocols import StorageManager, Messenger
-from ..core.output import maybe_print as print
 
 # Centralized config for URLs
 try:
@@ -94,15 +66,18 @@ _DOWNLOAD_SUFFIXES = ('.crdownload', '.tmp', '.partial')
 # Helper functions moved to core/utils.py
 
 
-# Debug logging helper
-def _debug_log(msg: str):
-    try:
-        with open('/tmp/worker_debug.log', 'a') as f:
-            import datetime
-            ts = datetime.datetime.now().isoformat()
-            f.write(f"[{ts}] {msg}\n")
-    except:
-        pass
+def _env_flag(name: str, default: bool = False) -> bool:
+    """Parse a boolean environment flag with safe defaults."""
+    raw_value = os.environ.get(name)
+    if raw_value is None:
+        return default
+    return raw_value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_csv(name: str) -> list[str]:
+    """Parse a comma-separated environment variable into a list of args."""
+    raw_value = os.environ.get(name, "")
+    return [item.strip() for item in raw_value.split(",") if item.strip()]
 
 class WorkerProcess:
     """
@@ -159,40 +134,150 @@ class WorkerProcess:
         self._stop_event = threading.Event()
         self._running = False
         self._last_heartbeat = time.time()
+
+        # PID of the actual browser process (ms:browserProcessId capability).
+        # Tracked at session startup so we can force-kill it even if the
+        # WebDriver service handle becomes unavailable.
+        self._browser_pid: Optional[int] = None
         
         # Statistics
         self.start_time: Optional[float] = None
         self.tasks_processed = 0
         self.tasks_failed = 0
+        self._debug_runtime_enabled = _env_flag("COUPA_DEBUG_RUNTIME", False)
+        telemetry_mode = os.environ.get("COUPA_TELEMETRY_MODE", "aggregated").strip().lower()
+        self._telemetry_mode = telemetry_mode if telemetry_mode in {"aggregated", "detailed"} else "aggregated"
+        self._telemetry_debounce_seconds = max(
+            0.0,
+            float(os.environ.get("COUPA_TELEMETRY_DEBOUNCE_MS", "500")) / 1000.0,
+        )
+        self._last_progress_signature: Optional[tuple[Any, ...]] = None
+        self._last_progress_emitted_at = 0.0
+        self._last_progress_downloaded = -1
         
         logger.debug("WorkerProcess initialized", worker_id=worker_id)
 
-    def _emit_worker_state(self, status: str, message: str, *, po_id: str = "SYSTEM") -> None:
-        """Publish worker lifecycle state so the UI can render the worker before first task."""
+    def _runtime_debug_log(self, message: str) -> None:
+        """Write runtime debug traces only when explicitly enabled."""
+        if not self._debug_runtime_enabled:
+            return
+        try:
+            with open("/tmp/worker_debug.log", "a", encoding="utf-8") as debug_log:
+                timestamp = datetime.datetime.now().isoformat()
+                debug_log.write(f"[{timestamp}] {message}\n")
+        except Exception:
+            pass
+
+    def _publish_metric(
+        self,
+        *,
+        status: str,
+        po_id: str = "SYSTEM",
+        message: str = "",
+        attachments_found: int = 0,
+        attachments_downloaded: int = 0,
+        timestamp: Optional[float] = None,
+        extra: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Publish a worker snapshot used by the UI and activity feed."""
         if not self.messenger:
             return
 
         try:
-            self.messenger.send_metric({
-                'worker_id': self.worker_id,
-                'po_id': po_id,
-                'status': status,
-                'timestamp': time.time(),
-                'attachments_found': 0,
-                'attachments_downloaded': 0,
-                'tasks_processed': self.tasks_processed,
-                'tasks_failed': self.tasks_failed,
-                'efficiency_score': (self.tasks_processed / max(1, self.tasks_processed + self.tasks_failed)) * 100 if (self.tasks_processed + self.tasks_failed) > 0 else 0.0,
-                'message': message,
-            })
+            payload = {
+                "worker_id": self.worker_id,
+                "po_id": po_id,
+                "status": status,
+                "timestamp": float(timestamp if timestamp is not None else time.time()),
+                "attachments_found": attachments_found,
+                "attachments_downloaded": attachments_downloaded,
+                "tasks_processed": self.tasks_processed,
+                "tasks_failed": self.tasks_failed,
+                "efficiency_score": (self.tasks_processed / max(1, self.tasks_processed + self.tasks_failed)) * 100
+                if (self.tasks_processed + self.tasks_failed) > 0
+                else 0.0,
+                "message": message,
+            }
+            if extra:
+                payload.update(extra)
+            self.messenger.send_metric(payload)
         except Exception:
             pass
 
+    def _emit_worker_state(self, status: str, message: str, *, po_id: str = "SYSTEM") -> None:
+        """Publish worker lifecycle state so the UI can render the worker before first task."""
+        self._publish_metric(status=status, po_id=po_id, message=message)
+
+    def _reset_progress_telemetry(self) -> None:
+        """Reset per-task progress debounce state."""
+        self._last_progress_signature = None
+        self._last_progress_emitted_at = 0.0
+        self._last_progress_downloaded = -1
+
+    def _emit_task_started(self, task: POTask) -> None:
+        """Publish the beginning of task processing once per task."""
+        po_number = task.po_number or task.metadata.get("po_number") or "SYSTEM"
+        self._reset_progress_telemetry()
+        self._publish_metric(
+            status="STARTED",
+            po_id=po_number,
+            message=f"Started PO {po_number}",
+            extra={"task_id": task.task_id},
+        )
+
+    def _emit_ready_for_next_task(self) -> None:
+        """Publish that the worker is ready for another assignment."""
+        self._publish_metric(
+            status="READY",
+            po_id="SYSTEM",
+            message=f"{self.worker_id} is ready",
+        )
+
+    def _emit_task_progress(self, task: POTask, progress_data: Dict[str, Any]) -> None:
+        """Publish debounced task progress snapshots."""
+        po_number = task.po_number or task.metadata.get("po_number") or "SYSTEM"
+        attachments_found = int(progress_data.get("attachments_found", 0) or 0)
+        attachments_downloaded = int(progress_data.get("attachments_downloaded", 0) or 0)
+        message = str(progress_data.get("message", "") or "")
+        now = time.time()
+        signature = (
+            task.task_id,
+            attachments_found,
+            attachments_downloaded,
+            message,
+        )
+
+        if self._telemetry_mode != "detailed":
+            downloads_changed = attachments_downloaded != self._last_progress_downloaded
+            enough_time_elapsed = (now - self._last_progress_emitted_at) >= self._telemetry_debounce_seconds
+            if signature == self._last_progress_signature:
+                return
+            if not downloads_changed and not enough_time_elapsed:
+                return
+
+        self._last_progress_signature = signature
+        self._last_progress_downloaded = attachments_downloaded
+        self._last_progress_emitted_at = now
+        self._publish_metric(
+            status="PROCESSING",
+            po_id=po_number,
+            message=message,
+            attachments_found=attachments_found,
+            attachments_downloaded=attachments_downloaded,
+            timestamp=now,
+            extra={"task_id": task.task_id},
+        )
+
     def _get_startup_delay_seconds(self) -> float:
-        """Return a small startup jitter to avoid stampeding browser launches."""
-        base_delay = 0.1
-        jitter_window = 0.2
-        return base_delay + ((abs(hash(self.worker_id)) % 3) * (jitter_window / 2))
+        """Return a small deterministic jitter to spread browser-launch load.
+
+        Values are intentionally kept small (<0.31 s) after the P13 stagger removal.
+        """
+        try:
+            worker_index = int(self.worker_id.split("-")[-1])
+        except (ValueError, IndexError):
+            worker_index = 0
+        return 0.1 + (worker_index % 5) * 0.04
 
     def can_accept_task(self) -> bool:
         """Return True when the worker is ready for exactly one new assignment."""
@@ -272,8 +357,11 @@ class WorkerProcess:
             self.worker.status = WorkerStatus.CRASHED
             self.worker.last_error = f"Startup failed: {str(e)}"
             self._emit_worker_state("FAILED", f"{self.worker_id} failed to start: {e}")
-            logger.error("Failed to start worker process", 
-                        worker_id=self.worker_id, error=str(e))
+            try:
+                logger.error("Failed to start worker process",
+                            worker_id=self.worker_id, error=str(e))
+            except (ValueError, OSError):
+                pass
             raise RuntimeError(f"Worker startup failed: {e}") from e
     
     def _initialize_browser_session(self) -> None:
@@ -292,8 +380,9 @@ class WorkerProcess:
             execution_mode = getattr(self.config, 'execution_mode', 'standard')
             mode_str = execution_mode.value if hasattr(execution_mode, 'value') else str(execution_mode)
             
-            _debug_log(f"Worker {self.worker_id} initializing. Config mode: {execution_mode} -> Str: {mode_str}")
-            print(f"DEBUG: Worker {self.worker_id} initializing with mode: {mode_str} (Raw: {execution_mode})", flush=True)
+            self._runtime_debug_log(
+                f"Worker {self.worker_id} initializing. Config mode: {execution_mode} -> Str: {mode_str}"
+            )
             logger.info(
                 "WorkerProcess browser init",
                 worker_id=self.worker_id,
@@ -302,19 +391,20 @@ class WorkerProcess:
             
             # Use Playwright for filtered and no_js modes (resource blocking)
             if mode_str in ("filtered", "no_js"):
-                _debug_log(f"Worker {self.worker_id} selecting Playwright session")
-                print(f"DEBUG: Worker {self.worker_id} selecting Playwright session", flush=True)
+                self._runtime_debug_log(f"Worker {self.worker_id} selecting Playwright session")
                 self._initialize_playwright_session(mode_str)
                 return
             
-            _debug_log(f"Worker {self.worker_id} selecting Selenium session")
-            print(f"DEBUG: Worker {self.worker_id} selecting Selenium session", flush=True)
+            self._runtime_debug_log(f"Worker {self.worker_id} selecting Selenium session")
             # Otherwise, use Selenium with Edge WebDriver (standard mode)
             self._initialize_selenium_session()
             
         except Exception as e:
-            logger.error("Failed to initialize browser session", 
-                        worker_id=self.worker_id, error=str(e))
+            try:
+                logger.error("Failed to initialize browser session",
+                            worker_id=self.worker_id, error=str(e))
+            except (ValueError, OSError):
+                pass
             raise
     
     def _initialize_playwright_session(self, mode: str) -> None:
@@ -374,21 +464,42 @@ class WorkerProcess:
     
     def _initialize_selenium_session(self) -> None:
         """Initialize Selenium session with Edge WebDriver for standard mode."""
+        # Lazy imports: Selenium is only needed in Selenium mode; deferring avoids
+        # the ~500 ms import cost on every worker spawn regardless of mode.
+        from selenium import webdriver  # noqa: PLC0415
+        from selenium.webdriver.edge.options import Options  # noqa: PLC0415
+        from selenium.webdriver.edge.service import Service  # noqa: PLC0415
+
         # Setup Edge options
         edge_options = Options()
 
         if self.config.headless_mode:
-            edge_options.add_argument("--headless")
+            edge_options.add_argument("--headless=new")
+            edge_options.add_argument("--disable-gpu")
+            edge_options.add_argument("--hide-scrollbars")
+            edge_options.add_argument("--mute-audio")
         
         # Profile configuration
         if self.profile.worker_profile_path:
             edge_options.add_argument(f"--user-data-dir={self.profile.worker_profile_path}")
             edge_options.add_argument(f"--profile-directory={self.profile.profile_name}")
 
-        # Basic options only
+        # Basic options
         edge_options.add_argument("--no-sandbox")
         edge_options.add_argument("--disable-dev-shm-usage")
         edge_options.add_argument("--window-size=1920,1080")
+        edge_options.add_argument("--no-first-run")
+
+        # Reduce memory footprint: disable unneeded browser background services
+        edge_options.add_argument("--disable-extensions")
+        edge_options.add_argument("--disable-sync")
+        edge_options.add_argument("--disable-translate")
+        edge_options.add_argument("--disable-default-apps")
+        # Cap V8 JS heap per renderer at 768 MB (Coupa SPA needs headroom above 512 MB)
+        edge_options.add_argument("--js-flags=--max-old-space-size=768")
+
+        for extra_arg in _env_csv("COUPA_EDGE_EXTRA_ARGS"):
+            edge_options.add_argument(extra_arg)
 
         # Configure download preferences to use timestamped folder
         normalized_dl = self._apply_download_root_override()
@@ -404,14 +515,14 @@ class WorkerProcess:
         # Create WebDriver - SIMPLIFIED CONFIGURATION
         dm = DriverManager()
         driver_path = dm.get_driver_path()
-        _debug_log(f"Worker {self.worker_id} using driver at: {driver_path}")
+        self._runtime_debug_log(f"Worker {self.worker_id} using driver at: {driver_path}")
         
         # Verify driver before start
         if not dm.verify_driver(driver_path):
             msg = f"Worker {self.worker_id}: EdgeDriver verification failed for {driver_path}"
-            _debug_log(f"❌ {msg}")
+            self._runtime_debug_log(f"FAIL {msg}")
             raise RuntimeError(msg)
-        _debug_log(f"✅ Worker {self.worker_id}: EdgeDriver verified")
+        self._runtime_debug_log(f"OK Worker {self.worker_id}: EdgeDriver verified")
         
         # Create service with minimal configuration to avoid conflicts
         service = Service(
@@ -420,17 +531,12 @@ class WorkerProcess:
             # service_args=["--verbose", "--log-level=DEBUG"]  # Commented out to reduce noise
         )
 
-        # Keep only a small jitter here. Initial pool startup already uses stagger_delay.
-        init_delay = self._get_startup_delay_seconds()
-        _debug_log(f"Worker {self.worker_id} delaying start by {init_delay}s...")
-        time.sleep(init_delay)
-        
         try:
-            _debug_log(f"Worker {self.worker_id} spawning Edge process...")
+            self._runtime_debug_log(f"Worker {self.worker_id} spawning Edge process")
             driver = webdriver.Edge(service=service, options=edge_options)
-            _debug_log(f"✅ Worker {self.worker_id} Edge process spawned successfully")
+            self._runtime_debug_log(f"OK Worker {self.worker_id} Edge process spawned successfully")
         except Exception as e:
-            _debug_log(f"❌ Worker {self.worker_id} failed to spawn Edge: {str(e)}")
+            self._runtime_debug_log(f"FAIL Worker {self.worker_id} failed to spawn Edge: {str(e)}")
             raise
         
         # Force-set download directory via DevTools to override any profile defaults
@@ -448,6 +554,15 @@ class WorkerProcess:
         self.browser_session.main_window_handle = driver.current_window_handle
         self.browser_session.keeper_handle = driver.current_window_handle
         self.browser_session._using_playwright = False
+
+        # Record the browser process PID for reliable force-kill.
+        # ms:browserProcessId is the actual Edge/Chrome browser PID, distinct
+        # from the msedgedriver service process — killing only the service
+        # leaves the browser as an orphan on macOS.
+        caps = getattr(driver, 'capabilities', None) or {}
+        self._browser_pid = caps.get('ms:browserProcessId')
+        if self._browser_pid:
+            logger.debug("Tracked browser PID", worker_id=self.worker_id, pid=self._browser_pid)
         
         logger.info(
             "Edge WebDriver started",
@@ -458,14 +573,18 @@ class WorkerProcess:
         self.browser_session.ensure_keeper_tab()
 
         # Authenticate with Coupa
-        _debug_log(f"Worker {self.worker_id} starting authentication...")
+        self._runtime_debug_log(f"Worker {self.worker_id} starting authentication")
         success = self.browser_session.authenticate()
         
         if not success:
-            _debug_log(f"❌ Worker {self.worker_id} failed to authenticate with Coupa")
+            self._runtime_debug_log(f"FAIL Worker {self.worker_id} failed to authenticate with Coupa")
             raise RuntimeError("Failed to authenticate with Coupa")
+
+        self.browser_session.trim_to_single_tab(
+            preferred_handle=self.browser_session.keeper_handle or self.browser_session.main_window_handle
+        )
         
-        _debug_log(f"✅ Worker {self.worker_id} authentication successful")
+        self._runtime_debug_log(f"OK Worker {self.worker_id} authentication successful")
         
         logger.debug("Browser session initialized", worker_id=self.worker_id)
 
@@ -518,7 +637,7 @@ class WorkerProcess:
         if not target:
             try:
                 from ..config.app_config import Config as _Cfg
-                target = getattr(_Cfg, 'DOWNLOAD_FOLDER', None)
+                target = _Cfg.DOWNLOAD_FOLDER
             except Exception as e:
                 logger.warning(
                     "Failed to get download folder from config (attempt 1)",
@@ -527,7 +646,7 @@ class WorkerProcess:
                 )
                 try:
                     from ..config.app_config import Config as _Cfg  # type: ignore
-                    target = getattr(_Cfg, 'DOWNLOAD_FOLDER', None)
+                    target = _Cfg.DOWNLOAD_FOLDER
                 except Exception as e2:
                     logger.warning(
                         "Failed to get download folder from config (attempt 2)",
@@ -585,26 +704,7 @@ class WorkerProcess:
             self.current_task = task
             self.worker.assign_task(task)
             self._update_heartbeat()
-
-            # Emit STARTED metric for immediate UI update
-            if self.messenger:
-                try:
-                    po_number = task.po_number or task.metadata.get('po_number')
-                    self.messenger.send_metric({
-                        'worker_id': self.worker_id,
-                        'task_id': task.task_id,
-                        'po_id': po_number,
-                        'status': 'STARTED',
-                        'timestamp': time.time(),
-                        'attachments_found': 0,
-                        'attachments_downloaded': 0,
-                        'tasks_processed': self.tasks_processed,
-                        'tasks_failed': self.tasks_failed,
-                        'efficiency_score': (self.tasks_processed / max(1, self.tasks_processed + self.tasks_failed)) * 100 if (self.tasks_processed + self.tasks_failed) > 0 else 0.0,
-                        'message': f"Started PO {po_number}" if po_number else "Started PO",
-                    })
-                except Exception:
-                    pass
+            self._emit_task_started(task)
             
             # Assignment reservation happens in the central dispatcher.
             
@@ -628,26 +728,6 @@ class WorkerProcess:
                 self.worker.complete_task(success=True)
                 logger.debug("Task completed successfully",
                            worker_id=self.worker_id, po_number=task.po_number)
-                
-                # Send COMPLETED metric with updated stats
-                if self.messenger:
-                    try:
-                        po_number = task.po_number or task.metadata.get('po_number')
-                        self.messenger.send_metric({
-                            'worker_id': self.worker_id,
-                            'task_id': task.task_id,
-                            'po_id': po_number,
-                            'status': 'COMPLETED',
-                            'timestamp': time.time(),
-                            'attachments_found': result.get('attachments_found', 0),
-                            'attachments_downloaded': result.get('attachments_downloaded', 0),
-                            'tasks_processed': self.tasks_processed,
-                            'tasks_failed': self.tasks_failed,
-                            'efficiency_score': (self.tasks_processed / max(1, self.tasks_processed + self.tasks_failed)) * 100,
-                            'message': f"Completed {po_number}",
-                        })
-                    except Exception:
-                        pass
             else:
                 self.tasks_failed += 1
                 self.worker.complete_task(success=False)
@@ -655,26 +735,10 @@ class WorkerProcess:
                               worker_id=self.worker_id,
                               po_number=task.po_number,
                               error=result.get('error'))
-                
-                # Send FAILED metric with updated stats
-                if self.messenger:
-                    try:
-                        po_number = task.po_number or task.metadata.get('po_number')
-                        self.messenger.send_metric({
-                            'worker_id': self.worker_id,
-                            'task_id': task.task_id,
-                            'po_id': po_number,
-                            'status': 'FAILED',
-                            'timestamp': time.time(),
-                            'tasks_processed': self.tasks_processed,
-                            'tasks_failed': self.tasks_failed,
-                            'efficiency_score': (self.tasks_processed / max(1, self.tasks_processed + self.tasks_failed)) * 100,
-                            'message': f"Failed {po_number}: {result.get('error', 'Unknown error')}",
-                        })
-                    except Exception:
-                        pass
             
             self.current_task = None
+            self._emit_ready_for_next_task()
+            self._reset_progress_telemetry()
             return result
             
         except Exception as e:
@@ -688,6 +752,8 @@ class WorkerProcess:
             self.tasks_failed += 1
             self.worker.complete_task(success=False)
             self.current_task = None
+            self._emit_ready_for_next_task()
+            self._reset_progress_telemetry()
             
             return {
                 'success': False,
@@ -752,60 +818,39 @@ class WorkerProcess:
 
         driver = self.browser_session.driver
         
-        # Validate WebDriver health before processing
-        if not self._validate_webdriver_health(driver):
-            return {
-                'success': False,
-                'error': 'WebDriver session is not healthy',
-                'task_id': task.task_id,
-                'status_code': 'FAILED',
-            }
-        
         po_number = task.po_number
         po_data = dict(task.metadata or {})
         display_po = po_data.get('po_number', po_number)
         hierarchy_cols = self.config.hierarchy_columns or []
         has_hierarchy = bool(self.config.has_hierarchy_data)
 
-        browser_manager = BrowserManager()
+        # Reuse a cached BrowserManager to avoid reconstructing DriverManager per PO
+        if not hasattr(self, '_cached_browser_manager'):
+            self._cached_browser_manager = BrowserManager()
+        browser_manager = self._cached_browser_manager
         browser_manager.driver = driver
 
         tab_handle = None
         try:
-            self.browser_session.ensure_keeper_tab()
-            self.browser_session.focus_main_window()
-
+            # create_tab ensures keeper tab exists and switches to the new tab
             tab_handle = self.browser_session.create_tab(task.task_id)
             
             # Assign PO number to tab after creation
             if task.task_id in self.browser_session.active_tabs:
                 tab = self.browser_session.active_tabs[task.task_id]
                 tab.assign_po(po_number)
-            
-            driver.switch_to.window(tab_handle)
 
             def progress_bridge(progress_data: Dict[str, Any]):
-                if self.messenger:
-                    metric = {
-                        'worker_id': self.worker_id,
-                        'task_id': task.task_id,
-                        'po_id': po_number,
-                        'status': f"Downloading {progress_data.get('attachments_downloaded', 0)}/{progress_data.get('attachments_found', 0)}",
-                        'attachments_found': progress_data.get('attachments_found', 0),
-                        'attachments_downloaded': progress_data.get('attachments_downloaded', 0),
-                        'message': progress_data.get('message', ''),
-                        'timestamp': time.time(),
-                        'tasks_processed': self.tasks_processed,
-                        'tasks_failed': self.tasks_failed,
-                        'efficiency_score': (self.tasks_processed / max(1, self.tasks_processed + self.tasks_failed)) * 100 if (self.tasks_processed + self.tasks_failed) > 0 else 0.0,
-                    }
-                    self.messenger.send_metric(metric)
+                # Keep heartbeat fresh while downloads are in progress so the
+                # health monitor doesn't kill a legitimately busy worker.
+                self._update_heartbeat()
+                self._emit_task_progress(task, progress_data)
 
             # Check if batch finalization is enabled in experimental config
             skip_finalization = False
             try:
                 from ..config.app_config import Config
-                skip_finalization = getattr(Config, 'BATCH_FINALIZATION_ENABLED', False)
+                skip_finalization = Config.BATCH_FINALIZATION_ENABLED
             except Exception:
                 pass
 
@@ -877,7 +922,11 @@ class WorkerProcess:
                     self.browser_session.close_tab(tab_handle)
             except Exception as close_err:
                 logger.warning("Failed to close worker tab", worker_id=self.worker_id, error=str(close_err))
-            self.browser_session.focus_main_window()
+                # Tab close failed; try to at least refocus the main window
+                try:
+                    self.browser_session.focus_main_window()
+                except Exception:
+                    pass
     
     def stop(self) -> None:
         """Stop the worker process gracefully."""
@@ -996,19 +1045,13 @@ class WorkerProcess:
                 
                 if quit_thread.is_alive():
                      logger.warning("driver.quit() timed out", worker_id=self.worker_id)
+                     # Escalate: terminate/kill the underlying browser process
+                     self._force_kill_browser_process(driver)
                 else:
                      logger.debug("Driver quit successful", worker_id=self.worker_id)
             except Exception as quit_err:
                 logger.warning("Graceful quit failed; forcing shutdown", worker_id=self.worker_id, error=str(quit_err))
-                try:
-                    # Force kill underlying process if accessible
-                    service = getattr(driver, 'service', None)
-                    proc = getattr(service, 'process', None) if service else None
-                    if proc and hasattr(proc, 'terminate'):
-                        proc.terminate()
-                        logger.debug("Force terminated driver process", worker_id=self.worker_id)
-                except Exception as force_err:
-                    logger.debug("Force termination failed", worker_id=self.worker_id, error=str(force_err))
+                self._force_kill_browser_process(driver)
             finally:
                 self.browser_session.driver = None
                 self.browser_session = None
@@ -1024,6 +1067,69 @@ class WorkerProcess:
             except:
                 pass
     
+    def _force_kill_browser_process(self, driver) -> None:
+        """Kill the entire browser process tree (msedgedriver + Edge) using psutil.
+
+        On macOS, killing only the WebDriver service (msedgedriver) leaves the
+        browser process as an orphan.  We therefore collect PIDs from two
+        sources and kill the full sub-tree of each:
+          1. driver.service.process  — the msedgedriver service
+          2. self._browser_pid       — the actual Edge browser (ms:browserProcessId)
+        """
+        import psutil  # noqa: PLC0415 — already a declared dependency
+
+        pids_to_kill: list[int] = []
+
+        # Source 1: WebDriver service process and its children
+        service = getattr(driver, 'service', None)
+        svc_proc = getattr(service, 'process', None) if service else None
+        svc_pid = getattr(svc_proc, 'pid', None) if svc_proc else None
+        if svc_pid:
+            try:
+                ps = psutil.Process(svc_pid)
+                pids_to_kill += [c.pid for c in ps.children(recursive=True)]
+                pids_to_kill.append(svc_pid)
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                pids_to_kill.append(svc_pid)
+
+        # Source 2: Tracked browser PID (ms:browserProcessId capability)
+        browser_pid = self._browser_pid
+        if browser_pid and browser_pid not in pids_to_kill:
+            try:
+                ps = psutil.Process(browser_pid)
+                pids_to_kill += [c.pid for c in ps.children(recursive=True)]
+                pids_to_kill.append(browser_pid)
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                pids_to_kill.append(browser_pid)
+
+        if not pids_to_kill:
+            logger.debug("No browser PIDs to kill", worker_id=self.worker_id)
+            return
+
+        logger.debug("Killing browser process tree", worker_id=self.worker_id, pids=pids_to_kill)
+
+        # SIGTERM first pass
+        live_procs: list[psutil.Process] = []
+        for pid in pids_to_kill:
+            try:
+                p = psutil.Process(pid)
+                p.terminate()
+                live_procs.append(p)
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                pass
+
+        # Wait up to 3 s for graceful exit
+        if live_procs:
+            _, survivors = psutil.wait_procs(live_procs, timeout=3)
+            for p in survivors:
+                try:
+                    p.kill()
+                    logger.warning("Escalated to SIGKILL", worker_id=self.worker_id, pid=p.pid)
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    pass
+
+        self._browser_pid = None  # Reset so a fresh session can record its own PID
+
     def should_stop(self) -> bool:
         """Check if worker should stop processing."""
         return self._stop_event.is_set() or not self._running
@@ -1058,12 +1164,14 @@ class WorkerProcess:
             Dictionary containing worker status and statistics
         """
         uptime = time.time() - (self.start_time or time.time()) if self.start_time else 0
+        heartbeat_age = time.time() - self._last_heartbeat
         
         return {
             'worker_id': self.worker_id,
             'status': self.worker.status.value,
             'running': self._running,
-            'healthy': self.is_healthy(),
+            'healthy': self._running and heartbeat_age <= 300 and self.browser_session is not None,
+            'heartbeat_age': heartbeat_age,
             'uptime_seconds': uptime,
             'current_task': self.current_task.po_number if self.current_task else None,
             'has_pending_assignment': self.has_pending_assignment(),

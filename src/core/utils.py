@@ -24,25 +24,45 @@ def _wait_for_downloads_complete(folder_path: str, timeout: int = 180, poll: flo
     start = time.time()
     quiet_required = 0.4  # Matches standardized aggressive wait
     quiet_start = None
+    # Prevent premature exit before the browser has started writing download files.
+    # Without this, a 0.4 s "quiet" window can expire before any .crdownload file
+    # is created (browser is still processing the click), allowing the next PO's
+    # CDP path update to fire before the current PO's downloads finish.
+    seen_active = False
+    initial_grace = 2.0  # seconds to wait for browser to start downloads
+
     while time.time() - start < timeout:
         active = _has_active_downloads(folder_path)
-        
+
+        if active:
+            seen_active = True
+            quiet_start = None
+            time.sleep(poll)
+            continue
+
         if expected_count is not None:
             try:
                 # Count only finalized files (not matching download suffixes)
                 current_files = len([f for f in os.listdir(folder_path) if not any(f.endswith(s) for s in ('.crdownload', '.tmp', '.partial'))])
-                if current_files >= expected_count and not active:
-                    return
+                if current_files >= expected_count:
+                    if quiet_start is None:
+                        quiet_start = time.time()
+                    elif time.time() - quiet_start >= quiet_required:
+                        return
+                    time.sleep(poll)
+                    continue
             except Exception:
                 pass
 
-        if not active:
+        # Only allow a quiet exit once we have evidence that downloads started,
+        # or no downloads were expected, or the grace window elapsed.
+        downloads_expected = expected_count is None or expected_count > 0
+        confirmed_started = seen_active or not downloads_expected or (time.time() - start >= initial_grace)
+        if confirmed_started:
             if quiet_start is None:
                 quiet_start = time.time()
             elif time.time() - quiet_start >= quiet_required:
                 return
-        else:
-            quiet_start = None
         time.sleep(poll)
 
 

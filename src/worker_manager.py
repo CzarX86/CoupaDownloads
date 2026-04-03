@@ -219,31 +219,19 @@ class ProcessingSession:
         
         try:
             if self.worker_pool:
-                # Run async shutdown in sync context
+                # Run async shutdown, handling both sync and async call contexts cleanly
                 import asyncio
                 try:
-                    # Check if an event loop is already running in this thread
-                    try:
-                        loop = asyncio.get_running_loop()
-                        is_running = True
-                    except RuntimeError:
-                        loop = asyncio.get_event_loop()
-                        is_running = loop.is_running()
-
-                    if is_running:
-                        # Create task for shutdown and wait for it
-                        import concurrent.futures
-                        with concurrent.futures.ThreadPoolExecutor() as executor:
-                            future = executor.submit(asyncio.run, self.worker_pool.shutdown(emergency=emergency))
-                            future.result(timeout=15 if emergency else 60)
-                    else:
-                        loop.run_until_complete(self.worker_pool.shutdown(emergency=emergency))
-                except Exception as e:
-                    # Fallback to a fresh loop if needed
-                    try:
-                        asyncio.run(self.worker_pool.shutdown(emergency=emergency))
-                    except Exception as fallback_err:
-                        print(f"Failed final shutdown attempt: {fallback_err}")
+                    asyncio.get_running_loop()
+                    # Called from within a running event loop (e.g. Textual) — use a
+                    # dedicated thread to avoid "This event loop is already running".
+                    import concurrent.futures
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                        future = executor.submit(asyncio.run, self.worker_pool.shutdown(emergency=emergency))
+                        future.result(timeout=15 if emergency else 60)
+                except RuntimeError:
+                    # No running loop in this thread — safe to call asyncio.run() directly.
+                    asyncio.run(self.worker_pool.shutdown(emergency=emergency))
                 
                 self.worker_pool = None
                 return True
@@ -281,7 +269,7 @@ class ProcessingSession:
                 config = PoolConfig.create_default(
                     base_profile_path=base_profile_path,
                     worker_count=self.max_workers,
-                    autoscaling_enabled=bool(getattr(_Cfg, 'PROC_WORKERS', self.max_workers) == 0),
+                    autoscaling_enabled=(_Cfg.PROC_WORKERS == 0),
                     headless_mode=self.headless_config.get_effective_headless_mode(),
                     base_profile_name=ExperimentalConfig.EDGE_PROFILE_NAME or "Default",
                     hierarchy_columns=self.hierarchy_columns,
@@ -320,42 +308,54 @@ class ProcessingSession:
                 await self.worker_pool.wait_for_completion(timeout=600)  # 10 minute timeout
 
                 # Collect results
+                # BUG-5 fix: handle.wait_for_completion() calls time.sleep() — a
+                # blocking call that freezes the entire asyncio event loop, stopping
+                # health monitoring and finalization tasks.  Run the synchronous poll
+                # loop in an executor thread to keep the event loop responsive.
                 successful = 0
                 failed = 0
                 collected_results: List[Dict[str, Any]] = []
 
-                for handle in handles:
-                    try:
-                        result = handle.wait_for_completion(timeout=120)
-                        if not isinstance(result, dict):
-                            result = {'success': False, 'status_code': 'FAILED', 'message': str(result)}
-                        if 'po_number' not in result:
-                            result['po_number'] = handle.po_number
-                        if 'po_number_display' not in result:
-                            result['po_number_display'] = result.get('po_number', handle.po_number)
+                def _collect_all_results():
+                    _successful = 0
+                    _failed = 0
+                    _results: List[Dict[str, Any]] = []
+                    for _handle in handles:
+                        try:
+                            _result = _handle.wait_for_completion(timeout=120)
+                            if not isinstance(_result, dict):
+                                _result = {'success': False, 'status_code': 'FAILED', 'message': str(_result)}
+                            if 'po_number' not in _result:
+                                _result['po_number'] = _handle.po_number
+                            if 'po_number_display' not in _result:
+                                _result['po_number_display'] = _result.get('po_number', _handle.po_number)
+                            _results.append(_result)
+                            _status_code = _result.get('status_code', 'FAILED')
+                            if _status_code in {'COMPLETED', 'NO_ATTACHMENTS'}:
+                                _successful += 1
+                            else:
+                                _failed += 1
+                        except Exception as _e:
+                            print(f"Error getting result for {_handle.po_number}: {_e}")
+                            _results.append({
+                                'po_number': _handle.po_number,
+                                'po_number_display': _handle.po_number,
+                                'status_code': 'FAILED',
+                                'message': str(_e),
+                                'errors': [{'filename': '', 'reason': str(_e)}],
+                                'success': False,
+                                'attachment_names': [],
+                                'attachments_found': 0,
+                                'attachments_downloaded': 0,
+                                'final_folder': '',
+                            })
+                            _failed += 1
+                    return _successful, _failed, _results
 
-                        collected_results.append(result)
-
-                        status_code = result.get('status_code', 'FAILED')
-                        if status_code in {'COMPLETED', 'NO_ATTACHMENTS'}:
-                            successful += 1
-                        else:
-                            failed += 1
-                    except Exception as e:
-                        print(f"Error getting result for {handle.po_number}: {e}")
-                        collected_results.append({
-                            'po_number': handle.po_number,
-                            'po_number_display': handle.po_number,
-                            'status_code': 'FAILED',
-                            'message': str(e),
-                            'errors': [{'filename': '', 'reason': str(e)}],
-                            'success': False,
-                            'attachment_names': [],
-                            'attachments_found': 0,
-                            'attachments_downloaded': 0,
-                            'final_folder': '',
-                        })
-                        failed += 1
+                _loop = asyncio.get_running_loop()
+                successful, failed, collected_results = await _loop.run_in_executor(
+                    None, _collect_all_results
+                )
 
                 # Get performance data from status
                 status = self.worker_pool.get_status()
@@ -510,7 +510,7 @@ class ProcessingSession:
         
         # Get download root for workers
         from .config.app_config import Config
-        download_root = os.path.abspath(os.path.expanduser(getattr(Config, 'DOWNLOAD_FOLDER', ExperimentalConfig.DOWNLOAD_FOLDER)))
+        download_root = os.path.abspath(os.path.expanduser(Config.DOWNLOAD_FOLDER))
         
         with ProcessPoolExecutor(max_workers=proc_workers, mp_context=mp.get_context("spawn")) as executor:
             future_map: dict = {}
@@ -564,28 +564,6 @@ class ProcessingSession:
                 self.completed_tasks = queue_stats.get('completed_tasks', 0)
                 self.failed_tasks = queue_stats.get('failed_tasks', 0)
                 self.active_tasks = queue_stats.get('processing_tasks', 0)
-                
-                # Send progress metrics to communication manager
-                if self.communication_manager:
-                    progress_data = {
-                        'total_tasks': self.total_tasks,
-                        'completed_tasks': self.completed_tasks,
-                        'failed_tasks': self.failed_tasks,
-                        'active_tasks': self.active_tasks,
-                        'timestamp': time.time(),
-                    }
-                    # Send as a special progress metric
-                    self.communication_manager.send_metric({
-                        'worker_id': -1,  # Special ID for progress updates
-                        'po_id': 'PROGRESS_UPDATE',
-                        'status': 'PROGRESS',
-                        'timestamp': time.time(),
-                        'message': f"Progress: {self.completed_tasks}/{self.total_tasks} completed, {self.failed_tasks} failed, {self.active_tasks} active",
-                        'total_tasks': self.total_tasks,
-                        'completed_tasks': self.completed_tasks,
-                        'failed_tasks': self.failed_tasks,
-                        'active_tasks': self.active_tasks,
-                    })
                 
                 self._update_progress()
                 
@@ -684,25 +662,51 @@ def _wait_for_downloads_complete(folder_path: str, timeout: int = 180, poll: flo
     start = time.time()
     quiet_required = 0.4  # Matches standardized aggressive wait
     quiet_start = None
+    # Track whether the browser has ever written a .crdownload file so we don't
+    # exit the quiet-period check before downloads actually start.  Without this,
+    # if expected_count > 0 but the browser hasn't created any in-progress file
+    # yet (it's still processing the click), we'd exit after 0.4 s of "silence"
+    # while downloads are still queued — causing the next PO's CDP path update to
+    # land before the current PO's files finish, mixing files across folders.
+    seen_active = False
+    # How long to wait for the browser to start at least one download before
+    # allowing a quiet exit, when downloads are expected.
+    initial_grace = 5.0
+
     while time.time() - start < timeout:
         active = _has_active_downloads(folder_path)
-        
+
+        if active:
+            seen_active = True
+            quiet_start = None
+            time.sleep(poll)
+            continue
+
         if expected_count is not None:
             try:
                 # Count only finalized files (not matching download suffixes)
                 current_files = len([f for f in os.listdir(folder_path) if not any(f.endswith(s) for s in ('.crdownload', '.tmp', '.partial'))])
-                if current_files >= expected_count and not active:
-                    return
+                if current_files >= expected_count:
+                    # All expected files are present and no in-progress downloads.
+                    if quiet_start is None:
+                        quiet_start = time.time()
+                    elif time.time() - quiet_start >= quiet_required:
+                        return
+                    time.sleep(poll)
+                    continue
             except Exception:
                 pass
 
-        if not active:
+        # No active downloads. Only allow quiet exit if we have confirmation that
+        # downloads started (seen_active) OR no downloads were expected OR the
+        # initial grace window has elapsed (browser may not use .crdownload files).
+        downloads_expected = expected_count is None or expected_count > 0
+        confirmed_started = seen_active or not downloads_expected or (time.time() - start >= initial_grace)
+        if confirmed_started:
             if quiet_start is None:
                 quiet_start = time.time()
             elif time.time() - quiet_start >= quiet_required:
                 return
-        else:
-            quiet_start = None
         time.sleep(poll)
 
 
@@ -1182,11 +1186,11 @@ def process_reusable_worker(args):
     print(f"[reusable_worker_{worker_id}] 🎯 Headless configuration: {headless_config}", flush=True)
 
     results = []  # Store all results from this worker
-    finalization_ack_timeout = float(getattr(ExperimentalConfig, "FINALIZATION_ACK_TIMEOUT_SECONDS", 20))
-    finalization_batch_size = int(getattr(ExperimentalConfig, "FINALIZATION_BATCH_SIZE", 50))
-    local_batch_finalization_enabled = bool(getattr(ExperimentalConfig, "BATCH_FINALIZATION_ENABLED", False))
+    finalization_ack_timeout = float(ExperimentalConfig.FINALIZATION_ACK_TIMEOUT_SECONDS)
+    finalization_batch_size = int(ExperimentalConfig.FINALIZATION_BATCH_SIZE)
+    local_batch_finalization_enabled = ExperimentalConfig.BATCH_FINALIZATION_ENABLED
     local_folder_finalizer = FolderFinalizer(
-        batch_interval=float(getattr(ExperimentalConfig, "BATCH_FINALIZATION_INTERVAL", 5)),
+        batch_interval=float(ExperimentalConfig.BATCH_FINALIZATION_INTERVAL),
         batch_size=finalization_batch_size,
         ack_timeout_seconds=finalization_ack_timeout,
         worker_count=1,
@@ -1708,35 +1712,18 @@ class WorkerManager:
         """
         Public entry point for parallel processing called by ProcessingController.
 
-        Routes to process_parallel_with_reusable_workers using a shared Queue.
+        The canonical runtime path is ProcessingSession -> PersistentWorkerPool.
         """
-        import multiprocessing as _mp
-
-        # Debug: log flow entry to file (survives output suppression)
-        try:
-            from datetime import datetime as _dt
-            with open('/tmp/worker_debug.log', 'a') as _f:
-                _f.write(f"[{_dt.now().isoformat()}] [WORKER_MANAGER] process_pos called: {len(po_data_list)} POs\n")
-        except Exception:
-            pass
-
-        # Use Manager().Queue() for spawn compatibility on macOS
-        # Regular mp.Queue() can't be shared between spawned processes
-        manager = _mp.Manager()
-        po_queue: _mp.Queue = manager.Queue()
-        for po in po_data_list:
-            po_queue.put(po)
-        successful, failed, session_report = self.process_parallel_with_reusable_workers(
-            po_queue=po_queue,
+        successful, failed, session_report = self.process_parallel_with_session(
+            po_data_list=po_data_list,
             hierarchy_cols=hierarchy_cols,
             has_hierarchy_data=has_hierarchy_data,
             headless_config=headless_config,
-            communication_manager=messenger,
-            queue_size=len(po_data_list),
             csv_handler=storage_manager,
             folder_hierarchy=folder_manager,
             sqlite_db_path=sqlite_db_path,
             execution_mode=execution_mode,
+            communication_manager=messenger,
         )
         self._last_parallel_report = session_report
         return successful, failed, session_report
@@ -1882,12 +1869,12 @@ class WorkerManager:
         if not effective_sqlite_db_path and storage_handler and hasattr(storage_handler, 'sqlite_db_path'):
             effective_sqlite_db_path = storage_handler.sqlite_db_path
 
-        finalization_ack_timeout = float(getattr(ExperimentalConfig, "FINALIZATION_ACK_TIMEOUT_SECONDS", 20))
-        finalization_batch_size = int(getattr(ExperimentalConfig, "FINALIZATION_BATCH_SIZE", 50))
-        finalization_flush_on_shutdown = bool(getattr(ExperimentalConfig, "FINALIZATION_FLUSH_ON_SHUTDOWN", True))
+        finalization_ack_timeout = float(ExperimentalConfig.FINALIZATION_ACK_TIMEOUT_SECONDS)
+        finalization_batch_size = int(ExperimentalConfig.FINALIZATION_BATCH_SIZE)
+        finalization_flush_on_shutdown = ExperimentalConfig.FINALIZATION_FLUSH_ON_SHUTDOWN
 
         folder_finalizer = FolderFinalizer(
-            batch_interval=float(getattr(ExperimentalConfig, "BATCH_FINALIZATION_INTERVAL", 5)),
+            batch_interval=float(ExperimentalConfig.BATCH_FINALIZATION_INTERVAL),
             batch_size=finalization_batch_size,
             ack_timeout_seconds=finalization_ack_timeout,
             worker_count=1,

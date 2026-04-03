@@ -117,7 +117,11 @@ class AppConfig(BaseSettings):
     )
     
     edge_profile_dir: str = Field(
-        default_factory=lambda: str(Path.home() / "Library" / "Application Support" / "Microsoft Edge") if os.name != 'nt' else "%LOCALAPPDATA%/Microsoft Edge/User Data",
+        default_factory=lambda: str(
+            Path.home() / "Library" / "Application Support" / "Microsoft Edge"
+            if os.name != 'nt'
+            else Path(os.environ.get("LOCALAPPDATA") or (Path.home() / "AppData" / "Local")) / "Microsoft Edge" / "User Data"
+        ),
         description="Directory for Edge browser profiles"
     )
     
@@ -546,6 +550,14 @@ class AppConfig(BaseSettings):
     # Validators
     # =========================================================================
     
+    @field_validator('edge_profile_dir', mode='before')
+    @classmethod
+    def expand_edge_profile_dir(cls, v):
+        """Expand ~ in Edge profile directory path."""
+        if isinstance(v, str):
+            return str(Path(v).expanduser())
+        return v
+
     @field_validator('download_folder', mode='before')
     @classmethod
     def expand_download_folder(cls, v):

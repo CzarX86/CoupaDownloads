@@ -5,11 +5,12 @@ Adaptive ETA estimation for processing progress.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections import deque
 from dataclasses import dataclass
-from typing import Optional
+from typing import Deque, Optional
 
 
-TERMINAL_STATUSES = {"COMPLETED", "NO_ATTACHMENTS", "PARTIAL", "SUCCESS", "FAILED", "ERROR"}
+TERMINAL_STATUSES = {"COMPLETED", "NO_ATTACHMENTS", "PARTIAL", "SUCCESS", "FAILED", "ERROR", "TIMEOUT"}
 
 
 @dataclass(frozen=True)
@@ -91,6 +92,7 @@ class AdaptiveEwmaEtaStrategy(ETAStrategy):
         clamp_ratio: float = 0.25,
         volatile_hold_seconds: float = 3.0,
         idle_grace_seconds: float = 8.0,
+        window_seconds: float = 120.0,
     ) -> None:
         self.alpha = alpha
         self.warmup_completions = warmup_completions
@@ -100,31 +102,47 @@ class AdaptiveEwmaEtaStrategy(ETAStrategy):
         self.clamp_ratio = clamp_ratio
         self.volatile_hold_seconds = volatile_hold_seconds
         self.idle_grace_seconds = idle_grace_seconds
+        self.window_seconds = window_seconds
 
         self._completion_count = 0
         self._last_completion_ts: Optional[float] = None
+        self._completion_timestamps: Deque[float] = deque()
         self._recent_rate_per_minute: Optional[float] = None
+        self._smoothed_rate: Optional[float] = None
         self._ewma_abs_error: float = 0.0
         self._last_eta_seconds: Optional[float] = None
         self._volatile_hold_until: float = 0.0
 
     def record_completion(self, timestamp: float) -> None:
         self._completion_count += 1
-
-        if self._last_completion_ts is not None:
-            interval_seconds = max(timestamp - self._last_completion_ts, 1e-6)
-            instant_rate = 60.0 / interval_seconds
-
-            if self._recent_rate_per_minute is None:
-                self._recent_rate_per_minute = instant_rate
-            else:
-                previous_rate = self._recent_rate_per_minute
-                updated_rate = (self.alpha * instant_rate) + ((1.0 - self.alpha) * previous_rate)
-                abs_error = abs(instant_rate - updated_rate)
-                self._ewma_abs_error = (self.alpha * abs_error) + ((1.0 - self.alpha) * self._ewma_abs_error)
-                self._recent_rate_per_minute = updated_rate
-
         self._last_completion_ts = timestamp
+
+        # Sliding-window rate: collect all completion timestamps in the last window_seconds.
+        # This is parallel-safe — simultaneous events from multiple workers are counted
+        # correctly instead of producing an inflated inter-arrival rate.
+        self._completion_timestamps.append(timestamp)
+        cutoff = timestamp - self.window_seconds
+        while self._completion_timestamps and self._completion_timestamps[0] < cutoff:
+            self._completion_timestamps.popleft()
+
+        if len(self._completion_timestamps) < 2:
+            return
+
+        window_span = self._completion_timestamps[-1] - self._completion_timestamps[0]
+        if window_span <= 0:
+            return
+
+        # (count - 1) because window_span is measured between the first and last event.
+        windowed_rate = (len(self._completion_timestamps) - 1) / window_span * 60.0
+
+        if self._smoothed_rate is None:
+            self._smoothed_rate = windowed_rate
+        else:
+            abs_error = abs(windowed_rate - self._smoothed_rate)
+            self._ewma_abs_error = (self.alpha * abs_error) + ((1.0 - self.alpha) * self._ewma_abs_error)
+            self._smoothed_rate = (self.alpha * windowed_rate) + ((1.0 - self.alpha) * self._smoothed_rate)
+
+        self._recent_rate_per_minute = self._smoothed_rate
 
     def build_state(
         self,

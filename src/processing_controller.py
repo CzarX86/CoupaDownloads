@@ -115,36 +115,22 @@ class ProcessingController:
             successful = 0
             failed = 0
             for i, po_data in enumerate(po_data_list):
-                if communication_manager:
-                    try:
-                        po_number = po_data.get('po_number', '')
-                        communication_manager.send_metric({
-                            'worker_id': 0,
-                            'po_id': po_number,
-                            'status': 'STARTED',
-                            'timestamp': time.time(),
-                            'attachments_found': 0,
-                            'attachments_downloaded': 0,
-                            'message': f"Started {po_number}" if po_number else "Started PO",
-                        })
-                    except Exception:
-                        pass
                 ok = process_single_po(po_data, hierarchy_cols, has_hierarchy_data, i, len(po_data_list), execution_mode=execution_mode)
                 if ok:
                     successful += 1
                 else:
                     failed += 1
-                if communication_manager:
+                if communication_manager and not ok:
                     try:
                         po_number = po_data.get('po_number', '')
                         communication_manager.send_metric({
                             'worker_id': 0,
                             'po_id': po_number,
-                            'status': 'COMPLETED' if ok else 'FAILED',
+                            'status': 'FAILED',
                             'timestamp': time.time(),
                             'attachments_found': 0,
                             'attachments_downloaded': 0,
-                            'message': f"{'Completed' if ok else 'Failed'} {po_number}" if po_number else ('Completed PO' if ok else 'Failed PO'),
+                            'message': f"Failed {po_number}" if po_number else 'Failed PO',
                         })
                     except Exception:
                         pass

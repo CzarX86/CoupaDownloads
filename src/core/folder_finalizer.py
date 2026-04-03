@@ -198,8 +198,12 @@ class FolderFinalizer:
             self.flush(timeout=timeout or self.ack_timeout_seconds)
 
         self._stop_event.set()
-        self._worker.join(timeout=max(1.0, self.batch_interval * 2))
-        self._executor.shutdown(wait=True)
+        # Join with a generous timeout so the run loop finishes its current batch
+        # before we shut down the executor it depends on.
+        self._worker.join(timeout=max(5.0, self.batch_interval * 4))
+        # Executor shutdown happens after the thread is done (or timed out) so
+        # _run_loop never races with executor teardown.
+        self._executor.shutdown(wait=False)
 
         while True:
             try:
@@ -224,10 +228,20 @@ class FolderFinalizer:
                 self._inflight_count += len(batch)
 
             try:
-                futures = {
-                    self._executor.submit(self._execute_request, item): item
-                    for item in batch
-                }
+                try:
+                    futures = {
+                        self._executor.submit(self._execute_request, item): item
+                        for item in batch
+                    }
+                except RuntimeError:
+                    # Executor already shut down (e.g. Ctrl+C during shutdown race).
+                    # Cancel all items in this batch so their futures don't hang.
+                    for item in batch:
+                        if not item.future.done():
+                            item.future.set_exception(
+                                RuntimeError("Folder finalizer executor shut down before processing item")
+                            )
+                    return
 
                 for done in as_completed(futures):
                     item = futures[done]

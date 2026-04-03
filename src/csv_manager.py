@@ -88,11 +88,11 @@ class CSVManager:
         """Build a persistent SQLite session path outside cache directories."""
         from .config.app_config import Config
 
-        sqlite_dir = getattr(Config, "SQLITE_SESSION_DIR", None)
+        sqlite_dir = Config.SQLITE_SESSION_DIR
         if sqlite_dir:
             base_dir = Path(sqlite_dir).expanduser()
         else:
-            base_dir = Path(getattr(Config, "APPLICATION_STATE_DIR")) / "sqlite"
+            base_dir = Config.APPLICATION_STATE_DIR / "sqlite"
 
         base_dir.mkdir(parents=True, exist_ok=True)
         return base_dir / f"session_{session_id}.db"
@@ -100,9 +100,9 @@ class CSVManager:
     def _build_output_copy_path(self, input_path: Path) -> Path:
         """Build output copy path for final export, keeping input file untouched."""
         from .config.app_config import Config
-        suffix = getattr(Config, "CSV_OUTPUT_SUFFIX", "_processed")
-        include_ts = bool(getattr(Config, "CSV_OUTPUT_INCLUDE_TIMESTAMP", True))
-        output_dir = getattr(Config, "CSV_OUTPUT_DIR", None)
+        suffix = Config.CSV_OUTPUT_SUFFIX
+        include_ts = Config.CSV_OUTPUT_INCLUDE_TIMESTAMP
+        output_dir = Config.CSV_OUTPUT_DIR
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S") if include_ts else ""
         ts_part = f"_{timestamp}" if timestamp else ""
         out_dir = Path(output_dir).expanduser() if output_dir else input_path.parent

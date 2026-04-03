@@ -183,9 +183,6 @@ class MainApp:
             storage_manager=self.csv_manager,
             telemetry=self.telemetry,
         )
-        # Deprecated: Use browser_orchestrator instead
-        self.driver = None
-        self.lock = threading.Lock()  # Thread safety for browser operations (now in browser_orchestrator)
         self._run_start_time: float | None = None
         self._current_po_start_time: float | None = None
         self._completed_po_count = 0
@@ -195,6 +192,9 @@ class MainApp:
 
     def _forward_status_to_recent_activity(self, status_message) -> None:
         """Mirror telemetry status updates into the UI activity feed."""
+        from src.core.status import StatusLevel
+        if status_message.level == StatusLevel.INFO:
+            return
         try:
             self.communication_manager.publish_activity(
                 status_message.message,
@@ -210,8 +210,8 @@ class MainApp:
         """Convert downloaded .msg files to PDF without prompting."""
         try:
             download_root = Path(ExperimentalConfig.DOWNLOAD_FOLDER)
-            enabled = bool(getattr(ExperimentalConfig, 'MSG_TO_PDF_ENABLED', True))
-            overwrite = bool(getattr(ExperimentalConfig, 'MSG_TO_PDF_OVERWRITE', False))
+            enabled = ExperimentalConfig.MSG_TO_PDF_ENABLED
+            overwrite = ExperimentalConfig.MSG_TO_PDF_OVERWRITE
         except Exception:
             logger.warning("MSG to PDF: unable to resolve configuration")
             return {"available": False, "executed": False, "reason": "config_error"}
@@ -387,21 +387,8 @@ class MainApp:
 
     # (Deprecated) _rename_folder_with_status removed in favor of folder_hierarchy.finalize_folder
 
-    def initialize_browser_once(self) -> None:
-        """
-        Inicializa o browser uma única vez e mantém aberto para todos os POs.
-        
-        Método depreciado: Use browser_orchestrator diretamente.
-        
-        Este método garante que o browser seja inicializado apenas uma vez
-        para processamento sequencial, evitando overhead de reinicialização.
-        
-        Exemplo:
-            ```python
-            app.initialize_browser_once()
-            # Browser agora está disponível em app.browser_orchestrator.driver
-            ```
-        """
+    def _initialize_browser_once(self) -> None:
+        """Initialize the browser once for sequential in-process mode."""
         if not self.browser_orchestrator.is_initialized():
             self.browser_orchestrator.initialize_browser(headless=self._headless_config.get_effective_headless_mode())
 
@@ -479,11 +466,6 @@ class MainApp:
         """Process a single PO using the processing service."""
         from .lib.models import ExecutionMode
         execution_mode = execution_mode or ExecutionMode.STANDARD
-        
-        # Ensure the service has the current driver/lock context from MainApp if needed
-        # (Though MainApp will eventually be refactored further)
-        self.processing_service.driver = self.driver
-        self.processing_service.lock = self.lock
         
         try:
             return self.processing_service.process_single_po(
@@ -617,9 +599,9 @@ class MainApp:
         self.telemetry.emit_status(StatusLevel.SUCCESS, f"PO Data Conversion complete. {len(po_data_list)} POs ready.")
         self.telemetry.emit_status(StatusLevel.INFO, f"Starting processing with {len(po_data_list)} POs...")
         self.communication_manager.set_run_state("idle", summary={})
-        use_process_pool = bool(getattr(ExperimentalConfig, 'USE_PROCESS_POOL', False))  # Derived from worker count
+        use_process_pool = ExperimentalConfig.USE_PROCESS_POOL
 
-        requested_workers = getattr(ExperimentalConfig, 'PROC_WORKERS', self.max_workers)
+        requested_workers = ExperimentalConfig.PROC_WORKERS
         try:
             configured_workers_raw = int(requested_workers)
         except (TypeError, ValueError):
@@ -630,11 +612,11 @@ class MainApp:
         # Resource-Aware Scaling Assessment
         if auto_worker_mode:
             self.telemetry.emit_status(StatusLevel.INFO, "Startup: assessing safe worker count")
-            cap = int(getattr(ExperimentalConfig, 'PROC_WORKERS_CAP', 0) or 0)
+            cap = int(ExperimentalConfig.PROC_WORKERS_CAP or 0)
             configured_auto_cap = cap if cap > 0 else AUTO_WORKER_HARD_CAP
             requested_ceiling = min(AUTO_WORKER_HARD_CAP, max(2, configured_auto_cap))
             logger.info("Performing resource-aware risk assessment", extra={"target_workers": requested_ceiling})
-            min_free_ram = float(getattr(ExperimentalConfig, 'MIN_FREE_RAM_GB', 0.3))
+            min_free_ram = float(ExperimentalConfig.MIN_FREE_RAM_GB)
             configured_workers, report = ResourceAssessor.calculate_safe_worker_count(requested_ceiling, min_free_ram_gb=min_free_ram)
             logger.info(ResourceAssessor.get_risk_message(report))
 
@@ -687,7 +669,7 @@ class MainApp:
                     self.max_workers,
                     self.csv_manager.csv_handler,
                     self.folder_hierarchy,
-                    self.initialize_browser_once,
+                    self._initialize_browser_once,
                     None, # _prepare_progress_tracking removed
                     self.process_single_po,
                     communication_manager=self.communication_manager,
@@ -762,7 +744,7 @@ class MainApp:
                     self.max_workers,
                     self.csv_manager.csv_handler,
                     self.folder_hierarchy,
-                    self.initialize_browser_once,
+                    self._initialize_browser_once,
                     None,  # _prepare_progress_tracking removed
                     self.process_single_po,
                     communication_manager=self.communication_manager,
@@ -824,8 +806,8 @@ class MainApp:
         """Offer to convert downloaded .msg files to PDF."""
         try:
             download_root = Path(ExperimentalConfig.DOWNLOAD_FOLDER)
-            enabled = bool(getattr(ExperimentalConfig, 'MSG_TO_PDF_ENABLED', True))
-            overwrite = bool(getattr(ExperimentalConfig, 'MSG_TO_PDF_OVERWRITE', False))
+            enabled = ExperimentalConfig.MSG_TO_PDF_ENABLED
+            overwrite = ExperimentalConfig.MSG_TO_PDF_OVERWRITE
         except Exception:
             logger.warning("MSG to PDF: unable to resolve configuration")
             return
@@ -968,14 +950,6 @@ class MainApp:
                 self.browser_orchestrator.cleanup(emergency=emergency)
             except Exception as e:
                 logger.warning("Error closing browser orchestrator", extra={"error": str(e)})
-        
-        # Legacy cleanup (for backward compatibility)
-        if self.driver:
-            try:
-                self.browser_manager.cleanup()
-            except Exception:
-                pass
-            self.driver = None
 
 
 def main() -> None:

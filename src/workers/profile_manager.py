@@ -184,6 +184,9 @@ class ProfileManager:
             worker_id: identifier of the worker that will own the profile
             force: when True, any existing profile for the worker is removed first
         """
+        # Phase 1 (under lock): validate inputs, create directory, register in tracking.
+        # The main lock is released BEFORE the file copy so that _clone_semaphore can
+        # permit up to max_concurrent_clones parallel copies.
         with self._lock:
             # Check if worker already has profile
             if worker_id in self.temp_profiles:
@@ -197,21 +200,19 @@ class ProfileManager:
                         pass
                 self.temp_profiles.pop(worker_id, None)
                 self.profile_metadata.pop(worker_id, None)
-            
+
             # Validate worker_id
             if not worker_id or not isinstance(worker_id, str):
                 raise ValueError("worker_id must be a non-empty string")
-            
+
             # Check profile limit
             if len(self.temp_profiles) >= self.max_profiles:
                 current_count = len(self.temp_profiles)
                 raise ProfileManagerError(f"Profile limit exceeded: {current_count}/{self.max_profiles}")
-            
-            try:
-                # Create unique profile directory
-                profile_dir = self._create_profile_directory(worker_id)
 
-                # Register profile early so copy_base_profile can locate it
+            try:
+                profile_dir = self._create_profile_directory(worker_id)
+                # Register early so copy_base_profile can locate the directory
                 self.temp_profiles[worker_id] = profile_dir
                 self.profile_metadata[worker_id] = {
                     'path': profile_dir,
@@ -220,99 +221,99 @@ class ProfileManager:
                     'size_mb': 0.0,
                     'is_valid': True
                 }
+            except Exception as e:
+                self.temp_profiles.pop(worker_id, None)
+                self.profile_metadata.pop(worker_id, None)
+                raise ProfileCreationError(worker_id, str(e))
 
-                # Copy base profile if configured with graceful degradation
-                if self.base_profile_path:
-                    try:
-                        # Guard copy with circuit breaker; if open raise and fall back
-                        if self._op_handler.can_attempt():
-                            self._op_handler.run(self.copy_base_profile, worker_id)
-                        else:
-                            # Breaker open: skip copy but keep a clean profile dir
-                            pass
-                    except Exception as copy_err:
-                        # Degrade gracefully: keep empty profile, mark metadata and continue
+        # Phase 2 (lock released): copy base profile using _clone_semaphore for concurrency.
+        if self.base_profile_path:
+            try:
+                if self._op_handler.can_attempt():
+                    self._op_handler.run(self.copy_base_profile, worker_id)
+                # else: circuit breaker open — keep clean empty profile and continue
+            except Exception as copy_err:
+                # Degrade gracefully: log and continue with an empty profile
+                with self._lock:
+                    if worker_id in self.profile_metadata:
                         self.profile_metadata[worker_id]['is_valid'] = False
                         self.profile_metadata[worker_id]['copy_error'] = str(copy_err)
 
-                # Set appropriate permissions
+        # Phase 3 (under lock): set permissions and validate structure.
+        with self._lock:
+            try:
                 self._set_profile_permissions(profile_dir)
 
-                # Detect corruption and attempt recovery (Phase 3.5)
+                # Detect corruption and attempt recovery
                 try:
                     if not self._validate_profile_structure(profile_dir):
-                        # Attempt simple recovery: recreate directory empty and writable
                         try:
                             shutil.rmtree(profile_dir, ignore_errors=True)
                         except Exception:
                             pass
                         os.makedirs(profile_dir, mode=0o755, exist_ok=True)
                         self._set_profile_permissions(profile_dir)
-                        # Mark recovery in metadata
                         md = self.profile_metadata.get(worker_id, {})
                         md['recovered'] = True
                         md['is_valid'] = True
                         self.profile_metadata[worker_id] = md
-                except Exception as _:
-                    # Non-fatal; best-effort recovery only
+                except Exception:
                     pass
 
-                return profile_dir
-                
             except Exception as e:
-                # Clean up on failure
-                profile_dir_to_cleanup = None
                 try:
                     profile_dir_to_cleanup = self.temp_profiles.get(worker_id)
-                except:
-                    pass
-                
+                except Exception:
+                    profile_dir_to_cleanup = None
                 if profile_dir_to_cleanup and os.path.exists(profile_dir_to_cleanup):
                     try:
                         shutil.rmtree(profile_dir_to_cleanup, ignore_errors=True)
-                    except:
+                    except Exception:
                         pass
-                
-                # Remove from tracking if added
                 self.temp_profiles.pop(worker_id, None)
                 self.profile_metadata.pop(worker_id, None)
-                
                 raise ProfileCreationError(worker_id, str(e))
+
+            return profile_dir
     
     def copy_base_profile(self, worker_id: str) -> bool:
-        """Copy base profile template (user-data-dir + profile subfolder) to worker's profile directory."""
-        with self._lock:
+        """Copy base profile template (user-data-dir + profile subfolder) to worker's profile directory.
+
+        Uses _clone_semaphore to allow up to max_concurrent_clones copies in parallel,
+        instead of serialising all copies through the main _lock.
+        """
+        with self._clone_semaphore:
             if not self.base_profile_path:
                 return False
-            
-            if worker_id not in self.temp_profiles:
-                raise ProfileManagerError(f"Worker {worker_id} does not have a profile")
-            
-            profile_dir = self.temp_profiles[worker_id]
-            
+
+            # Read profile_dir under lock (fast dict lookup only)
+            with self._lock:
+                if worker_id not in self.temp_profiles:
+                    raise ProfileManagerError(f"Worker {worker_id} does not have a profile")
+                profile_dir = self.temp_profiles[worker_id]
+
             try:
                 # If base_profile_path points directly at a profile dir (has Preferences), copy its contents
                 if os.path.isdir(self.base_profile_path) and os.path.exists(os.path.join(self.base_profile_path, "Preferences")):
-                    # Copy minimal items from that directory
                     self._copy_profile_directory(self.base_profile_path, profile_dir)
                 else:
                     # 1) Copy root-level essentials (e.g., Local State)
                     self._copy_root_essentials(self.base_profile_path, profile_dir)
-
                     # 2) Copy the selected profile subfolder (e.g., 'Default')
                     if self.base_profile_name:
                         src_profile = os.path.join(self.base_profile_path, self.base_profile_name)
                         dest_profile = os.path.join(profile_dir, self.base_profile_name)
                         self._copy_profile_directory(src_profile, dest_profile)
-                
-                # Update metadata
-                self.profile_metadata[worker_id]['last_accessed'] = datetime.now()
-                self.profile_metadata[worker_id]['size_mb'] = self._calculate_directory_size(profile_dir)
-                
+
+                # Update metadata under lock (fast dict writes only)
+                with self._lock:
+                    if worker_id in self.profile_metadata:
+                        self.profile_metadata[worker_id]['last_accessed'] = datetime.now()
+                        self.profile_metadata[worker_id]['size_mb'] = self._calculate_directory_size(profile_dir)
+
                 return True
-                
+
             except Exception as e:
-                # Log error but don't fail profile creation
                 print(f"Warning: Failed to copy base profile for {worker_id}: {e}")
                 return False
 
@@ -675,6 +676,8 @@ class ProfileManager:
         skip_items = {
             'Cache', 'Code Cache', 'GPUCache', 'Service Worker', 'Session Storage',
             'Local Storage', 'IndexedDB', 'logs', 'GrShaderCache',
+            'Sessions', 'Session Store', 'Current Session', 'Current Tabs', 'Last Session', 'Last Tabs',
+            'Extension State', 'Extension Rules', 'Extension Scripts', 'Local Extension Settings',
             'SingletonLock', 'SingletonCookie', 'SingletonSocket'
         }
         start_time = time.time()

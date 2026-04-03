@@ -20,9 +20,6 @@ from .exceptions import (
     QueueCapacityError,
     TaskTimeoutError
 )
-from ..core.output import maybe_print as print
-
-
 class TaskStatus(Enum):
     """Status enumeration for processing tasks."""
     PENDING = "pending"
@@ -294,13 +291,6 @@ class TaskQueue:
                 
                 # Track active task
                 self.active_tasks[task.task_id] = task
-                try:
-                    # Lightweight debug for assignment tracing
-                    pn = task.po_data.get('po_number') if isinstance(task.po_data, dict) else None
-                    # Avoid import cycles: print-style log for now
-                    print(f"[TaskQueue] assigned task {task.task_id} (PO={pn}) to {worker_id}")
-                except Exception:
-                    pass
                 
                 return task
                 
@@ -347,6 +337,9 @@ class TaskQueue:
             # Update tracking
             self.active_tasks.pop(task_id, None)
             self.completed_tasks.append(task)
+            # BUG-10 fix: cap history to prevent O(N) memory growth on large batches
+            if len(self.completed_tasks) > 500:
+                del self.completed_tasks[:-500]
             
             # Update statistics
             with self._stats_lock:
@@ -371,6 +364,9 @@ class TaskQueue:
                 task.mark_failed(error_details.get('error_message', 'Max retries exceeded'))
                 self.active_tasks.pop(task_id, None)
                 self.failed_tasks.append(task)
+                # BUG-10 fix: cap history to prevent O(N) memory growth
+                if len(self.failed_tasks) > 500:
+                    del self.failed_tasks[:-500]
                 
                 # Update statistics
                 with self._stats_lock:

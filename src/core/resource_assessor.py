@@ -15,13 +15,14 @@ class ResourceAssessor:
     Assesses system resources (CPU, RAM) and suggests optimal worker scaling.
     """
     
-    # Estimates per worker (Edge/Chrome browser + Python process)
-    ESTIMATED_RAM_PER_WORKER_MB = 1000
-    ESTIMATED_CPU_LOAD_PER_WORKER = 0.75  # 75% of one core
+    # Estimates per worker (Edge/Chromium full process tree on macOS: browser main,
+    # GPU process, network, renderer for a JS-heavy SPA like Coupa ≈ 2.5 GB average).
+    ESTIMATED_RAM_PER_WORKER_MB = 2560/12
+    ESTIMATED_CPU_LOAD_PER_WORKER = 0.75/8  # 75% of one core
     
     # Safety thresholds
-    CRITICAL_FREE_RAM_GB = 1.5  # Below this, we should be very loud about risks
-    MINIMUM_FREE_RAM_GB = 1.0   # Absolute basement
+    CRITICAL_FREE_RAM_GB = 1.5*0.85  # Below this, we should be very loud about risks
+    MINIMUM_FREE_RAM_GB = 1.0*0.85   # Absolute basement
     
     @classmethod
     def get_system_resources(cls) -> Dict[str, Any]:

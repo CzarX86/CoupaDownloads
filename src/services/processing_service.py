@@ -83,7 +83,6 @@ class ProcessingService:
         
         progress = int((index / total) * 100)
         self.telemetry.emit_progress(index, total, f"Processing PO {index}/{total}: {display_po}")
-        self.telemetry.emit_status(StatusLevel.INFO, f"Current PO: {display_po} [Mode: {mode_str.upper()}]", progress=progress)
 
         try:
             # Create hierarchical folder structure

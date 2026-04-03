@@ -101,6 +101,22 @@ def test_calculate_worker_adjustment_scales_up_when_three_workers_are_busy_and_o
     assert adjustment == 1
 
 
+def test_calculate_worker_adjustment_holds_when_not_all_current_workers_are_busy(tmp_path):
+    pool = _build_pool(tmp_path, worker_count=6)
+    pool.workers = {
+        "worker-1": object(),
+        "worker-2": object(),
+        "worker-3": object(),
+    }
+
+    adjustment = pool._calculate_worker_adjustment(
+        {"pending_tasks": 3, "processing_tasks": 2},
+        {"cpu_percent": 58.0, "available_ram_gb": 3.2},
+    )
+
+    assert adjustment == 0
+
+
 def test_calculate_worker_adjustment_holds_fourth_worker_when_only_one_item_is_waiting(tmp_path):
     pool = _build_pool(tmp_path, worker_count=6)
     pool.workers = {
@@ -175,27 +191,47 @@ def test_scale_down_skips_worker_with_reserved_assignment(tmp_path):
     assert pool._pick_idle_worker_for_scale_down() == "worker-1"
 
 
-def test_eager_scale_up_starts_second_worker_when_backlog_exists(tmp_path, monkeypatch):
+def test_collect_resource_snapshot_uses_nonblocking_cpu_sampling(tmp_path, monkeypatch):
     pool = _build_pool(tmp_path, worker_count=4)
-    pool.workers = {"worker-1": object()}
-    pool._last_scale_action_at = 0.0
+    cpu_calls = []
 
-    queue_stats = {"pending_tasks": 4, "processing_tasks": 1}
-    scale_up_calls = []
+    class _VirtualMemoryStub:
+        available = 5 * (1024 ** 3)
+        percent = 43.0
 
-    monkeypatch.setattr(
-        pool,
-        "_collect_resource_snapshot",
-        lambda: {"cpu_percent": 42.0, "available_ram_gb": 4.5},
-    )
+    def _cpu_percent(*, interval=None):
+        cpu_calls.append(interval)
+        return 41.0
 
-    async def _scale_up(snapshot, observed_queue_stats):
-        scale_up_calls.append((snapshot, observed_queue_stats.copy()))
+    monkeypatch.setattr("src.workers.persistent_pool.psutil.virtual_memory", lambda: _VirtualMemoryStub())
+    monkeypatch.setattr("src.workers.persistent_pool.psutil.cpu_percent", _cpu_percent)
+
+    snapshot = pool._collect_resource_snapshot()
+
+    assert snapshot["cpu_percent"] == 41.0
+    assert snapshot["memory_percent"] == 43.0
+    assert cpu_calls == [None]
+
+
+def test_dispatch_loop_does_not_attempt_scaling(tmp_path, monkeypatch):
+    pool = _build_pool(tmp_path, worker_count=4)
+    pool._running = True
+    dispatch_calls = []
+    scale_calls = []
+
+    def _dispatch():
+        dispatch_calls.append("dispatch")
+        pool._running = False
+        return 0
+
+    async def _scale_up(*args, **kwargs):
+        scale_calls.append("scale-up")
         return True
 
+    monkeypatch.setattr(pool, "_dispatch_tasks_to_idle_workers", _dispatch)
     monkeypatch.setattr(pool, "_scale_up_one", _scale_up)
 
-    scaled = asyncio.run(pool._maybe_eager_scale_up(queue_stats))
+    asyncio.run(pool._process_task_queue())
 
-    assert scaled is True
-    assert len(scale_up_calls) == 1
+    assert dispatch_calls == ["dispatch"]
+    assert scale_calls == []

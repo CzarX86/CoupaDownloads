@@ -301,7 +301,9 @@ class TaskHandle:
                 return self._result
             
             # Check if task is completed
-            if status['status'] in ['completed', 'failed', 'cancelled']:
+            # Include ready_to_finalize: if wait_for_completion is called after the
+            # pool timed out, _result may still be None but the task did succeed.
+            if status['status'] in ['completed', 'failed', 'cancelled', 'ready_to_finalize']:
                 return self._get_task_result()
             
             # Check timeout
@@ -320,7 +322,9 @@ class TaskHandle:
                 'task_id': self.task_id,
                 'po_number': self.po_number,
                 'status': self._task_ref.status.value,
-                'success': self._task_ref.status.value == 'completed',
+                # BUG-6 fix: READY_TO_FINALIZE means download succeeded — only the
+                # folder rename is still pending, so this is a success.
+                'success': self._task_ref.status.value in ('completed', 'ready_to_finalize'),
                 'result_data': self._task_ref.result_data.copy(),
                 'downloaded_files': self._task_ref.downloaded_files.copy(),
                 'error_message': self._task_ref.error_message,
