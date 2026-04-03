@@ -44,7 +44,6 @@ class DownloadFolderWatcher(threading.Thread):
         callback: Callable[[List[Dict[str, Any]]], None],
         poll_interval: float = 0.4,
         timeout: float = 300.0,
-        driver: Any = None,
     ) -> None:
         super().__init__(daemon=True)
         self._dir = download_dir
@@ -53,53 +52,26 @@ class DownloadFolderWatcher(threading.Thread):
         self._poll = poll_interval
         self._timeout = timeout
         self._stop_event = threading.Event()
-        # CDP-based total-size tracking (populated when driver provides performance logs).
-        self._driver = driver
-        self._guid_to_filename: Dict[str, str] = {}
+        # CDP-based total-size tracking.
+        # Populated from the main Selenium thread via update_bytes_total() —
+        # never touched from inside the watcher thread to avoid driver races.
+        self._lock = threading.Lock()
         self._filename_total_bytes: Dict[str, int] = {}
 
     def stop(self) -> None:
         self._stop_event.set()
 
-    def _poll_cdp_logs(self) -> None:
-        """Drain the browser's performance log and extract download progress events.
-
-        Parses ``Page.downloadWillBegin`` (guid → suggested filename) and
-        ``Page.downloadProgress`` (guid → totalBytes) events.  Results are stored in
-        ``_filename_total_bytes`` for use by ``_poll_states()``.  Silently no-ops when
-        the driver is unavailable or the log is empty.
-        """
-        if self._driver is None:
-            return
-        try:
-            entries = self._driver.get_log("performance")
-        except Exception:
-            return
-        for entry in entries:
-            try:
-                msg = json.loads(entry.get("message", "{}")).get("message", {})
-            except Exception:
-                continue
-            method = msg.get("method", "")
-            params = msg.get("params", {})
-            if method == "Page.downloadWillBegin":
-                guid = params.get("guid", "")
-                suggested = params.get("suggestedFilename", "")
-                if guid and suggested:
-                    self._guid_to_filename[guid] = suggested
-            elif method == "Page.downloadProgress":
-                guid = params.get("guid", "")
-                total = params.get("totalBytes", 0)
-                filename = self._guid_to_filename.get(guid, "")
-                if filename and total and total > 0:
-                    self._filename_total_bytes[filename] = total
+    def update_bytes_total(self, filename: str, total: int) -> None:
+        """Called from the main thread after draining the CDP performance log."""
+        if filename and total > 0:
+            with self._lock:
+                self._filename_total_bytes[filename] = total
 
     def run(self) -> None:
         deadline = time.time() + self._timeout
         while not self._stop_event.wait(self._poll):
             if time.time() > deadline:
                 break
-            self._poll_cdp_logs()
             states = self._poll_states()
             try:
                 self._callback(states)
@@ -122,11 +94,14 @@ class DownloadFolderWatcher(threading.Thread):
         lower_map = {e.lower(): e for e in entries}
         states: List[Dict[str, Any]] = []
 
+        with self._lock:
+            totals_snapshot = dict(self._filename_total_bytes)
+
         for i, name in enumerate(self._expected):
             lower = name.lower()
             crdown_key = lower + ".crdownload"
             tmp_key = lower + ".tmp"
-            bytes_total: Optional[int] = self._filename_total_bytes.get(name) or None
+            bytes_total: Optional[int] = totals_snapshot.get(name) or None
 
             if crdown_key in lower_map:
                 path = os.path.join(self._dir, lower_map[crdown_key])
@@ -180,6 +155,41 @@ class Downloader:
         self._current_file_downloads: List[Dict[str, Any]] = []
         self._watcher_po_found: int = 0
         self._watcher_po_downloaded: int = 0
+        # CDP guid-to-filename map; drained on the main thread only.
+        self._cdp_guid_to_filename: Dict[str, str] = {}
+
+    def _drain_cdp_log(self) -> None:
+        """Drain the browser performance log and forward totalBytes to the active watcher.
+
+        Must be called from the **main thread** only — Selenium WebDriver is not
+        thread-safe, so reading the log from the background watcher thread causes
+        crashes.  Returns immediately when no watcher is active or the driver is
+        unavailable.
+        """
+        if self._active_watcher is None or self.driver is None:
+            return
+        try:
+            entries = self.driver.get_log("performance")
+        except Exception:
+            return
+        for entry in entries:
+            try:
+                msg = json.loads(entry.get("message", "{}")).get("message", {})
+            except Exception:
+                continue
+            method = msg.get("method", "")
+            params = msg.get("params", {})
+            if method == "Page.downloadWillBegin":
+                guid = params.get("guid", "")
+                suggested = params.get("suggestedFilename", "")
+                if guid and suggested:
+                    self._cdp_guid_to_filename[guid] = suggested
+            elif method == "Page.downloadProgress":
+                guid = params.get("guid", "")
+                total = params.get("totalBytes", 0)
+                filename = self._cdp_guid_to_filename.get(guid, "")
+                if filename and total and total > 0:
+                    self._active_watcher.update_bytes_total(filename, total)
 
     def _emit_progress(
         self,
@@ -190,6 +200,9 @@ class Downloader:
     ) -> None:
         self._watcher_po_found = attachments_found
         self._watcher_po_downloaded = attachments_downloaded
+        # Drain CDP log while still on the main thread so the watcher gets
+        # totalBytes for real-percentage bars without racing the driver.
+        self._drain_cdp_log()
         if not self._progress_callback:
             return
         try:
@@ -1180,6 +1193,7 @@ class Downloader:
             self._active_watcher.stop()
             self._active_watcher = None
         self._current_file_downloads = []
+        self._cdp_guid_to_filename.clear()
 
         # Pre-extract filenames so the watcher and the initial state dict are
         # aligned with what the browser will actually download.
@@ -1199,7 +1213,6 @@ class Downloader:
                     self._current_download_dir,
                     all_filenames,
                     self._on_watcher_update,
-                    driver=self.driver,
                 )
                 self._active_watcher.start()
 
