@@ -16,19 +16,6 @@ if TYPE_CHECKING:
     from .sqlite_handler import SQLiteHandler as SQLiteHandlerType
 
 
-class WriteQueue:
-    """Stub WriteQueue implementation."""
-
-    def __init__(self, csv_handler: Any) -> None:
-        self.csv_handler = csv_handler
-
-    def start_writer_thread(self) -> None:
-        pass
-
-    def stop_writer_thread(self, timeout: float = 15.0) -> None:
-        pass
-
-
 class CSVHandler:
     """CSV handler implementation backed by SQLite persistence."""
 
@@ -67,7 +54,7 @@ class CSVHandler:
         enable_incremental_updates: bool = True,
         backup_dir: Optional[Path] = None,
         sqlite_db_path: Optional[str] = None,
-    ) -> Tuple["CSVHandler", "WriteQueue", str]:
+    ) -> Tuple["CSVHandler", str]:
         """Factory helper to match CSVManager expectations."""
         handler = cls(
             csv_path,
@@ -82,8 +69,7 @@ class CSVHandler:
                 cls._last_backup_path = backup_path
             except Exception:
                 cls._last_backup_path = None
-        write_queue = WriteQueue(handler)
-        return handler, write_queue, session_id
+        return handler, session_id
 
     @staticmethod
     def get_backup_path(csv_path: Path, backup_dir: Optional[Path] = None) -> Path:

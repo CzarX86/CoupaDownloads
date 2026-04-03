@@ -12,7 +12,7 @@ import threading
 import multiprocessing as mp
 
 from .worker_manager import WorkerManager
-from .core.csv_handler import CSVHandler, WriteQueue
+from .core.csv_handler import CSVHandler
 from .lib.models import HeadlessConfiguration
 from .core.output import maybe_print as print
 
@@ -23,14 +23,12 @@ class ProcessingController:
     def __init__(self, worker_manager: WorkerManager):
         self.worker_manager = worker_manager
         self.csv_handler: Optional[CSVHandler] = None
-        self._csv_write_queue: Optional[WriteQueue] = None
         self._csv_session_id: Optional[str] = None
         self._run_start_time: Optional[float] = None
 
-    def set_csv_handler(self, csv_handler: CSVHandler, write_queue: WriteQueue, session_id: str):
+    def set_csv_handler(self, csv_handler: CSVHandler, session_id: str):
         """Set CSV handler for incremental updates."""
         self.csv_handler = csv_handler
-        self._csv_write_queue = write_queue
         self._csv_session_id = session_id
 
     def _shutdown_csv_handler(self):
@@ -38,7 +36,6 @@ class ProcessingController:
         if self.csv_handler:
             self.csv_handler.shutdown()
             self.csv_handler = None
-            self._csv_write_queue = None
 
     def _parallel_progress_callback(self, progress: Dict[str, Any]) -> None:
         """Progress callback (minimal version)."""

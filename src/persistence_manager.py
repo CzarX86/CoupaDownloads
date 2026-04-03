@@ -4,7 +4,7 @@ import pandas as pd
 import os
 from datetime import datetime
 
-from .core.csv_handler import CSVHandler, WriteQueue
+from .core.csv_handler import CSVHandler
 from .core.sqlite_handler import SQLiteHandler
 
 
@@ -13,7 +13,6 @@ class CSVManager:
 
     def __init__(self):
         self._csv_handler: Optional[CSVHandler] = None
-        self._csv_write_queue: Optional[WriteQueue] = None
         self._csv_session_id: Optional[str] = None
         self._sqlite_handler: Optional[SQLiteHandler] = None
         self._sqlite_db_path: Optional[str] = None
@@ -56,7 +55,7 @@ class CSVManager:
                 self._output_copy_path = self._build_output_copy_path(csv_input_path)
 
                 # 2. Initialize Handler (which now handles its own SQLite sub-handler)
-                self.csv_handler, self._csv_write_queue, self._csv_session_id = CSVHandler.create_handler(
+                self.csv_handler, self._csv_session_id = CSVHandler.create_handler(
                     csv_input_path, 
                     enable_incremental_updates=True,
                     sqlite_db_path=self._sqlite_db_path
@@ -125,10 +124,6 @@ class CSVManager:
                 (e.g. to generate the final report).
         """
         db_path_to_clean = self._sqlite_db_path
-
-        if self._csv_write_queue:
-            self._csv_write_queue.stop_writer_thread(timeout=15.0)
-            self._csv_write_queue = None
 
         if cleanup_sqlite:
             # Close SQLite handler

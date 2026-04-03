@@ -2,20 +2,20 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from src.csv_manager import CSVManager
+from src.persistence_manager import CSVManager
 from src.config.app_config import Config, default_app_state_dir
 
 
-class _FakeWriteQueue:
-    def stop_writer_thread(self, timeout: float = 15.0) -> None:
-        return None
+class _FakeSQLiteHandler:
+    def close(self) -> None:
+        pass
 
 
 class _FakeCSVHandler:
     def __init__(self, csv_path: Path, sqlite_db_path: str):
         self.csv_path = csv_path
         self.sqlite_db_path = sqlite_db_path
-        self.sqlite_handler = object()
+        self.sqlite_handler = _FakeSQLiteHandler()
 
 
 def test_default_app_state_dir_uses_xdg_state_home(monkeypatch, tmp_path: Path):
@@ -40,10 +40,10 @@ def test_initialize_csv_handler_stores_sqlite_in_application_state(monkeypatch, 
         assert sqlite_db_path is not None
         Path(sqlite_db_path).parent.mkdir(parents=True, exist_ok=True)
         Path(sqlite_db_path).write_text("sqlite-placeholder", encoding="utf-8")
-        return _FakeCSVHandler(csv_path, sqlite_db_path), _FakeWriteQueue(), "session-1"
+        return _FakeCSVHandler(csv_path, sqlite_db_path), "session-1"
 
-    monkeypatch.setattr("src.csv_manager.CSVHandler.create_handler", fake_create_handler)
-    monkeypatch.setattr("src.csv_manager.CSVHandler.get_backup_path", lambda csv_path: csv_input.parent / "backups" / "backup_session-1.csv")
+    monkeypatch.setattr("src.persistence_manager.CSVHandler.create_handler", fake_create_handler)
+    monkeypatch.setattr("src.persistence_manager.CSVHandler.get_backup_path", lambda csv_path: csv_input.parent / "backups" / "backup_session-1.csv")
 
     manager = CSVManager()
     session_id = manager.initialize_csv_handler(csv_input)
@@ -70,10 +70,10 @@ def test_initialize_csv_handler_honors_sqlite_session_dir_override(monkeypatch, 
     def fake_create_handler(csv_path, enable_incremental_updates=True, sqlite_db_path=None, backup_dir=None):
         Path(sqlite_db_path).parent.mkdir(parents=True, exist_ok=True)
         Path(sqlite_db_path).write_text("sqlite-placeholder", encoding="utf-8")
-        return _FakeCSVHandler(csv_path, sqlite_db_path), _FakeWriteQueue(), "session-2"
+        return _FakeCSVHandler(csv_path, sqlite_db_path), "session-2"
 
-    monkeypatch.setattr("src.csv_manager.CSVHandler.create_handler", fake_create_handler)
-    monkeypatch.setattr("src.csv_manager.CSVHandler.get_backup_path", lambda csv_path: csv_input.parent / "backups" / "backup_session-2.csv")
+    monkeypatch.setattr("src.persistence_manager.CSVHandler.create_handler", fake_create_handler)
+    monkeypatch.setattr("src.persistence_manager.CSVHandler.get_backup_path", lambda csv_path: csv_input.parent / "backups" / "backup_session-2.csv")
 
     manager = CSVManager()
     manager.initialize_csv_handler(csv_input)

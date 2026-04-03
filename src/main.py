@@ -59,7 +59,7 @@ from .setup_manager import SetupManager
 from .worker_manager import WorkerManager, ProcessingSession
 from .core.communication_manager import CommunicationManager
 from .processing_controller import ProcessingController
-from .csv_manager import CSVManager
+from .persistence_manager import CSVManager
 from .core.resource_assessor import ResourceAssessor
 from .core.telemetry import TelemetryProvider, ConsoleTelemetryListener, FunctionalTelemetryListener
 from .core.status import StatusLevel
@@ -392,75 +392,6 @@ class MainApp:
         if not self.browser_orchestrator.is_initialized():
             self.browser_orchestrator.initialize_browser(headless=self._headless_config.get_effective_headless_mode())
 
-
-    @staticmethod
-    def _build_csv_updates(result: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Traduz um resultado de processamento em atualizações para colunas CSV.
-        
-        Args:
-            result: Dicionário com resultado do processamento contendo:
-                - status_code: Código de status (COMPLETED, FAILED, etc.)
-                - attachment_names: Lista ou string de nomes de anexos
-                - attachments_found: Quantidade de anexos encontrados
-                - attachments_downloaded: Quantidade de anexos baixados
-                - final_folder: Pasta final dos downloads
-                - coupa_url: URL do PO no Coupa
-                - supplier_name: Nome do fornecedor (opcional)
-                - last_processed: Data/hora do processamento (opcional)
-                
-        Returns:
-            Dicionário com mapeamento de colunas CSV:
-                - STATUS: Código de status
-                - ATTACHMENTS_FOUND: Quantidade encontrada
-                - ATTACHMENTS_DOWNLOADED: Quantidade baixada
-                - AttachmentName: Lista de nomes de anexos
-                - DOWNLOAD_FOLDER: Pasta de download
-                - COUPA_URL: URL do Coupa
-                - ERROR_MESSAGE: Mensagem de erro (se falhou)
-                - SUPPLIER: Nome do fornecedor (se disponível)
-                - LAST_PROCESSED: Data/hora formatada (se disponível)
-                
-        Exemplo:
-            ```python
-            result = {'status_code': 'COMPLETED', 'attachments_found': 3, ...}
-            updates = MainApp._build_csv_updates(result)
-            # updates = {'STATUS': 'COMPLETED', 'ATTACHMENTS_FOUND': 3, ...}
-            ```
-        """
-        status_code = (result.get('status_code') or '').upper() or 'FAILED'
-        attachment_names = result.get('attachment_names') or []
-        if isinstance(attachment_names, str):
-            attachment_names = [name for name in attachment_names.split(';') if name]
-
-        error_message = ''
-        success = result.get('success')
-        if success is None:
-            success = status_code in {'COMPLETED', 'NO_ATTACHMENTS', 'PARTIAL'}
-        if not success:
-            error_message = result.get('message', '') or result.get('error', '')
-
-        updates: Dict[str, Any] = {
-            'STATUS': status_code,
-            'ATTACHMENTS_FOUND': result.get('attachments_found', 0),
-            'ATTACHMENTS_DOWNLOADED': result.get('attachments_downloaded', 0),
-            'AttachmentName': attachment_names,
-            'DOWNLOAD_FOLDER': result.get('final_folder', ''),
-            'COUPA_URL': result.get('coupa_url', ''),
-            'ERROR_MESSAGE': error_message,
-        }
-
-        supplier_name = result.get('supplier_name')
-        if supplier_name:
-            updates['SUPPLIER'] = supplier_name
-
-        last_processed = result.get('last_processed')
-        if isinstance(last_processed, datetime):
-            updates['LAST_PROCESSED'] = last_processed.isoformat()
-        elif isinstance(last_processed, str) and last_processed:
-            updates['LAST_PROCESSED'] = last_processed
-
-        return updates
 
     def process_single_po(self, po_data, hierarchy_cols, has_hierarchy_data, index, total, execution_mode=None):
         """Process a single PO using the processing service."""

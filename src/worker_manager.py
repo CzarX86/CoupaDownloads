@@ -48,7 +48,7 @@ from .lib.models import HeadlessConfiguration, InteractiveSetupSession
 from .workers.persistent_pool import PersistentWorkerPool
 
 # Import CSV handler for incremental persistence
-from .core.csv_handler import CSVHandler, WriteQueue
+from .core.csv_handler import CSVHandler
 from .core.folder_finalizer import FolderFinalizer, FolderFinalizationResult
 from .workers.models import PoolConfig
 from .core.utils import _compose_csv_message as compose_csv_message

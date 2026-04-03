@@ -213,14 +213,14 @@ class BrowserNotFoundError(BrowserError):
 class BrowserInitError(BrowserError):
     """Failed to initialize browser."""
     def __init__(self, message: str, **kwargs: Any) -> None:
+        kwargs.setdefault("context", ErrorContext(
+            is_recoverable=True,
+            should_retry=True,
+            recovery_action="Retry browser initialization or check for existing processes"
+        ))
         super().__init__(
             message,
             code=ErrorCode.BROWSER_INIT_FAILED,
-            context=ErrorContext(
-                is_recoverable=True,
-                should_retry=True,
-                recovery_action="Retry browser initialization or check for existing processes"
-            ),
             **kwargs
         )
 

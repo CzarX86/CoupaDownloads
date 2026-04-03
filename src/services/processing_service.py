@@ -17,7 +17,7 @@ from ..lib.models import ExecutionMode, HeadlessConfiguration
 from ..config.app_config import get_config
 from ..core.telemetry import TelemetryProvider
 from ..core.status import StatusLevel
-from ..csv_manager import CSVManager
+from ..persistence_manager import CSVManager
 
 # Utility functions from core.utils
 from ..core.utils import (
