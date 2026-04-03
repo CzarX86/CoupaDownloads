@@ -132,17 +132,18 @@ class WorkerStatusGrid(Static):
                 is_last = idx == len(file_downloads) - 1
                 branch = "└─" if is_last else "├─"
                 raw_name = fd.get("filename") or f"attachment_{idx + 1}"
-                name = raw_name if len(raw_name) <= 32 else raw_name[:29] + "..."
+                name = raw_name if len(raw_name) <= 52 else raw_name[:49] + "..."
                 state = fd.get("state", "found")
                 bytes_done = fd.get("bytes_done")
+                bytes_total = fd.get("bytes_total")
                 error_reason = fd.get("error_reason") or ""
 
                 # Build a 10-segment bar.
-                # For downloading: bytes are capped at 10 MB for display
-                # (total size is unknown for browser-managed downloads).
-                # For done: full bar. For queued: empty bar.
+                # When bytes_total comes from CDP (Page.downloadProgress) we compute a
+                # real percentage.  Otherwise we fall back to a log-scale cap at 10 MB
+                # (browser-managed downloads don't expose total size via filesystem alone).
                 _BAR_LEN = 10
-                _MAX_BYTES = 10 * 1024 * 1024  # 10 MB cap
+                _MAX_BYTES = 10 * 1024 * 1024  # 10 MB cap (fallback only)
 
                 if state == "done":
                     bar = "█" * _BAR_LEN
@@ -152,9 +153,15 @@ class WorkerStatusGrid(Static):
                     sub = f"   {branch} [red]✗[/] {name}[red]{reason_text}[/]"
                 elif state == "downloading":
                     if bytes_done is not None:
-                        filled = int(min(bytes_done / _MAX_BYTES, 1.0) * _BAR_LEN)
-                        # Always show at least 1 filled segment so the bar looks active
-                        filled = max(filled, 1)
+                        if bytes_total and bytes_total > 0:
+                            # Real percentage from CDP Page.downloadProgress events.
+                            pct = min(bytes_done / bytes_total, 1.0)
+                            filled = max(int(pct * _BAR_LEN), 1)
+                            pct_str = f"{pct * 100:.0f}%"
+                        else:
+                            # Log-scale fallback: cap at 10 MB.
+                            filled = max(int(min(bytes_done / _MAX_BYTES, 1.0) * _BAR_LEN), 1)
+                            pct_str = None
                         bar = "█" * filled + "░" * (_BAR_LEN - filled)
                         if bytes_done >= 1_048_576:
                             size_str = f"{bytes_done / 1_048_576:.1f} MB"
@@ -162,7 +169,8 @@ class WorkerStatusGrid(Static):
                             size_str = f"{bytes_done / 1024:.0f} KB"
                         else:
                             size_str = f"{bytes_done} B"
-                        sub = f"   {branch} [yellow]↓[/] {name}  [yellow][{bar}] {size_str}[/]"
+                        label = f"{pct_str} · {size_str}" if pct_str else size_str
+                        sub = f"   {branch} [yellow]↓[/] {name}  [yellow][{bar}] {label}[/]"
                     else:
                         bar = "░" * _BAR_LEN
                         sub = f"   {branch} [yellow]↓[/] {name}  [yellow][{bar}] downloading\u2026[/]"

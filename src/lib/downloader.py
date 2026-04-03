@@ -6,6 +6,7 @@ Inclui lógica de fallback e detecção de erros.
 """
 
 import os
+import json
 import threading
 import time
 from typing import Dict, List, Optional, Tuple, Callable, Any
@@ -43,6 +44,7 @@ class DownloadFolderWatcher(threading.Thread):
         callback: Callable[[List[Dict[str, Any]]], None],
         poll_interval: float = 0.4,
         timeout: float = 300.0,
+        driver: Any = None,
     ) -> None:
         super().__init__(daemon=True)
         self._dir = download_dir
@@ -51,15 +53,53 @@ class DownloadFolderWatcher(threading.Thread):
         self._poll = poll_interval
         self._timeout = timeout
         self._stop_event = threading.Event()
+        # CDP-based total-size tracking (populated when driver provides performance logs).
+        self._driver = driver
+        self._guid_to_filename: Dict[str, str] = {}
+        self._filename_total_bytes: Dict[str, int] = {}
 
     def stop(self) -> None:
         self._stop_event.set()
+
+    def _poll_cdp_logs(self) -> None:
+        """Drain the browser's performance log and extract download progress events.
+
+        Parses ``Page.downloadWillBegin`` (guid → suggested filename) and
+        ``Page.downloadProgress`` (guid → totalBytes) events.  Results are stored in
+        ``_filename_total_bytes`` for use by ``_poll_states()``.  Silently no-ops when
+        the driver is unavailable or the log is empty.
+        """
+        if self._driver is None:
+            return
+        try:
+            entries = self._driver.get_log("performance")
+        except Exception:
+            return
+        for entry in entries:
+            try:
+                msg = json.loads(entry.get("message", "{}")).get("message", {})
+            except Exception:
+                continue
+            method = msg.get("method", "")
+            params = msg.get("params", {})
+            if method == "Page.downloadWillBegin":
+                guid = params.get("guid", "")
+                suggested = params.get("suggestedFilename", "")
+                if guid and suggested:
+                    self._guid_to_filename[guid] = suggested
+            elif method == "Page.downloadProgress":
+                guid = params.get("guid", "")
+                total = params.get("totalBytes", 0)
+                filename = self._guid_to_filename.get(guid, "")
+                if filename and total and total > 0:
+                    self._filename_total_bytes[filename] = total
 
     def run(self) -> None:
         deadline = time.time() + self._timeout
         while not self._stop_event.wait(self._poll):
             if time.time() > deadline:
                 break
+            self._poll_cdp_logs()
             states = self._poll_states()
             try:
                 self._callback(states)
@@ -75,7 +115,7 @@ class DownloadFolderWatcher(threading.Thread):
         except OSError:
             return [
                 {"filename": n, "index": i, "total": total, "state": "found",
-                 "bytes_done": None, "error_reason": None}
+                 "bytes_done": None, "bytes_total": None, "error_reason": None}
                 for i, n in enumerate(self._expected)
             ]
 
@@ -86,6 +126,7 @@ class DownloadFolderWatcher(threading.Thread):
             lower = name.lower()
             crdown_key = lower + ".crdownload"
             tmp_key = lower + ".tmp"
+            bytes_total: Optional[int] = self._filename_total_bytes.get(name) or None
 
             if crdown_key in lower_map:
                 path = os.path.join(self._dir, lower_map[crdown_key])
@@ -95,7 +136,7 @@ class DownloadFolderWatcher(threading.Thread):
                     bytes_done = None
                 states.append({"filename": name, "index": i, "total": total,
                                 "state": "downloading", "bytes_done": bytes_done,
-                                "error_reason": None})
+                                "bytes_total": bytes_total, "error_reason": None})
             elif tmp_key in lower_map:
                 path = os.path.join(self._dir, lower_map[tmp_key])
                 try:
@@ -104,15 +145,15 @@ class DownloadFolderWatcher(threading.Thread):
                     bytes_done = None
                 states.append({"filename": name, "index": i, "total": total,
                                 "state": "downloading", "bytes_done": bytes_done,
-                                "error_reason": None})
+                                "bytes_total": bytes_total, "error_reason": None})
             elif lower in lower_map:
                 states.append({"filename": name, "index": i, "total": total,
                                 "state": "done", "bytes_done": None,
-                                "error_reason": None})
+                                "bytes_total": bytes_total, "error_reason": None})
             else:
                 states.append({"filename": name, "index": i, "total": total,
                                 "state": "found", "bytes_done": None,
-                                "error_reason": None})
+                                "bytes_total": None, "error_reason": None})
 
         return states
 
@@ -1158,6 +1199,7 @@ class Downloader:
                     self._current_download_dir,
                     all_filenames,
                     self._on_watcher_update,
+                    driver=self.driver,
                 )
                 self._active_watcher.start()
 

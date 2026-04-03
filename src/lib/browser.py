@@ -157,6 +157,9 @@ class BrowserManager:
             pass
         
         options.add_experimental_option("prefs", browser_prefs)
+        # Enable CDP performance log so Page.downloadWillBegin / Page.downloadProgress
+        # events can be consumed via driver.get_log("performance").
+        options.set_capability("goog:loggingPrefs", {"performance": "ALL"})
         options.add_experimental_option("excludeSwitches", ["enable-automation"])
         options.add_experimental_option("useAutomationExtension", False)
         
@@ -361,6 +364,9 @@ class BrowserManager:
         }
         
         options.add_experimental_option("prefs", browser_prefs)
+        # Enable CDP performance log so Page.downloadWillBegin / Page.downloadProgress
+        # events can be consumed via driver.get_log("performance").
+        options.set_capability("goog:loggingPrefs", {"performance": "ALL"})
         options.add_experimental_option("excludeSwitches", ["enable-automation"])
         options.add_experimental_option("useAutomationExtension", False)
         
@@ -401,7 +407,8 @@ class BrowserManager:
                 try:
                     self.driver.execute_cdp_cmd(
                         "Page.setDownloadBehavior",
-                        {"behavior": "allow", "downloadPath": expanded_dir}
+                        {"behavior": "allow", "downloadPath": expanded_dir,
+                         "eventsEnabled": True}
                     )
                     print(f"   📁 Updated download directory via DevTools (Page) to: {expanded_dir}")
                     return
