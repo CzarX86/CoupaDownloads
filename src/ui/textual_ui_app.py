@@ -125,6 +125,38 @@ class WorkerStatusGrid(Static):
                 f"{progress} | [{eff_color}]{efficiency_score:>5.1f}%[/] | "
                 f"TP:{tasks_processed} F:{tasks_failed}"
             )
+
+            # Per-file sub-rows — shown when the folder watcher has state
+            file_downloads = w.get("file_downloads") or []
+            for idx, fd in enumerate(file_downloads):
+                is_last = idx == len(file_downloads) - 1
+                branch = "└─" if is_last else "├─"
+                raw_name = fd.get("filename") or f"attachment_{idx + 1}"
+                name = raw_name if len(raw_name) <= 32 else raw_name[:29] + "..."
+                state = fd.get("state", "found")
+                bytes_done = fd.get("bytes_done")
+                error_reason = fd.get("error_reason") or ""
+
+                if state == "done":
+                    sub = f"   {branch} [green]✓[/] {name}"
+                elif state == "failed":
+                    reason_text = f"  {error_reason[:40]}" if error_reason else ""
+                    sub = f"   {branch} [red]✗[/] {name}[red]{reason_text}[/]"
+                elif state == "downloading":
+                    if bytes_done is not None:
+                        if bytes_done >= 1_048_576:
+                            size_str = f"{bytes_done / 1_048_576:.1f} MB"
+                        elif bytes_done >= 1024:
+                            size_str = f"{bytes_done / 1024:.0f} KB"
+                        else:
+                            size_str = f"{bytes_done} B"
+                        sub = f"   {branch} [yellow]↓[/] {name}  [yellow]{size_str}\u2026[/]"
+                    else:
+                        sub = f"   {branch} [yellow]↓[/] {name}  [yellow]downloading\u2026[/]"
+                else:  # found / queued
+                    sub = f"   {branch} {name}  [dim]queued[/]"
+
+                lines.append(sub)
             
         return "\n".join(lines)
 
@@ -456,6 +488,7 @@ class CoupaTextualUI(App):
                         "efficiency_score": m.get("efficiency_score", 0.0),
                         "tasks_processed": m.get("tasks_processed", 0),
                         "tasks_failed": m.get("tasks_failed", 0),
+                        "file_downloads": m.get("file_downloads") or [],
                     })
 
                 resources = agg.get("resources", {})

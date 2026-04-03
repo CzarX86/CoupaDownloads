@@ -14,7 +14,7 @@ import os
 import queue
 import threading
 import time
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import requests
 import structlog
@@ -154,6 +154,7 @@ class WorkerProcess:
         self._last_progress_signature: Optional[tuple[Any, ...]] = None
         self._last_progress_emitted_at = 0.0
         self._last_progress_downloaded = -1
+        self._last_file_dl_sig: Optional[tuple] = None
         
         logger.debug("WorkerProcess initialized", worker_id=worker_id)
 
@@ -213,6 +214,7 @@ class WorkerProcess:
         self._last_progress_signature = None
         self._last_progress_emitted_at = 0.0
         self._last_progress_downloaded = -1
+        self._last_file_dl_sig = None
 
     def _emit_task_started(self, task: POTask) -> None:
         """Publish the beginning of task processing once per task."""
@@ -239,25 +241,36 @@ class WorkerProcess:
         attachments_found = int(progress_data.get("attachments_found", 0) or 0)
         attachments_downloaded = int(progress_data.get("attachments_downloaded", 0) or 0)
         message = str(progress_data.get("message", "") or "")
+        file_downloads: List[Dict[str, Any]] = progress_data.get("file_downloads") or []
+        file_dl_sig = tuple(
+            (f.get("filename", ""), f.get("state", ""), f.get("bytes_done"))
+            for f in file_downloads
+        ) if file_downloads else ()
         now = time.time()
         signature = (
             task.task_id,
             attachments_found,
             attachments_downloaded,
             message,
+            file_dl_sig,
         )
 
         if self._telemetry_mode != "detailed":
             downloads_changed = attachments_downloaded != self._last_progress_downloaded
+            file_dl_changed = file_dl_sig != self._last_file_dl_sig
             enough_time_elapsed = (now - self._last_progress_emitted_at) >= self._telemetry_debounce_seconds
             if signature == self._last_progress_signature:
                 return
-            if not downloads_changed and not enough_time_elapsed:
+            if not downloads_changed and not file_dl_changed and not enough_time_elapsed:
                 return
 
         self._last_progress_signature = signature
         self._last_progress_downloaded = attachments_downloaded
         self._last_progress_emitted_at = now
+        self._last_file_dl_sig = file_dl_sig
+        extra: Dict[str, Any] = {"task_id": task.task_id}
+        if file_downloads:
+            extra["file_downloads"] = file_downloads
         self._publish_metric(
             status="PROCESSING",
             po_id=po_number,
@@ -265,7 +278,7 @@ class WorkerProcess:
             attachments_found=attachments_found,
             attachments_downloaded=attachments_downloaded,
             timestamp=now,
-            extra={"task_id": task.task_id},
+            extra=extra,
         )
 
     def _get_startup_delay_seconds(self) -> float:

@@ -106,12 +106,18 @@ class CommunicationManager:
     @staticmethod
     def _worker_state_signature(metric: Dict[str, Any]) -> tuple[Any, ...]:
         """Build a signature used to coalesce repeated worker snapshots."""
+        file_downloads = metric.get("file_downloads") or []
+        file_dl_sig = tuple(
+            (f.get("filename", ""), f.get("state", ""), f.get("bytes_done"))
+            for f in file_downloads
+        )
         return (
             metric.get("po_id"),
             metric.get("status"),
             metric.get("attachments_found", 0),
             metric.get("attachments_downloaded", 0),
             metric.get("message", ""),
+            file_dl_sig,
         )
 
     def configure_total_pos(self, total_pos: int) -> None:
