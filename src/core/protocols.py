@@ -1,5 +1,5 @@
 """
-Core protocols for CoupaDownloads.
+Core protocols for CoupaPilot.
 
 Defines formal interfaces (Protocols) for various system components,
 allowing for Dependency Inversion and easier testing/substitution.

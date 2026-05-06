@@ -1,5 +1,5 @@
 """
-Prometheus metrics for CoupaDownloads.
+Prometheus metrics for CoupaPilot.
 
 Provides metrics export for monitoring and alerting.
 """

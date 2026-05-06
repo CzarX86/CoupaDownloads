@@ -1,5 +1,5 @@
 """
-Logging utilities for CoupaDownloads.
+Logging utilities for CoupaPilot.
 
 Provides structured logging setup, custom formatters, and logging helpers
 to replace ad-hoc print statements throughout the codebase.

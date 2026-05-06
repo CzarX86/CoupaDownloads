@@ -193,7 +193,7 @@ class CSVManager:
             report_dir.mkdir(parents=True, exist_ok=True)
 
             timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-            report_name = f"CoupaDownloads_Report_{timestamp}.xlsx"
+            report_name = f"CoupaPilot_Report_{timestamp}.xlsx"
             report_path = report_dir / report_name
 
             # Read original input file
@@ -278,7 +278,7 @@ class CSVManager:
             report_dir = Path(download_root) if download_root else Path.cwd()
             report_dir.mkdir(parents=True, exist_ok=True)
             timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-            report_path = report_dir / f"CoupaDownloads_Report_{timestamp}.xlsx"
+            report_path = report_dir / f"CoupaPilot_Report_{timestamp}.xlsx"
 
             to_export = results_df[results_df['STATUS'] != 'PENDING'].copy()
             if to_export.empty:

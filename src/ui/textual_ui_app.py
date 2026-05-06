@@ -1,5 +1,5 @@
 """
-Premium Textual UI for CoupaDownloads.
+Premium Textual UI for CoupaPilot.
 
 Provides a modern, reactive terminal interface with real-time graphs,
 system monitoring, and smooth animations.

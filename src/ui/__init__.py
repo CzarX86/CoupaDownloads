@@ -1,7 +1,7 @@
-# UI module for CoupaDownloads
+# UI module for CoupaPilot
 
 """
-User Interface components for CoupaDownloads.
+User Interface components for CoupaPilot.
 
 This module provides a Textual-based TUI for real-time monitoring
 and control of download operations.

@@ -83,7 +83,7 @@ def process_single_po(
                 from ..config.app_config import Config
                 base_dir = base_download_dir or str(Config.DOWNLOAD_FOLDER)
             except Exception:
-                base_dir = base_download_dir or os.path.expanduser("~/Downloads/CoupaDownloads")
+                base_dir = base_download_dir or os.path.expanduser("~/Downloads/CoupaPilot")
             os.makedirs(base_dir, exist_ok=True)
             path = os.path.join(base_dir, po_number or "PO")
 

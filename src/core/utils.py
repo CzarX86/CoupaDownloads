@@ -1,5 +1,5 @@
 """
-Shared utility functions for CoupaDownloads.
+Shared utility functions for CoupaPilot.
 """
 
 import os

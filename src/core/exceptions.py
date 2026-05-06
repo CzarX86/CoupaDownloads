@@ -1,5 +1,5 @@
 """
-Custom exception hierarchy for CoupaDownloads.
+Custom exception hierarchy for CoupaPilot.
 
 Provides structured error handling with error codes, context tracking,
 and recovery strategies. Replaces bare Exception usage throughout the codebase.
@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 
 
 class ErrorCode(Enum):
-    """Standardized error codes for all CoupaDownloads errors."""
+    """Standardized error codes for all CoupaPilot errors."""
     
     # General errors (1000-1999)
     UNKNOWN_ERROR = auto()
@@ -105,7 +105,7 @@ class ErrorContext:
 
 class CoupaError(Exception):
     """
-    Base exception for all CoupaDownloads errors.
+    Base exception for all CoupaPilot errors.
     
     All custom exceptions should inherit from this class.
     Provides consistent error handling, logging, and recovery.

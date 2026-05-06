@@ -1,5 +1,5 @@
 """
-Unified Application Configuration for CoupaDownloads.
+Unified Application Configuration for CoupaPilot.
 
 This module provides a single source of truth for all application configuration,
 replacing the scattered configuration across multiple modules.
@@ -31,12 +31,12 @@ class ExecutionMode(str, Enum):
 
 
 def generate_timestamped_download_folder(base_path: Optional[str] = None) -> str:
-    """Generate a timestamped CoupaDownloads folder path."""
+    """Generate a timestamped CoupaPilot folder path."""
     if base_path is None:
         base_path = str(Path.home() / "Downloads")
 
     timestamp = datetime.now().strftime("%Y%m%d-%Hh%M")
-    folder_name = f"{timestamp}_CoupaDownloads"
+    folder_name = f"{timestamp}_CoupaPilot"
     return str(Path(base_path) / folder_name)
 
 
@@ -48,17 +48,17 @@ def default_app_state_dir() -> Path:
     if system == "nt":
         appdata = os.environ.get("APPDATA") or os.environ.get("LOCALAPPDATA")
         if appdata:
-            return Path(appdata) / "CoupaDownloads"
-        return home / "AppData" / "Roaming" / "CoupaDownloads"
+            return Path(appdata) / "CoupaPilot"
+        return home / "AppData" / "Roaming" / "CoupaPilot"
 
     platform_name = os.uname().sysname.lower() if hasattr(os, "uname") else ""
     if platform_name == "darwin":
-        return home / "Library" / "Application Support" / "CoupaDownloads"
+        return home / "Library" / "Application Support" / "CoupaPilot"
 
     xdg_state_home = os.environ.get("XDG_STATE_HOME")
     if xdg_state_home:
-        return Path(xdg_state_home) / "CoupaDownloads"
-    return home / ".local" / "state" / "CoupaDownloads"
+        return Path(xdg_state_home) / "CoupaPilot"
+    return home / ".local" / "state" / "CoupaPilot"
 
 
 class AppConfig(BaseSettings):
@@ -91,7 +91,7 @@ class AppConfig(BaseSettings):
     )
     
     download_folder: Path = Field(
-        default_factory=lambda: Path.home() / "Downloads" / "CoupaDownloads",
+        default_factory=lambda: Path.home() / "Downloads" / "CoupaPilot",
         description="Default download folder for attachments"
     )
     
@@ -616,7 +616,7 @@ class AppConfig(BaseSettings):
         Get download folder with timestamp for stability.
         
         Returns a timestamped folder to avoid conflicts between runs.
-        Format: yyyymmdd-hh"h"mm_CoupaDownloads
+        Format: yyyymmdd-hh"h"mm_CoupaPilot
         """
         timestamp = datetime.now().strftime('%Y%m%d-%Hh%M')
         parent = self.download_folder.parent

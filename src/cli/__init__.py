@@ -1,1 +1,1 @@
-# CLI module for CoupaDownloads
+# CLI module for CoupaPilot

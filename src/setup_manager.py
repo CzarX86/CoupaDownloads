@@ -38,7 +38,7 @@ class SetupManager:
         default_download = os.path.expanduser(self.experimental_config.DOWNLOAD_FOLDER)
 
         # If using the old default format, suggest the new timestamped format
-        if "CoupaDownloads" in default_download and not any(char.isdigit() for char in os.path.basename(default_download)):
+        if "CoupaPilot" in default_download and not any(char.isdigit() for char in os.path.basename(default_download)):
             # Generate a new timestamped folder as suggestion
             from .config.app_config import generate_timestamped_download_folder
             suggested_download = generate_timestamped_download_folder("/Users/juliocezar/Downloads")

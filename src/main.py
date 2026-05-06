@@ -1,5 +1,5 @@
 """
-Módulo principal do sistema CoupaDownloads.
+Módulo principal do sistema CoupaPilot.
 
 Este módulo contém a classe MainApp, responsável por orquestrar o processamento de POs,
 gerenciamento de UI, CSV e workers paralelos para download de anexos no Coupa.
@@ -95,7 +95,7 @@ else:
 
 class MainApp:
     """
-    Orquestrador principal do sistema CoupaDownloads.
+    Orquestrador principal do sistema CoupaPilot.
     
     Esta classe é responsável por:
     - Inicializar todos os componentes do sistema

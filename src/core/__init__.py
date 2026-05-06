@@ -1,5 +1,5 @@
 """
-Core interfaces and utilities for CoupaDownloads.
+Core interfaces and utilities for CoupaPilot.
 """
 
 from .status import StatusLevel, StatusMessage

@@ -1,5 +1,5 @@
 """
-SQLite Handler for CoupaDownloads.
+SQLite Handler for CoupaPilot.
 
 Provides a high-performance, concurrent-safe persistence layer using SQLite.
 Replaces synchronous CSV full-file rewrites to eliminate lock contention bottlenecks.

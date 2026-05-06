@@ -670,7 +670,7 @@ class WorkerProcess:
         
         # Final fallback to default (but this should not happen with proper config)
         if not target:
-            target = os.path.join(os.path.expanduser('~'), 'Downloads', 'CoupaDownloads')
+            target = os.path.join(os.path.expanduser('~'), 'Downloads', 'CoupaPilot')
 
         normalized = os.path.abspath(os.path.expanduser(target))
         

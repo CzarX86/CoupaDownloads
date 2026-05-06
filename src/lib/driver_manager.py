@@ -338,16 +338,16 @@ class DriverCache:
         home = Path.home()
         system = platform.system().lower()
         if system == "darwin":
-            return home / "Library" / "Caches" / "CoupaDownloads" / "drivers" / "edgedriver"
+            return home / "Library" / "Caches" / "CoupaPilot" / "drivers" / "edgedriver"
         if system == "windows":
             local_appdata = os.environ.get("LOCALAPPDATA")
             if local_appdata:
-                return Path(local_appdata) / "CoupaDownloads" / "drivers" / "edgedriver"
-            return home / "AppData" / "Local" / "CoupaDownloads" / "drivers" / "edgedriver"
+                return Path(local_appdata) / "CoupaPilot" / "drivers" / "edgedriver"
+            return home / "AppData" / "Local" / "CoupaPilot" / "drivers" / "edgedriver"
         xdg_cache_home = os.environ.get("XDG_CACHE_HOME")
         if xdg_cache_home:
-            return Path(xdg_cache_home) / "CoupaDownloads" / "drivers" / "edgedriver"
-        return home / ".cache" / "CoupaDownloads" / "drivers" / "edgedriver"
+            return Path(xdg_cache_home) / "CoupaPilot" / "drivers" / "edgedriver"
+        return home / ".cache" / "CoupaPilot" / "drivers" / "edgedriver"
 
     def driver_path_for(self, driver_version: str) -> Path:
         filename = "msedgedriver.exe" if self.platform_name == "win64" else "msedgedriver"

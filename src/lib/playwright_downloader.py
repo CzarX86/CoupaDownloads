@@ -154,7 +154,7 @@ class PlaywrightDownloader:
             except Exception:
                 _fallback = None
             download_path = os.path.abspath(os.path.expanduser(
-                _fallback or os.path.join(os.path.expanduser('~'), 'Downloads', 'CoupaDownloads')
+                _fallback or os.path.join(os.path.expanduser('~'), 'Downloads', 'CoupaPilot')
             ))
             os.makedirs(download_path, exist_ok=True)
             print(f"      ⚠️ [playwright] No PO folder from callback; using fallback: {download_path}")
