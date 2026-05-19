@@ -25,6 +25,9 @@ coupapilot = "src.cli.main:main"
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
+markers = [
+    "integration: marks tests as E2E integration tests requiring a real Coupa connection (deselect with '-m not integration')",
+]
 
 [build-system]
 requires = ["setuptools>=69", "wheel"]
