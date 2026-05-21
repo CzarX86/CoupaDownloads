@@ -1,0 +1,22 @@
+{
+  "source_path": "/Users/juliocezar/Dev/CoupaPilot/CoupaTurboDownloader/docs/implementation_plan_benchmarker.md",
+  "type": "SPEC",
+  "confidence": "high",
+  "manifest_override": true,
+  "title": "Implementation Plan – Benchmarker Module",
+  "summary": "Plan for a benchmarker module measuring network latency and throughput to Coupa endpoints.",
+  "scope": [
+    "benchmarker module",
+    "network latency",
+    "throughput",
+    "Coupa endpoints",
+    "concurrency",
+    "delay",
+    "httpx.AsyncClient",
+    "CLI entry point"
+  ],
+  "cross_refs": [],
+  "locked": false,
+  "precedence": 1,
+  "notes": ""
+}
