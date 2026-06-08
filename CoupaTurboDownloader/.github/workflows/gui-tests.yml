@@ -1,0 +1,41 @@
+name: GUI Tests
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  playwright:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: 3.12
+
+      - name: Install dependencies
+        run: |
+          python -m venv .venv
+          source .venv/bin/activate
+          pip install --upgrade pip
+          pip install uvicorn[standard] pytest pytest-asyncio playwright
+          playwright install-deps
+          playwright install chromium
+
+      - name: Run Playwright GUI tests
+        run: |
+          source .venv/bin/activate
+          uv run --project . pytest -q tests/e2e/test_gui_playwright_probe.py
+
+      - name: Upload artifacts
+        if: failure()
+        uses: actions/upload-artifact@v3
+        with:
+          name: gui-test-artifacts
+          path: artifacts/gui-playwright/**
