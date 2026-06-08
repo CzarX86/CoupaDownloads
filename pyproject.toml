@@ -84,3 +84,8 @@ include-package-data = true
 
 [tool.setuptools.packages.find]
 include = ["src*"]
+
+[tool.uv.workspace]
+members = [
+    "CoupaTurboDownloader",
+]

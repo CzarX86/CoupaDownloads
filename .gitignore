@@ -72,6 +72,16 @@ storage/
 
 # Downloaded files (keep the structure but ignore content)
 data/downloads/
+# Explicit heavy run artifacts (operational telemetry/sharded runs)
+data/downloads/*_sharded_run/
+data/downloads/*_diag_run/
+data/downloads/*_e2e_test_run/
+data/downloads/**/shards/
+data/downloads/**/consolidated/
+data/downloads/**/logs/
+data/downloads/**/state.json
+data/downloads/**/telemetry.json
+data/downloads/**/summary.csv
 *.pdf
 *.msg
 *.docx
