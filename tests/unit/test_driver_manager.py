@@ -180,7 +180,7 @@ def test_driver_cache_default_root_linux(monkeypatch, tmp_path: Path):
 
     cache_root = DriverCache.default_cache_root()
 
-    assert cache_root == tmp_path / "xdg-cache" / "CoupaDownloads" / "drivers" / "edgedriver"
+    assert cache_root == tmp_path / "xdg-cache" / "CoupaPilot" / "drivers" / "edgedriver"
 
 
 def test_concurrent_resolve_downloads_only_once(tmp_path: Path):

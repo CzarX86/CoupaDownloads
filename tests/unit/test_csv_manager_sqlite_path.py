@@ -25,7 +25,7 @@ def test_default_app_state_dir_uses_xdg_state_home(monkeypatch, tmp_path: Path):
 
     state_dir = default_app_state_dir()
 
-    assert state_dir == tmp_path / "state-home" / "CoupaDownloads"
+    assert state_dir == tmp_path / "state-home" / "CoupaPilot"
 
 
 def test_initialize_csv_handler_stores_sqlite_in_application_state(monkeypatch, tmp_path: Path):

@@ -48,6 +48,17 @@ EXPECTED_POS = [
     "PO15705960",
 ]
 
+INPUT_HEADER = (
+    "PO_NUMBER;STATUS;SUPPLIER;ATTACHMENTS_FOUND;ATTACHMENTS_DOWNLOADED;"
+    "AttachmentName;LAST_PROCESSED;ERROR_MESSAGE;DOWNLOAD_FOLDER;COUPA_URL;"
+    "<|>;SUPPLIER;Year;Quarter;Management Unit L1 Name"
+)
+
+REPORT_PATTERNS = (
+    "CoupaPilot_Report_*.xlsx",
+    "CoupaDownloads_Report_*.xlsx",
+)
+
 # Statuses the system may legitimately assign
 TERMINAL_STATUSES = {"COMPLETED", "NO_ATTACHMENTS", "PARTIAL", "FAILED", "ERROR"}
 
@@ -58,23 +69,24 @@ pytestmark = pytest.mark.integration
 
 # ─── Fixtures ────────────────────────────────────────────────────────────────
 
-@pytest.fixture(scope="module", autouse=True)
-def csv_backup_and_restore():
-    """
-    Backup input.csv before the test run and restore it afterward.
+@pytest.fixture(scope="module")
+def e2e_input_csv(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """Create an isolated input CSV so this test does not depend on the user's dataset."""
+    tmp_dir = tmp_path_factory.mktemp("e2e_input")
+    temp_input = tmp_dir / "input_e2e.csv"
 
-    Ensures the test is non-destructive — input.csv returns to its original
-    blank state after the run, regardless of success or failure.
-    """
-    backup = INPUT_CSV.with_suffix(".e2e_backup")
-    shutil.copy2(INPUT_CSV, backup)
-    yield
-    shutil.copy2(backup, INPUT_CSV)
-    backup.unlink(missing_ok=True)
+    lines = [INPUT_HEADER]
+    for po in EXPECTED_POS:
+        lines.append(
+            f"{po};;Manpowergroup Inc.;;;;;;;;;Manpowergroup Inc.;2024;Q22024;Yellow Wood"
+        )
+
+    temp_input.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return temp_input
 
 
 @pytest.fixture(scope="module")
-def run_app() -> dict:
+def run_app(e2e_input_csv: Path) -> dict:
     """
     Run MainApp once for the entire test module (expensive — network + browser).
 
@@ -97,6 +109,7 @@ def run_app() -> dict:
         "ENABLE_INTERACTIVE_UI": "false",
         "UI_MODE": "none",
         "HEADLESS": "true",
+        "EXCEL_FILE_PATH": str(e2e_input_csv),
         "DOWNLOAD_FOLDER": str(DOWNLOADS_DIR / folder_suffix),
         "SUPPRESS_WORKER_OUTPUT": "1",
     }
@@ -109,7 +122,7 @@ def run_app() -> dict:
     run_started = datetime.now()
     try:
         from src.main import MainApp
-        app = MainApp(enable_parallel=False, max_workers=1)
+        app = MainApp(enable_parallel=True, max_workers=4)
         app.run()
     finally:
         for key, original in stashed_env.items():
@@ -129,7 +142,10 @@ def run_app() -> dict:
     # Find the Excel report (source of truth for results)
     report = None
     if actual_folder:
-        reports = sorted(actual_folder.glob("CoupaDownloads_Report_*.xlsx"))
+        reports: list[Path] = []
+        for pattern in REPORT_PATTERNS:
+            reports.extend(actual_folder.glob(pattern))
+        reports = sorted(reports)
         report = reports[0] if reports else None
 
     return {"folder": actual_folder, "report": report}
@@ -162,7 +178,7 @@ class TestRunOutputExists:
     def test_excel_report_created(self, run_app: dict):
         report = run_app["report"]
         assert report is not None and report.exists(), (
-            f"No CoupaDownloads_Report_*.xlsx found in {run_app['folder']}"
+            f"No report matching {REPORT_PATTERNS} found in {run_app['folder']}"
         )
 
 

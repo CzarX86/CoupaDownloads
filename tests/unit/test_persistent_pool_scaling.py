@@ -235,3 +235,9 @@ def test_dispatch_loop_does_not_attempt_scaling(tmp_path, monkeypatch):
 
     assert dispatch_calls == ["dispatch"]
     assert scale_calls == []
+
+
+def test_profile_cap_includes_restart_headroom(tmp_path):
+    pool = _build_pool(tmp_path, worker_count=8)
+
+    assert pool.profile_manager.max_profiles == 10
