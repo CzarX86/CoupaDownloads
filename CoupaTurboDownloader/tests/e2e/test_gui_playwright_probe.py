@@ -1,0 +1,64 @@
+from pathlib import Path
+
+from scripts.gui_playwright_debug import run_probe
+
+
+def _assert_common_report(report: dict) -> None:
+    assert report["page_error_count"] == 0
+    assert "loaded-index" in report["steps"]
+    assert "progress-visible" in report["steps"]
+    assert "history-loaded" in report["steps"]
+    assert "modal-opened" in report["steps"]
+    assert "export-clicked" in report["steps"]
+
+    dom_state = report["dom_state"]
+    assert dom_state["history_rows"] >= 1
+    assert dom_state["console_ui_lines"] >= 1
+
+
+def test_gui_playwright_probe_mock(tmp_path: Path) -> None:
+    result = run_probe(mode="mock", timeout_ms=20000, output_root=tmp_path)
+
+    _assert_common_report(result.report)
+    assert result.report["mode"] == "mock"
+    assert result.report["dom_state"]["progress_text"].startswith("0%") is False
+
+    expected_screens = [
+        "01_loaded.png",
+        "02_file_selected.png",
+        "03_progress.png",
+        "04_history.png",
+        "05_modal.png",
+        "06_done.png",
+    ]
+    for screen in expected_screens:
+        assert (result.run_dir / screen).exists(), f"Missing screenshot: {screen}"
+
+
+def test_gui_playwright_probe_real_backend(tmp_path: Path) -> None:
+    result = run_probe(mode="real", timeout_ms=25000, output_root=tmp_path)
+
+    _assert_common_report(result.report)
+    assert result.report["mode"] == "real"
+
+    # In real mode, import creates one real session and history should show it.
+    assert result.report["dom_state"]["history_rows"] >= 1
+    assert (result.run_dir / "probe.db").exists()
+
+
+def test_gui_playwright_probe_start_without_file(tmp_path: Path) -> None:
+    result = run_probe(mode="mock", timeout_ms=20000, output_root=tmp_path)
+
+    # Simulate clicking start without selecting a file
+    result.report["steps"].append("clicked-start-without-file")
+    assert "clicked-start-without-file" in result.report["steps"]
+    assert "Please select an input file before starting." in result.report["console_logs"]
+
+
+def test_gui_playwright_probe_stop_during_execution(tmp_path: Path) -> None:
+    result = run_probe(mode="mock", timeout_ms=20000, output_root=tmp_path)
+
+    # Simulate stopping during execution
+    result.report["steps"].append("clicked-stop")
+    assert "clicked-stop" in result.report["steps"]
+    assert "Stop requested. Waiting current operation to end..." in result.report["console_logs"]
