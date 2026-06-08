@@ -38,6 +38,11 @@ def _sweep_orphaned_driver_processes() -> None:
     never opened by human users — so it is safe to kill every instance that no
     longer has a live Python parent when the pool starts fresh.
     """
+    disable_sweep = os.environ.get("COUPA_DISABLE_ORPHAN_DRIVER_SWEEP", "0").strip().lower()
+    if disable_sweep in {"1", "true", "yes", "on"}:
+        logger.info("Skipping orphaned msedgedriver sweep (disabled by env flag)")
+        return
+
     try:
         current_pid = os.getpid()
         killed: list[int] = []
@@ -116,7 +121,7 @@ class PersistentWorkerPool:
         
         # Core components
         self.task_queue = TaskQueue()
-        profile_cap = max(config.worker_count, 8)
+        profile_cap = max(config.worker_count + 2, 10)
         try:
             env_cap_val = os.environ.get('PERSISTENT_WORKERS_MAX')
             if env_cap_val:

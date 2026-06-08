@@ -46,6 +46,7 @@ from .task_queue import ProcessingTask
 from ..lib.browser import BrowserManager
 from ..lib.po_processing import process_single_po  # shared utility
 from ..lib.driver_manager import DriverManager
+from ..core.exceptions import SessionExpiredError
 from ..core.protocols import StorageManager, Messenger
 
 # Centralized config for URLs
@@ -78,6 +79,10 @@ def _env_csv(name: str) -> list[str]:
     """Parse a comma-separated environment variable into a list of args."""
     raw_value = os.environ.get(name, "")
     return [item.strip() for item in raw_value.split(",") if item.strip()]
+
+
+class WorkerFatalError(RuntimeError):
+    """Fatal worker error that should bubble up to pool-level restart handling."""
 
 class WorkerProcess:
     """
@@ -155,6 +160,8 @@ class WorkerProcess:
         self._last_progress_emitted_at = 0.0
         self._last_progress_downloaded = -1
         self._last_file_dl_sig: Optional[tuple] = None
+        self._consecutive_tab_failures: int = 0
+        self._max_consecutive_tab_failures: int = 3
         
         logger.debug("WorkerProcess initialized", worker_id=worker_id)
 
@@ -754,6 +761,13 @@ class WorkerProcess:
             self._reset_progress_telemetry()
             return result
             
+        except WorkerFatalError:
+            self.tasks_failed += 1
+            self.worker.complete_task(success=False)
+            self.current_task = None
+            self._emit_ready_for_next_task()
+            self._reset_progress_telemetry()
+            raise
         except Exception as e:
             # Handle unexpected errors
             error_msg = f"Unexpected error processing task: {str(e)}"
@@ -846,7 +860,30 @@ class WorkerProcess:
         tab_handle = None
         try:
             # create_tab ensures keeper tab exists and switches to the new tab
-            tab_handle = self.browser_session.create_tab(task.task_id)
+            try:
+                tab_handle = self.browser_session.create_tab(task.task_id)
+                self._consecutive_tab_failures = 0
+            except RuntimeError as tab_err:
+                self._consecutive_tab_failures += 1
+                if self._consecutive_tab_failures >= self._max_consecutive_tab_failures:
+                    raise WorkerFatalError(
+                        f"Fatal tab creation failures for {self.worker_id}: {self._consecutive_tab_failures} consecutive errors"
+                    ) from tab_err
+                friendly = str(tab_err)
+                return {
+                    'success': False,
+                    'error': friendly,
+                    'task_id': task.task_id,
+                    'po_number': po_number,
+                    'po_number_display': display_po,
+                    'status_code': 'FAILED',
+                    'message': friendly,
+                    'final_folder': '',
+                    'attachments_downloaded': 0,
+                    'errors': [{'filename': '', 'reason': friendly}],
+                    'processing_time': task.get_processing_time(),
+                    'transient': True,
+                }
             
             # Assign PO number to tab after creation
             if task.task_id in self.browser_session.active_tabs:
@@ -867,16 +904,44 @@ class WorkerProcess:
             except Exception:
                 pass
 
-            result_entry = process_single_po(
-                po_number=po_number,
-                po_data=po_data,
-                driver=driver,
-                browser_manager=browser_manager,
-                hierarchy_columns=hierarchy_cols,
-                has_hierarchy_data=has_hierarchy,
-                progress_callback=progress_bridge,
-                skip_finalization=skip_finalization
-            )
+            try:
+                result_entry = process_single_po(
+                    po_number=po_number,
+                    po_data=po_data,
+                    driver=driver,
+                    browser_manager=browser_manager,
+                    hierarchy_columns=hierarchy_cols,
+                    has_hierarchy_data=has_hierarchy,
+                    progress_callback=progress_bridge,
+                    skip_finalization=skip_finalization
+                )
+            except SessionExpiredError as session_error:
+                logger.warning(
+                    "Session expired while processing PO; attempting recovery",
+                    worker_id=self.worker_id,
+                    po_number=po_number,
+                    error=str(session_error),
+                )
+                if not self.browser_session.recover_session():
+                    raise WorkerFatalError(
+                        f"Session recovery failed for worker {self.worker_id}"
+                    ) from session_error
+
+                try:
+                    result_entry = process_single_po(
+                        po_number=po_number,
+                        po_data=po_data,
+                        driver=driver,
+                        browser_manager=browser_manager,
+                        hierarchy_columns=hierarchy_cols,
+                        has_hierarchy_data=has_hierarchy,
+                        progress_callback=progress_bridge,
+                        skip_finalization=skip_finalization
+                    )
+                except SessionExpiredError as retry_error:
+                    raise WorkerFatalError(
+                        f"Session still expired after recovery for worker {self.worker_id}"
+                    ) from retry_error
 
             # attach processing timing and task id
             result_entry['task_id'] = task.task_id
@@ -884,6 +949,8 @@ class WorkerProcess:
 
             return result_entry
 
+        except WorkerFatalError:
+            raise
         except Exception as e:
             friendly = str(e)
             lower_msg = friendly.lower()

@@ -294,6 +294,7 @@ class CoupaUnreachableError(CoupaAPIError):
             context=ErrorContext(
                 extra={"url": url},
                 is_recoverable=False,
+                should_retry=True,
                 recovery_action="Check network connection and Coupa URL"
             ),
             **kwargs
@@ -510,8 +511,10 @@ class ValidationError(CoupaError):
 class InvalidInputError(ValidationError):
     """Invalid input provided."""
     def __init__(self, message: str, **kwargs: Any) -> None:
-        super().__init__(
+        CoupaError.__init__(
+            self,
             message,
+            code=ErrorCode.INVALID_INPUT,
             context=ErrorContext(
                 is_recoverable=False,
                 recovery_action="Check input format and values"

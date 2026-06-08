@@ -23,6 +23,7 @@ from selenium.common.exceptions import (
 
 from .browser import BrowserManager
 from ..config.app_config import Config
+from ..core.exceptions import SessionExpiredError
 
 
 class DownloadFolderWatcher(threading.Thread):
@@ -956,6 +957,21 @@ class Downloader:
             error_info = self._detect_error_page('post_ready', timeout=ready_timeout)
 
         if error_info:
+            try:
+                current_url = (self.driver.current_url or "").lower()
+            except Exception:
+                current_url = ""
+
+            session_redirect_signals = (
+                "/sessions/new",
+                "/login",
+                "session_expired",
+                "/auth/",
+                "sso",
+            )
+            if current_url and any(signal in current_url for signal in session_redirect_signals):
+                raise SessionExpiredError(f"Session expired; redirected to: {current_url}")
+
             if on_attachments_found:
                 on_attachments_found({
                     'supplier_name': '',

@@ -304,8 +304,22 @@ class ProcessingSession:
                 po_numbers = [po['po_number'] for po in po_list]
                 handles = self.worker_pool.submit_tasks(po_list)
 
-                # Wait for completion
-                await self.worker_pool.wait_for_completion(timeout=600)  # 10 minute timeout
+                # Wait for completion.
+                # Keep a safe default upper bound (1 hour) to avoid silent hangs, while
+                # still allowing explicit unlimited wait with COUPA_POOL_WAIT_TIMEOUT_SECONDS<=0.
+                wait_timeout_raw = os.environ.get("COUPA_POOL_WAIT_TIMEOUT_SECONDS", "3600").strip()
+                try:
+                    wait_timeout = float(wait_timeout_raw)
+                except (TypeError, ValueError):
+                    wait_timeout = 0.0
+                wait_timeout = None if wait_timeout <= 0 else wait_timeout
+
+                completed = await self.worker_pool.wait_for_completion(timeout=wait_timeout)
+                if not completed and wait_timeout is not None:
+                    print(
+                        f"⚠️ Worker pool wait timeout reached ({wait_timeout:.0f}s). "
+                        "Unfinished tasks may be collected as failures with timeout details."
+                    )
 
                 # Collect results
                 # BUG-5 fix: handle.wait_for_completion() calls time.sleep() — a

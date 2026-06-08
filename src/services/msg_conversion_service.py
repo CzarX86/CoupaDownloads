@@ -151,6 +151,7 @@ class MsgToPdfConverter:
 
         try:
             pdf = FPDF()
+            pdf.set_compression(False)
             pdf.set_auto_page_break(auto=True, margin=15)
             pdf.add_page()
 
