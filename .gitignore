@@ -144,3 +144,8 @@ experimental/*
 !experimental/core/
 !experimental/core/__init__.py
 !experimental/core/main.py
+
+# CoupaTurboDownloader local runtime artifacts
+CoupaTurboDownloader/.cookies.json
+CoupaTurboDownloader/artifacts/gui-playwright/**/*.json
+CoupaTurboDownloader/artifacts/gui-playwright/**/*.db
