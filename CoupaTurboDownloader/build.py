@@ -122,7 +122,7 @@ def build():
     try:
         subprocess.check_call(cmd, cwd=str(PROJECT_ROOT))
     except subprocess.CalledProcessError as e:
-        print(f"\n❌ Build failed with exit code: {e.returncode}")
+        print(f"\n[ERROR] Build failed with exit code: {e.returncode}")
         sys.exit(1)
 
     # Keep the historical project-root shortcut in sync with the release
@@ -141,7 +141,7 @@ def build():
             )
             running = probe.returncode == 0 and bool(probe.stdout.strip())
         if built_bundle.exists() and running:
-            print(f"  ⚠️  App is running; skipped project-root sync: {shortcut_bundle}")
+            print(f"  [WARN] App is running; skipped project-root sync: {shortcut_bundle}")
             print(f"     Signed build remains available at: {built_bundle}")
         elif built_bundle.exists():
             if shortcut_bundle.exists():
@@ -153,17 +153,17 @@ def build():
     dist_dir = PROJECT_ROOT / "dist"
     if dist_dir.exists():
         print("\n" + "=" * 60)
-        print("  ✅ Build completed!")
+        print("  [OK] Build completed!")
         print("=" * 60)
         for f in sorted(dist_dir.iterdir()):
             size_mb = f.stat().st_size / (1024 * 1024) if f.is_file() else 0
             if f.is_file():
-                print(f"  📦 {f.name} ({size_mb:.1f} MB)")
+                print(f"  FILE {f.name} ({size_mb:.1f} MB)")
             else:
-                print(f"  📁 {f.name}/")
+                print(f"  DIR  {f.name}/")
         print(f"\n  Location: {dist_dir}")
     else:
-        print("\n⚠️  dist/ folder not found — build may have failed silently.")
+        print("\n[WARN] dist/ folder not found - build may have failed silently.")
 
 
 if __name__ == "__main__":
@@ -185,7 +185,7 @@ if __name__ == "__main__":
 
     # Cross-compilation check
     if args.windows and not sys.platform.startswith("win"):
-        print("❌ Cannot build Windows .exe on macOS!")
+        print("[ERROR] Cannot build Windows .exe on macOS!")
         print("   PyInstaller does not support cross-compilation.")
         print("   Options:")
         print("   1. Build on a Windows machine/VM")
