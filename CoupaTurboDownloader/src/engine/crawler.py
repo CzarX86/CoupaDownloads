@@ -245,10 +245,16 @@ class CoupaCrawler:
         if po_record and po_record["status"] == "SKIPPED_VERIFICATION_REQUIRED":
             return {"po": po_number, "success": False, "error": "SKIPPED_VERIFICATION_REQUIRED"}
 
-        po_dir_parent = company_code
+        po_dir_parts = [company_code]
         if po_record and po_record.get("output_subdir"):
-            po_dir_parent = po_record["output_subdir"]
-        po_dir = os.path.join(self.base_download_dir, po_dir_parent, po_number)
+            # output_subdir is stored with POSIX separators so sessions remain
+            # portable. Accept legacy backslashes while creating a native path.
+            po_dir_parts = [
+                part
+                for part in re.split(r"[\\/]+", str(po_record["output_subdir"]))
+                if part not in {"", ".", ".."}
+            ] or [company_code]
+        po_dir = os.path.join(self.base_download_dir, *po_dir_parts, po_number)
         dir_created = False
         start_time = time.time()
 

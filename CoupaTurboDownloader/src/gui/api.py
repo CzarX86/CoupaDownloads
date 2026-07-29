@@ -9,7 +9,7 @@ import shutil
 import subprocess
 import threading
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Dict, Any, List, Optional
 
 import pandas as pd
@@ -1151,7 +1151,7 @@ class AppAPI:
                 if po_val and po_val.lower() != 'nan' and company_val and company_val.lower() != 'nan':
                     if has_hierarchy_data and hierarchy_cols:
                         parts = [clean_folder_part(row.get(col, '')) for col in hierarchy_cols]
-                        output_subdir = os.path.join(*parts)
+                        output_subdir = PurePosixPath(*parts).as_posix()
                     else:
                         output_subdir = company_val
 
