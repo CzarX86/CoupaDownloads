@@ -12,7 +12,7 @@ import threading
 import multiprocessing as mp
 
 from .worker_manager import WorkerManager
-from .core.csv_handler import CSVHandler, WriteQueue
+from .core.csv_handler import CSVHandler
 from .lib.models import HeadlessConfiguration
 from .core.output import maybe_print as print
 
@@ -23,14 +23,12 @@ class ProcessingController:
     def __init__(self, worker_manager: WorkerManager):
         self.worker_manager = worker_manager
         self.csv_handler: Optional[CSVHandler] = None
-        self._csv_write_queue: Optional[WriteQueue] = None
         self._csv_session_id: Optional[str] = None
         self._run_start_time: Optional[float] = None
 
-    def set_csv_handler(self, csv_handler: CSVHandler, write_queue: WriteQueue, session_id: str):
+    def set_csv_handler(self, csv_handler: CSVHandler, session_id: str):
         """Set CSV handler for incremental updates."""
         self.csv_handler = csv_handler
-        self._csv_write_queue = write_queue
         self._csv_session_id = session_id
 
     def _shutdown_csv_handler(self):
@@ -38,7 +36,6 @@ class ProcessingController:
         if self.csv_handler:
             self.csv_handler.shutdown()
             self.csv_handler = None
-            self._csv_write_queue = None
 
     def _parallel_progress_callback(self, progress: Dict[str, Any]) -> None:
         """Progress callback (minimal version)."""
@@ -115,36 +112,22 @@ class ProcessingController:
             successful = 0
             failed = 0
             for i, po_data in enumerate(po_data_list):
-                if communication_manager:
-                    try:
-                        po_number = po_data.get('po_number', '')
-                        communication_manager.send_metric({
-                            'worker_id': 0,
-                            'po_id': po_number,
-                            'status': 'STARTED',
-                            'timestamp': time.time(),
-                            'attachments_found': 0,
-                            'attachments_downloaded': 0,
-                            'message': f"Started {po_number}" if po_number else "Started PO",
-                        })
-                    except Exception:
-                        pass
                 ok = process_single_po(po_data, hierarchy_cols, has_hierarchy_data, i, len(po_data_list), execution_mode=execution_mode)
                 if ok:
                     successful += 1
                 else:
                     failed += 1
-                if communication_manager:
+                if communication_manager and not ok:
                     try:
                         po_number = po_data.get('po_number', '')
                         communication_manager.send_metric({
                             'worker_id': 0,
                             'po_id': po_number,
-                            'status': 'COMPLETED' if ok else 'FAILED',
+                            'status': 'FAILED',
                             'timestamp': time.time(),
                             'attachments_found': 0,
                             'attachments_downloaded': 0,
-                            'message': f"{'Completed' if ok else 'Failed'} {po_number}" if po_number else ('Completed PO' if ok else 'Failed PO'),
+                            'message': f"Failed {po_number}" if po_number else 'Failed PO',
                         })
                     except Exception:
                         pass

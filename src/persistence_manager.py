@@ -4,7 +4,7 @@ import pandas as pd
 import os
 from datetime import datetime
 
-from .core.csv_handler import CSVHandler, WriteQueue
+from .core.csv_handler import CSVHandler
 from .core.sqlite_handler import SQLiteHandler
 
 
@@ -13,10 +13,10 @@ class CSVManager:
 
     def __init__(self):
         self._csv_handler: Optional[CSVHandler] = None
-        self._csv_write_queue: Optional[WriteQueue] = None
         self._csv_session_id: Optional[str] = None
         self._sqlite_handler: Optional[SQLiteHandler] = None
         self._sqlite_db_path: Optional[str] = None
+        self._sqlite_db_persistent: bool = False
         self._input_csv_path: Optional[Path] = None
         self._output_copy_path: Optional[Path] = None
 
@@ -44,21 +44,20 @@ class CSVManager:
         """Initialize CSV handler if input is CSV."""
         if csv_input_path.suffix.lower() == '.csv' and not self.csv_handler:
             try:
-                from .lib.config import Config
                 # 1. Prepare SQLite session DB path
                 session_id = datetime.now().strftime("%Y%m%d-%H%M%S")
                 backup_dir = csv_input_path.parent / "backups"
                 backup_dir.mkdir(parents=True, exist_ok=True)
-                db_path = backup_dir / f"session_{session_id}.db"
+                db_path = self._build_sqlite_db_path(session_id)
                 self._sqlite_db_path = str(db_path)
+                self._sqlite_db_persistent = True
                 self._input_csv_path = csv_input_path
                 self._output_copy_path = self._build_output_copy_path(csv_input_path)
 
                 # 2. Initialize Handler (which now handles its own SQLite sub-handler)
-                self.csv_handler, self._csv_write_queue, self._csv_session_id = CSVHandler.create_handler(
+                self.csv_handler, self._csv_session_id = CSVHandler.create_handler(
                     csv_input_path, 
                     enable_incremental_updates=True,
-                    enable_legacy_updates=not getattr(Config, "SQLITE_ONLY_PERSISTENCE", True),
                     sqlite_db_path=self._sqlite_db_path
                 )
                 
@@ -67,8 +66,6 @@ class CSVManager:
                 
                 print(f"🛡️ CSV backup created at: {CSVHandler.get_backup_path(csv_input_path)}")
                 print(f"🚀 SQLite persistence enabled: {self._sqlite_db_path}")
-                if getattr(Config, "SQLITE_ONLY_PERSISTENCE", True):
-                    print("🧠 SQLite-only persistence enabled: CSV will be updated only after completion.")
                 if self._output_copy_path:
                     print(f"🧾 Output copy will be generated at: {self._output_copy_path}")
                 
@@ -84,13 +81,27 @@ class CSVManager:
         """Initialize SQLite handler."""
         self._sqlite_db_path = db_path
         self._sqlite_handler = SQLiteHandler(db_path)
+        self._sqlite_db_persistent = True
+
+    def _build_sqlite_db_path(self, session_id: str) -> Path:
+        """Build a persistent SQLite session path outside cache directories."""
+        from .config.app_config import Config
+
+        sqlite_dir = Config.SQLITE_SESSION_DIR
+        if sqlite_dir:
+            base_dir = Path(sqlite_dir).expanduser()
+        else:
+            base_dir = Config.APPLICATION_STATE_DIR / "sqlite"
+
+        base_dir.mkdir(parents=True, exist_ok=True)
+        return base_dir / f"session_{session_id}.db"
 
     def _build_output_copy_path(self, input_path: Path) -> Path:
         """Build output copy path for final export, keeping input file untouched."""
-        from .lib.config import Config
-        suffix = getattr(Config, "CSV_OUTPUT_SUFFIX", "_processed")
-        include_ts = bool(getattr(Config, "CSV_OUTPUT_INCLUDE_TIMESTAMP", True))
-        output_dir = getattr(Config, "CSV_OUTPUT_DIR", None)
+        from .config.app_config import Config
+        suffix = Config.CSV_OUTPUT_SUFFIX
+        include_ts = Config.CSV_OUTPUT_INCLUDE_TIMESTAMP
+        output_dir = Config.CSV_OUTPUT_DIR
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S") if include_ts else ""
         ts_part = f"_{timestamp}" if timestamp else ""
         out_dir = Path(output_dir).expanduser() if output_dir else input_path.parent
@@ -114,10 +125,6 @@ class CSVManager:
         """
         db_path_to_clean = self._sqlite_db_path
 
-        if self._csv_write_queue:
-            self._csv_write_queue.stop_writer_thread(timeout=15.0)
-            self._csv_write_queue = None
-
         if cleanup_sqlite:
             # Close SQLite handler
             if self._sqlite_handler:
@@ -125,10 +132,12 @@ class CSVManager:
 
             self.csv_handler = None
             self._sqlite_handler = None
+            should_delete_sqlite = bool(db_path_to_clean) and not self._sqlite_db_persistent
             self._sqlite_db_path = None
+            self._sqlite_db_persistent = False
 
-            # Cleanup temporary SQLite files
-            if db_path_to_clean and os.path.exists(db_path_to_clean):
+            # Cleanup SQLite files only for explicitly temporary databases
+            if should_delete_sqlite and db_path_to_clean and os.path.exists(db_path_to_clean):
                 try:
                     import time
                     time.sleep(0.5)
@@ -184,7 +193,7 @@ class CSVManager:
             report_dir.mkdir(parents=True, exist_ok=True)
 
             timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-            report_name = f"CoupaDownloads_Report_{timestamp}.xlsx"
+            report_name = f"CoupaPilot_Report_{timestamp}.xlsx"
             report_path = report_dir / report_name
 
             # Read original input file
@@ -269,7 +278,7 @@ class CSVManager:
             report_dir = Path(download_root) if download_root else Path.cwd()
             report_dir.mkdir(parents=True, exist_ok=True)
             timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-            report_path = report_dir / f"CoupaDownloads_Report_{timestamp}.xlsx"
+            report_path = report_dir / f"CoupaPilot_Report_{timestamp}.xlsx"
 
             to_export = results_df[results_df['STATUS'] != 'PENDING'].copy()
             if to_export.empty:

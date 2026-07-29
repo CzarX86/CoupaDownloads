@@ -9,7 +9,7 @@ from typing import Dict, Any, List
 import structlog
 from src.workers.persistent_pool import PersistentWorkerPool
 from src.workers.models import PoolConfig, TaskPriority, TaskStatus, WorkerStatus
-from src.lib.config import Config
+from src.config.app_config import Config
 
 # Configure logging
 structlog.configure()

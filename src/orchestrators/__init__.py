@@ -1,7 +1,7 @@
 """
 Orchestrators package.
 
-Contains orchestrator classes that manage specific aspects of the CoupaDownloads workflow.
+Contains orchestrator classes that manage specific aspects of the CoupaPilot workflow.
 These classes were extracted from MainApp to improve separation of concerns and reduce complexity.
 
 Modules:

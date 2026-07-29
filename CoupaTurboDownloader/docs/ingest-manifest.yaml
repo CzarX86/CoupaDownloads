@@ -1,0 +1,10 @@
+docs:
+  - path: docs/implementation_plan.md
+    type: PRD
+    precedence: 0
+  - path: docs/implementation_plan_authenticator.md
+    type: SPEC
+    precedence: 1
+  - path: docs/implementation_plan_benchmarker.md
+    type: SPEC
+    precedence: 1

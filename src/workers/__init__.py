@@ -79,5 +79,5 @@ __all__ = [
 
 # Version information
 __version__ = "2.0.0"
-__author__ = "CoupaDownloads Team"
+__author__ = "CoupaPilot Team"
 __description__ = "Persistent Worker Pool for PO Processing"

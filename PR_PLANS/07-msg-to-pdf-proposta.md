@@ -38,6 +38,5 @@ Oferecer, ao final do processamento, a conversão de todos os arquivos `.msg` en
 - **Tempo adicional em lotes grandes**: conversão roda apenas ao final; permitir desligar via flag.
 
 ## 7. Plano de Validação
-- Executar `poetry run pytest tests/unit/test_msg_conversion.py`.
-- Smoke curto `poetry run python -m src.main` com uma pasta contendo `.msg` e verificar prompt/conversão.
-
+- Executar `uv run pytest tests/unit/test_msg_conversion.py`.
+- Smoke curto `uv run python -m src.main` com uma pasta contendo `.msg` e verificar prompt/conversão.

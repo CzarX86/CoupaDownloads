@@ -13,8 +13,6 @@ from typing import Any, Dict, List, Optional
 from datetime import datetime
 from pathlib import Path
 
-import pandas as pd
-
 from ..core.csv_handler import CSVHandler
 from ..core.sqlite_handler import SQLiteHandler
 from ..core.telemetry import TelemetryProvider
@@ -178,67 +176,6 @@ class ResultAggregator:
             updates['LAST_PROCESSED'] = last_processed
         
         return updates
-    
-    def merge_sqlite_to_csv(self, output_path: Path, input_path: Path) -> None:
-        """
-        Merge processed data from SQLite back to CSV file.
-        
-        Args:
-            output_path: Path for output CSV file
-            input_path: Path to original input CSV
-        """
-        if not self.sqlite_handler:
-            logger.info("SQLite handler not available, skipping merge")
-            return
-        
-        try:
-            logger.info("Merging SQLite data to CSV", extra={"output": str(output_path)})
-            
-            # Read original CSV
-            df = pd.read_csv(input_path)
-            
-            # Get processed data from SQLite
-            processed_data = self.sqlite_handler.get_all_records()  # type: ignore[attr-defined]
-            
-            if not processed_data:
-                logger.info("No processed records to merge")
-                return
-            
-            # Convert to DataFrame
-            df_sqlite = pd.DataFrame(processed_data)
-            
-            # Map SQLite columns to CSV columns
-            column_mapping = {
-                'status': 'STATUS',
-                'supplier': 'SUPPLIER',
-                'attachments_found': 'ATTACHMENTS_FOUND',
-                'attachments_downloaded': 'ATTACHMENTS_DOWNLOADED',
-                'attachment_names': 'AttachmentName',
-                'last_processed': 'LAST_PROCESSED',
-                'error_message': 'ERROR_MESSAGE',
-                'download_folder': 'DOWNLOAD_FOLDER',
-                'coupa_url': 'COUPA_URL',
-            }
-            
-            # Update DataFrame with SQLite data
-            for sqlite_col, csv_col in column_mapping.items():
-                if sqlite_col in df_sqlite.columns and csv_col in df.columns:
-                    # Create mapping from PO number to value
-                    mapping = df_sqlite.set_index('po_number')[sqlite_col].to_dict()
-                    df[csv_col] = df['PO_NUMBER'].map(mapping).fillna(df[csv_col])
-            
-            # Save to output path
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            df.to_csv(output_path, index=False)
-            
-            logger.info(
-                "CSV merge completed",
-                extra={"records_merged": len(processed_data), "output": str(output_path)}
-            )
-            
-        except Exception as e:
-            logger.error("Failed to merge SQLite to CSV", extra={"error": str(e)})
-            raise
     
     def get_statistics(self) -> Dict[str, Any]:
         """

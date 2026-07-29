@@ -47,11 +47,10 @@ Adicionar uma etapa pós-processamento que converte todos os `.msg` baixados em 
 - Smoke manual: execução curta do `MainApp` para validar prompt e resumo.
 
 ## 8. Implantação
-- Atualizar `pyproject.toml` e `poetry.lock` com novas dependências.
+- Atualizar `pyproject.toml` e `uv.lock` com novas dependências.
 - Sem mudanças em APIs públicas; sem migrações.
 
 ## 9. Riscos e Mitigações
 - **Peso das libs**: ambas são puras em Python; avaliar tempo de lock; se necessário, fixar versões mínimas.
 - **Conteúdo HTML complexo**: fallback simples com strip de tags; aceitável para uso principal (visualização rápida).
 - **CI headless**: conversão roda sem UI; manter logs curtos.
-

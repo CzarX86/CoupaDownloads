@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 class BrowserOrchestrator:
     """
-    Manages browser lifecycle for CoupaDownloads.
+    Manages browser lifecycle for CoupaPilot.
 
     Responsibilities:
     - Browser initialization (single instance for sequential processing)

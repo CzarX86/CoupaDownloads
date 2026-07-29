@@ -26,6 +26,7 @@ class PoolConfig:
     
     # Worker configuration
     worker_count: int = 4
+    autoscaling_enabled: bool = False
     headless_mode: bool = True
     execution_mode: str = "standard"  # standard, filtered, no_js, direct_http
     
@@ -159,6 +160,7 @@ class PoolConfig:
         """Convert configuration to dictionary."""
         return {
             'worker_count': self.worker_count,
+            'autoscaling_enabled': self.autoscaling_enabled,
             'headless_mode': self.headless_mode,
             'execution_mode': self.execution_mode,
             'base_profile_path': self.base_profile_path,
@@ -190,6 +192,7 @@ class PoolConfig:
         cls,
         base_profile_path: str,
         worker_count: int = 4,
+        autoscaling_enabled: bool = False,
         headless_mode: bool = True,
         base_profile_name: str = "Default",
         hierarchy_columns: Optional[List[str]] = None,
@@ -202,6 +205,7 @@ class PoolConfig:
         """Create default configuration with required parameters."""
         return cls(
             worker_count=worker_count,
+            autoscaling_enabled=autoscaling_enabled,
             headless_mode=headless_mode,
             base_profile_path=base_profile_path,
             base_profile_name=base_profile_name,
@@ -297,7 +301,9 @@ class TaskHandle:
                 return self._result
             
             # Check if task is completed
-            if status['status'] in ['completed', 'failed', 'cancelled']:
+            # Include ready_to_finalize: if wait_for_completion is called after the
+            # pool timed out, _result may still be None but the task did succeed.
+            if status['status'] in ['completed', 'failed', 'cancelled', 'ready_to_finalize']:
                 return self._get_task_result()
             
             # Check timeout
@@ -316,7 +322,9 @@ class TaskHandle:
                 'task_id': self.task_id,
                 'po_number': self.po_number,
                 'status': self._task_ref.status.value,
-                'success': self._task_ref.status.value == 'completed',
+                # BUG-6 fix: READY_TO_FINALIZE means download succeeded — only the
+                # folder rename is still pending, so this is a success.
+                'success': self._task_ref.status.value in ('completed', 'ready_to_finalize'),
                 'result_data': self._task_ref.result_data.copy(),
                 'downloaded_files': self._task_ref.downloaded_files.copy(),
                 'error_message': self._task_ref.error_message,

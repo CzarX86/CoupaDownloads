@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Command-line interface for CoupaDownloads.
+Command-line interface for CoupaPilot.
 
 Supports both traditional CLI mode and GUI mode via --ui flag.
 """
@@ -25,15 +25,15 @@ def run_cli():
         run_main()
 
     except Exception as e:
-        print(f"Error running CoupaDownloads: {e}", file=sys.stderr)
+        print(f"Error running CoupaPilot: {e}", file=sys.stderr)
         sys.exit(1)
 
 
 def main():
     """Main CLI entry point."""
     parser = argparse.ArgumentParser(
-        description='CoupaDownloads - Download attachments from Coupa POs',
-        prog='coupadownloads'
+        description='CoupaPilot - Download attachments from Coupa POs',
+        prog='coupapilot'
     )
 
     parser.add_argument(

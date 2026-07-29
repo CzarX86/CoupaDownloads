@@ -13,6 +13,6 @@ Layout overview:
 - `cli/`: CLI subcommands and argument parsing helpers.
 
 Notes:
-- Keep `drivers/` at repo root for local dev EdgeDriver binaries.
+- EdgeDriver is resolved from a persistent per-user cache, not from the repository.
 - Avoid committing large binary artifacts or downloads (use `data/downloads/` ignored by git).
 - Remove or repurpose empty folders (e.g., `tools/` was removed).

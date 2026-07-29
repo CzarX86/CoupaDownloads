@@ -1,5 +1,5 @@
 """
-Telemetry and event monitoring for CoupaDownloads.
+Telemetry and event monitoring for CoupaPilot.
 
 Provides a robust observer pattern for status updates, progress reporting,
 and processing statistics, replacing ad-hoc print-based monitoring.

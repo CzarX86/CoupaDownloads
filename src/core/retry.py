@@ -1,5 +1,5 @@
 """
-Retry utilities with exponential backoff for CoupaDownloads.
+Retry utilities with exponential backoff for CoupaPilot.
 
 Provides decorators and context managers for automatic retry logic
 with configurable backoff strategies.

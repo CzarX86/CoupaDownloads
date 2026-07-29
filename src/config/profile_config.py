@@ -59,9 +59,9 @@ def get_macos_config() -> PlatformConfig:
     home = Path.home()
     # Prefer central config if available
     try:
-        from .lib.config import Config as ExperimentalConfig  # type: ignore
-        configured_dir = Path(os.path.expanduser(ExperimentalConfig.EDGE_PROFILE_DIR)) if getattr(ExperimentalConfig, 'EDGE_PROFILE_DIR', None) else None
-        configured_name = ExperimentalConfig.EDGE_PROFILE_NAME if getattr(ExperimentalConfig, 'EDGE_PROFILE_NAME', None) else 'Default'
+        from .app_config import Config as ExperimentalConfig  # type: ignore
+        configured_dir = Path(os.path.expanduser(ExperimentalConfig.EDGE_PROFILE_DIR)) if ExperimentalConfig.EDGE_PROFILE_DIR else None
+        configured_name = ExperimentalConfig.EDGE_PROFILE_NAME or 'Default'
     except Exception:
         configured_dir = None
         configured_name = 'Default'
@@ -89,9 +89,9 @@ def get_windows_config() -> PlatformConfig:
     """Get Windows-specific Edge profile configuration."""
     # Prefer central config if available
     try:
-        from .lib.config import Config as ExperimentalConfig  # type: ignore
-        configured_dir = Path(os.path.expanduser(ExperimentalConfig.EDGE_PROFILE_DIR)) if getattr(ExperimentalConfig, 'EDGE_PROFILE_DIR', None) else None
-        configured_name = ExperimentalConfig.EDGE_PROFILE_NAME if getattr(ExperimentalConfig, 'EDGE_PROFILE_NAME', None) else 'Default'
+        from .app_config import Config as ExperimentalConfig  # type: ignore
+        configured_dir = Path(os.path.expanduser(ExperimentalConfig.EDGE_PROFILE_DIR)) if ExperimentalConfig.EDGE_PROFILE_DIR else None
+        configured_name = ExperimentalConfig.EDGE_PROFILE_NAME or 'Default'
     except Exception:
         configured_dir = None
         configured_name = 'Default'
@@ -133,9 +133,9 @@ def get_linux_config() -> PlatformConfig:
     home = Path.home()
     # Prefer central config if available
     try:
-        from .lib.config import Config as ExperimentalConfig  # type: ignore
-        configured_dir = Path(os.path.expanduser(ExperimentalConfig.EDGE_PROFILE_DIR)) if getattr(ExperimentalConfig, 'EDGE_PROFILE_DIR', None) else None
-        configured_name = ExperimentalConfig.EDGE_PROFILE_NAME if getattr(ExperimentalConfig, 'EDGE_PROFILE_NAME', None) else 'Default'
+        from .app_config import Config as ExperimentalConfig  # type: ignore
+        configured_dir = Path(os.path.expanduser(ExperimentalConfig.EDGE_PROFILE_DIR)) if ExperimentalConfig.EDGE_PROFILE_DIR else None
+        configured_name = ExperimentalConfig.EDGE_PROFILE_NAME or 'Default'
     except Exception:
         configured_dir = None
         configured_name = 'Default'

@@ -1,5 +1,5 @@
 from src.lib.playwright_manager import PlaywrightManager
-from src.lib.config import Config
+from src.config.app_config import Config
 
 
 class _FakeElement:

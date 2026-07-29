@@ -1,5 +1,5 @@
 """
-Health checks for CoupaDownloads.
+Health checks for CoupaPilot.
 
 Provides health check endpoints for monitoring and orchestration.
 """

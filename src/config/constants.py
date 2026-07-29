@@ -1,5 +1,5 @@
 """
-Centralized constants for CoupaDownloads.
+Centralized constants for CoupaPilot.
 
 All magic numbers and hardcoded values are defined here with documentation
 explaining their purpose and how they were determined.

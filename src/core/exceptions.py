@@ -1,5 +1,5 @@
 """
-Custom exception hierarchy for CoupaDownloads.
+Custom exception hierarchy for CoupaPilot.
 
 Provides structured error handling with error codes, context tracking,
 and recovery strategies. Replaces bare Exception usage throughout the codebase.
@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 
 
 class ErrorCode(Enum):
-    """Standardized error codes for all CoupaDownloads errors."""
+    """Standardized error codes for all CoupaPilot errors."""
     
     # General errors (1000-1999)
     UNKNOWN_ERROR = auto()
@@ -105,7 +105,7 @@ class ErrorContext:
 
 class CoupaError(Exception):
     """
-    Base exception for all CoupaDownloads errors.
+    Base exception for all CoupaPilot errors.
     
     All custom exceptions should inherit from this class.
     Provides consistent error handling, logging, and recovery.
@@ -213,14 +213,14 @@ class BrowserNotFoundError(BrowserError):
 class BrowserInitError(BrowserError):
     """Failed to initialize browser."""
     def __init__(self, message: str, **kwargs: Any) -> None:
+        kwargs.setdefault("context", ErrorContext(
+            is_recoverable=True,
+            should_retry=True,
+            recovery_action="Retry browser initialization or check for existing processes"
+        ))
         super().__init__(
             message,
             code=ErrorCode.BROWSER_INIT_FAILED,
-            context=ErrorContext(
-                is_recoverable=True,
-                should_retry=True,
-                recovery_action="Retry browser initialization or check for existing processes"
-            ),
             **kwargs
         )
 
@@ -294,6 +294,7 @@ class CoupaUnreachableError(CoupaAPIError):
             context=ErrorContext(
                 extra={"url": url},
                 is_recoverable=False,
+                should_retry=True,
                 recovery_action="Check network connection and Coupa URL"
             ),
             **kwargs
@@ -510,8 +511,10 @@ class ValidationError(CoupaError):
 class InvalidInputError(ValidationError):
     """Invalid input provided."""
     def __init__(self, message: str, **kwargs: Any) -> None:
-        super().__init__(
+        CoupaError.__init__(
+            self,
             message,
+            code=ErrorCode.INVALID_INPUT,
             context=ErrorContext(
                 is_recoverable=False,
                 recovery_action="Check input format and values"
