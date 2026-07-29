@@ -65,6 +65,8 @@ tmp/
 
 # CSV atomic write temp & lock artifacts
 *.lock
+!uv.lock
+!**/uv.lock
 *.csv.*
 data/input/*.lock
 data/input/input.csv.*
