@@ -11,6 +11,7 @@ def _assert_common_report(report: dict) -> None:
     assert "modal-opened" in report["steps"]
     assert "po-edge-link-clicked" in report["steps"]
     assert "export-clicked" in report["steps"]
+    assert "manual-update-check" in report["steps"]
 
     dom_state = report["dom_state"]
     assert dom_state["history_rows"] >= 1

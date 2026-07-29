@@ -75,6 +75,31 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+      - name: Build Python portable bundle
+        run: uv run --package coupaturbodownloader python build_python_portable.py
+
+      - name: Verify official Python signatures
+        shell: pwsh
+        run: |
+          $python = Get-AuthenticodeSignature "dist/CoupaTurboDownloader-python-portable/runtime/python.exe"
+          $pythonw = Get-AuthenticodeSignature "dist/CoupaTurboDownloader-python-portable/runtime/pythonw.exe"
+          if ($python.Status -ne "Valid" -or $pythonw.Status -ne "Valid") {
+            throw "Official embedded Python executables do not have valid Authenticode signatures"
+          }
+          $python, $pythonw | Format-Table Path,Status
+
+      - name: Package Python portable release
+        shell: pwsh
+        run: Compress-Archive -Path dist/CoupaTurboDownloader-python-portable -DestinationPath dist/CoupaTurboDownloader-windows-python-portable-x64.zip -Force
+
+      - name: Upload Python portable package
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-python-portable
+          path: CoupaTurboDownloader/dist/CoupaTurboDownloader-windows-python-portable-x64.zip
+          if-no-files-found: error
+          retention-days: 14
+
   build-macos:
     name: Build macOS application
     if: github.event_name == 'push' || inputs.target == 'macos' || inputs.target == 'all'
@@ -132,6 +157,12 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: windows-package
+          path: release-assets
+
+      - name: Download Python portable package
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-python-portable
           path: release-assets
 
       - name: Download macOS package

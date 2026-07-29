@@ -236,7 +236,13 @@ class CliProcessSupervisor:
         if getattr(sys, "frozen", False):
             command = [sys.executable, "--cli-pipeline", "--concurrency", str(max(1, int(concurrency)))]
         else:
-            command = [sys.executable, str(self.script), "--concurrency", str(max(1, int(concurrency)))]
+            interpreter = Path(sys.executable)
+            # The portable GUI starts with pythonw.exe to avoid a console, but
+            # its CLI worker needs python.exe so redirected logs remain usable.
+            console_python = interpreter.with_name("python.exe")
+            if sys.platform == "win32" and interpreter.name.lower() == "pythonw.exe" and console_python.exists():
+                interpreter = console_python
+            command = [str(interpreter), str(self.script), "--concurrency", str(max(1, int(concurrency)))]
         if self.download_root:
             command.extend(["--download-root", self.download_root])
         if run_dir:

@@ -38,6 +38,13 @@ def _version_key(value: str) -> tuple[int, ...]:
     return tuple(int(number) for number in numbers[:4]) or (0,)
 
 
+def _python_portable_root() -> Optional[Path]:
+    if os.environ.get("COUPA_PYTHON_PORTABLE") != "1":
+        return None
+    candidate = Path(sys.executable).resolve().parent.parent
+    return candidate if (candidate / "portable-python.json").is_file() else None
+
+
 def _find_platform_asset(assets: list) -> Optional[dict]:
     if sys.platform == "darwin":
         tokens = ("macos", "darwin")
@@ -47,6 +54,14 @@ def _find_platform_asset(assets: list) -> Optional[dict]:
         return None
 
     candidates = [asset for asset in assets if any(token in asset.get("name", "").lower() for token in tokens)]
+    if sys.platform == "win32":
+        wants_python_portable = _python_portable_root() is not None
+        matching_edition = [
+            asset
+            for asset in candidates
+            if ("python-portable" in asset.get("name", "").lower()) == wants_python_portable
+        ]
+        candidates = matching_edition
     for asset in candidates:
         name = asset.get("name", "").lower()
         if name.endswith((".zip", ".exe", ".app")):
@@ -163,6 +178,9 @@ def _find_update_payload(extracted: Path) -> Path:
         if candidates:
             return candidates[0]
     elif sys.platform == "win32":
+        portable_roots = [marker.parent for marker in extracted.rglob("portable-python.json")]
+        if _python_portable_root() is not None and portable_roots:
+            return portable_roots[0]
         candidates = [path for path in extracted.rglob("*.exe") if path.name.lower() != "uninstall.exe"]
         if candidates:
             return candidates[0]
@@ -222,6 +240,49 @@ def apply_update_and_restart(new_payload: str) -> None:
         return
 
     if sys.platform == "win32":
+        portable_root = _python_portable_root()
+        if portable_root is not None:
+            if not (payload / "portable-python.json").is_file():
+                raise OSError("The update is not a Python portable package.")
+            target = portable_root
+            backup = target.with_name(f".{target.name}.backup")
+            launcher = target / "Start-CoupaTurbo.cmd"
+            staging = payload.parent
+            script = "\n".join([
+                "@echo off",
+                "setlocal",
+                "cd /d %TEMP%",
+                "timeout /t 2 /nobreak >nul",
+                f"set \"payload={payload}\"",
+                f"set \"target={target}\"",
+                f"set \"backup={backup}\"",
+                "if exist \"%backup%\" rmdir /S /Q \"%backup%\"",
+                "move /Y \"%target%\" \"%backup%\" >nul",
+                "if errorlevel 1 goto rollback",
+                "robocopy \"%payload%\" \"%target%\" /E /COPY:DAT /R:2 /W:1 >nul",
+                "if errorlevel 8 goto rollback",
+                f"start \"\" \"{launcher}\"",
+                "rmdir /S /Q \"%backup%\"",
+                f"rmdir /S /Q \"{staging}\"",
+                "del \"%~f0\"",
+                "exit /b 0",
+                ":rollback",
+                "if exist \"%target%\" rmdir /S /Q \"%target%\"",
+                "if exist \"%backup%\" move /Y \"%backup%\" \"%target%\" >nul",
+                "exit /b 1",
+                "",
+            ])
+            script_path = Path(tempfile.gettempdir()) / "coupa_python_portable_updater.bat"
+            script_path.write_text(script, encoding="utf-8")
+            subprocess.Popen(
+                ["cmd", "/c", str(script_path)],
+                cwd=tempfile.gettempdir(),
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=getattr(subprocess, "DETACHED_PROCESS", 0x00000008),
+            )
+            return
+
         current_exe = Path(sys.executable).resolve()
         script = "\n".join([
             "@echo off",

@@ -558,6 +558,8 @@ def run_probe(
             # Guardrail: body zoom must not extend the main scroll viewport
             # below the native window and make the Settings save button unreachable.
             page.click("#btn-settings")
+            page.click("#btn-check-updates")
+            steps.append("manual-update-check")
             page.locator(".main-content").evaluate("el => { el.scrollTop = el.scrollHeight; }")
             settings_save_metrics = page.locator("#btn-save-settings").evaluate("""el => {
                 const rect = el.getBoundingClientRect();

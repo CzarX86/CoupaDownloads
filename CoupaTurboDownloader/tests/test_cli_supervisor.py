@@ -55,6 +55,25 @@ def test_sidebar_owns_viewport_and_main_content_owns_scroll():
     assert "zoom: calc(1 / var(--font-scale))" in css
 
 
+def test_pythonw_gui_uses_console_python_for_cli_worker(monkeypatch, tmp_path):
+    import src.gui.cli_supervisor as supervisor_module
+
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    pythonw = runtime / "pythonw.exe"
+    python = runtime / "python.exe"
+    pythonw.touch()
+    python.touch()
+    supervisor = CliProcessSupervisor()
+    monkeypatch.setattr(supervisor_module.sys, "executable", str(pythonw))
+    monkeypatch.setattr(supervisor_module.sys, "platform", "win32")
+
+    command = supervisor._command(concurrency=4)
+
+    assert command[0] == str(python)
+    assert command[1].endswith("process_all_pos.py")
+
+
 def test_history_status_translation_preserves_filter_inputs():
     web_root = Path(__file__).parents[1] / "src" / "gui" / "web"
     html = (web_root / "index.html").read_text(encoding="utf-8")
@@ -65,4 +84,6 @@ def test_history_status_translation_preserves_filter_inputs():
     assert '"#status-filter legend, #status-filter label"' not in javascript
     assert 'class="coupa-column"' not in html
     assert 'class="coupa-link po-number-link"' in javascript
+    assert 'id="btn-check-updates"' in html
+    assert 'checkForUpdates(true)' in javascript
     assert '$("#modal-pos-tbody").addEventListener("click"' in javascript

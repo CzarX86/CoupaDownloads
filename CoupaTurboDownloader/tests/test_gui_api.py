@@ -134,6 +134,16 @@ def test_font_scale_setting_is_validated_and_persisted(temp_db, monkeypatch, tmp
     assert clamped["settings"]["font_scale"] == 1.3
 
 
+def test_python_portable_disables_startup_update_checks_by_default(temp_db, monkeypatch, tmp_path):
+    monkeypatch.setenv("COUPA_PYTHON_PORTABLE", "1")
+    monkeypatch.setattr("src.gui.api.Path.home", lambda: tmp_path)
+
+    settings = AppAPI(temp_db, "Downloads/CoupaAttachments").get_app_settings()
+
+    assert settings["python_portable"] is True
+    assert settings["auto_updates"] is False
+
+
 def test_import_file_csv_hierarchy_output_subdir(temp_db, tmp_path):
     csv_path = tmp_path / "hierarchy.csv"
     csv_path.write_text(
