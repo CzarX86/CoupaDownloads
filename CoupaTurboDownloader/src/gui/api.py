@@ -48,8 +48,14 @@ class AppAPI:
         )
         self.db.conn.commit()
 
+    @staticmethod
+    def _is_python_portable() -> bool:
+        return os.environ.get("COUPA_PYTHON_PORTABLE") == "1"
+
     def _read_settings(self) -> Dict[str, Any]:
         settings = dict(self.DEFAULT_SETTINGS)
+        if self._is_python_portable():
+            settings["auto_updates"] = False
         try:
             stored = json.loads(self._settings_path.read_text(encoding="utf-8"))
             if isinstance(stored, dict):
@@ -105,6 +111,7 @@ class AppAPI:
     def get_app_settings(self) -> Dict[str, Any]:
         settings = self._read_settings()
         settings["download_root"] = self.default_download_dir
+        settings["python_portable"] = self._is_python_portable()
         return settings
 
     def set_app_settings(self, values: Dict[str, Any]) -> Dict[str, Any]:

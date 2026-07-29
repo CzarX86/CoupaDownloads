@@ -13,7 +13,7 @@ document.addEventListener("DOMContentLoaded", () => {
     let draggedHierarchyItem = null;
     let runInProgress = false;
     let pendingUpdate = null;
-    let appSettings = { download_root: "", concurrency: 4, retry_attempts: 1, msg_processing: "convert_extract", deduplicate_files: true, auto_updates: true, retention: "all", language: "en", font_scale: 1.1 };
+    let appSettings = { download_root: "", concurrency: 4, retry_attempts: 1, msg_processing: "convert_extract", deduplicate_files: true, auto_updates: true, retention: "all", language: "en", font_scale: 1.1, python_portable: false };
     let journeyStep = 1;
     let journeyMaxStep = 1;
     const journeyContent = {
@@ -80,7 +80,7 @@ document.addEventListener("DOMContentLoaded", () => {
         document.querySelectorAll(".settings-section h3").forEach((element, index) => { element.innerText = settingsHeadings[index]; });
         const panelHeadings = appSettings.language === "pt-BR" ? ["Escolha o input", "Valide o input", "Organize a hierarquia de pastas", "Escolha o local de salvamento", "Revise e inicie"] : ["Choose your input", "Validate your input", "Arrange folder hierarchy", "Choose the save location", "Review and start"];
         document.querySelectorAll("[data-journey-panel] .card-heading h3").forEach((element, index) => { element.innerText = panelHeadings[index]; });
-        const settingsDescriptions = appSettings.language === "pt-BR" ? ["Altera o idioma da interface. A saída do CLI e os logs permanecem em inglês.", "Ajusta a escala da interface para facilitar a leitura. A prévia é aplicada imediatamente e salva neste computador.", "Escolha a pasta base. Cada execução recebe uma subpasta com timestamp.", "Quantos POs o app processa ao mesmo tempo. Valores maiores podem aumentar a carga no servidor.", "Tentativas automáticas para um PO antes de marcá-lo como erro. O retry manual continua disponível no histórico.", "Escolha se arquivos de e-mail baixados são convertidos para PDF e se seus anexos são extraídos.", "Compara arquivos com SHA-256. Arquivos idênticos usam hard link quando possível ou um arquivo de referência.", "Verifica uma nova versão no GitHub ao iniciar. Downloads são verificados antes da instalação.", "A limpeza automática só se aplica a execuções concluídas e nunca remove uma execução ativa."] : ["Changes the application interface language. CLI output and logs remain in English.", "Adjusts the interface scale for readability. The preview is applied immediately and saved on this computer.", "Choose the base folder. Each run receives its own timestamped subfolder.", "How many POs the app processes at the same time. Higher values may increase server load.", "Automatic attempts for a PO before marking it as failed. Manual retry remains available from History.", "Choose whether downloaded email files are converted to PDF and whether their attachments are extracted.", "Compare files with SHA-256. Identical files use a hard link when possible or a reference sidecar.", "Check GitHub for a newer release when the app starts. Downloads are verified before installation.", "Automatic cleanup only applies to completed runs and never removes an active run."];
+        const settingsDescriptions = appSettings.language === "pt-BR" ? ["Altera o idioma da interface. A saída do CLI e os logs permanecem em inglês.", "Ajusta a escala da interface para facilitar a leitura. A prévia é aplicada imediatamente e salva neste computador.", "Escolha a pasta base. Cada execução recebe uma subpasta com timestamp.", "Quantos POs o app processa ao mesmo tempo. Valores maiores podem aumentar a carga no servidor.", "Tentativas automáticas para um PO antes de marcá-lo como erro. O retry manual continua disponível no histórico.", "Escolha se arquivos de e-mail baixados são convertidos para PDF e se seus anexos são extraídos.", "Compara arquivos com SHA-256. Arquivos idênticos usam hard link quando possível ou um arquivo de referência.", "A verificação ao iniciar é opcional. Você sempre pode verificar, baixar, validar e instalar uma atualização manualmente.", "A limpeza automática só se aplica a execuções concluídas e nunca remove uma execução ativa."] : ["Changes the application interface language. CLI output and logs remain in English.", "Adjusts the interface scale for readability. The preview is applied immediately and saved on this computer.", "Choose the base folder. Each run receives its own timestamped subfolder.", "How many POs the app processes at the same time. Higher values may increase server load.", "Automatic attempts for a PO before marking it as failed. Manual retry remains available from History.", "Choose whether downloaded email files are converted to PDF and whether their attachments are extracted.", "Compare files with SHA-256. Identical files use a hard link when possible or a reference sidecar.", "Startup checks are optional. You can always check, download, verify, and install an update manually.", "Automatic cleanup only applies to completed runs and never removes an active run."];
         document.querySelectorAll(".settings-section > div:first-child p").forEach((element, index) => { element.innerText = settingsDescriptions[index]; });
         const setMany = (selector, values) => document.querySelectorAll(selector).forEach((element, index) => { if (values[index] !== undefined) element.innerText = values[index]; });
         const pt = appSettings.language === "pt-BR";
@@ -109,6 +109,7 @@ document.addEventListener("DOMContentLoaded", () => {
         setMany("#screen-learn .intro-block p:not(.eyebrow)", [pt ? "Guia prático para preparar inputs, baixar anexos e recuperar erros com segurança." : "A practical guide to prepare inputs, download attachments, and recover safely from errors."]);
         setMany("#screen-settings .intro-block .eyebrow", [pt ? "CONFIGURAÇÕES" : "SETTINGS"]);
         setMany("#screen-settings .intro-block p:not(.eyebrow)", [pt ? "Controle downloads, retries, atualizações e o tempo de permanência no histórico." : "Control downloads, retries, updates, and how long runs remain in history."]);
+        setMany("#btn-check-updates", [pt ? "Verificar agora" : "Check now"]);
         setMany("#settings-language option", pt ? ["English (padrão)", "Português (Brasil)"] : ["English (default)", "Português (Brasil)"]);
         setMany("#settings-font-scale option", pt ? ["Padrão — 100%", "Confortável — 110%", "Grande — 120%", "Extra grande — 130%"] : ["Standard — 100%", "Comfortable — 110%", "Large — 120%", "Extra large — 130%"]);
         setMany("#settings-concurrency option",  pt ? ["Conservador — 2 downloads", "Balanceado — 4 downloads", "Rápido — 6 downloads", "Máximo — 8 downloads"] : ["Conservative — 2 downloads", "Balanced — 4 downloads", "Fast — 6 downloads", "Custom maximum — 8 downloads"]);
@@ -928,6 +929,7 @@ document.addEventListener("DOMContentLoaded", () => {
     $("#settings-language").addEventListener("change", () => { appSettings.language = $("#settings-language").value; applyLanguage(); });
     $("#settings-font-scale").addEventListener("change", () => applyFontScale($("#settings-font-scale").value));
     $("#btn-save-settings").addEventListener("click", saveSettings);
+    $("#btn-check-updates").addEventListener("click", () => checkForUpdates(true));
     $("#btn-reset-settings").addEventListener("click", async () => {
         $("#settings-download-root").value = "";
         $("#settings-concurrency").value = "4";
@@ -936,7 +938,7 @@ document.addEventListener("DOMContentLoaded", () => {
         applyFontScale(1.1);
         $("#settings-msg-processing").value = "convert_extract";
         $("#settings-deduplicate").checked = true;
-        $("#settings-auto-updates").checked = true;
+        $("#settings-auto-updates").checked = !appSettings.python_portable;
         $("#settings-retention").value = "all";
         await ensureDefaultDestination();
         $("#settings-download-root").value = $("#download-dir").value.replace(/[\\/]run_[^\\/]+$/, "");
@@ -1211,13 +1213,24 @@ document.addEventListener("DOMContentLoaded", () => {
         } catch (error) { updateAuthUI("unauthenticated", error.message); }
     }
 
-    async function checkForUpdates() {
-        if (!appSettings.auto_updates || !hasApi("check_updates")) return;
+    async function checkForUpdates(manual = false) {
+        if ((!manual && !appSettings.auto_updates) || !hasApi("check_updates")) return;
+        const manualButton = $("#btn-check-updates");
+        if (manual) {
+            manualButton.disabled = true;
+            manualButton.innerText = appSettings.language === "pt-BR" ? "Verificando…" : "Checking…";
+            $("#settings-status").innerText = appSettings.language === "pt-BR" ? "Verificando atualizações…" : "Checking for updates…";
+        }
         try {
             const result = await api().check_updates();
             if (!result.success || !result.update_available) {
                 pendingUpdate = null;
                 syncUpdateButton();
+                if (manual) {
+                    $("#settings-status").innerText = result.success
+                        ? (appSettings.language === "pt-BR" ? "Você já está usando a versão mais recente." : "You are already using the latest version.")
+                        : (result.error || "Update check failed.");
+                }
                 return;
             }
             pendingUpdate = result;
@@ -1225,6 +1238,12 @@ document.addEventListener("DOMContentLoaded", () => {
             banner.hidden = false;
             $("#update-text").innerText = `Version ${result.version} available`;
             syncUpdateButton();
+            if (manual) {
+                $("#settings-status").innerText = appSettings.language === "pt-BR"
+                    ? `Versão ${result.version} disponível. Use o botão de download acima.`
+                    : `Version ${result.version} is available. Use the download button above.`;
+                $(".main-content").scrollTop = 0;
+            }
             $("#btn-download-update").onclick = async () => {
                 if (runInProgress || !pendingUpdate) return;
                 const button = $("#btn-download-update");
@@ -1258,6 +1277,12 @@ document.addEventListener("DOMContentLoaded", () => {
         } catch (error) {
             // Update checks are best-effort and never block normal usage.
             console.debug("Update check skipped", error);
+            if (manual) $("#settings-status").innerText = error.message || "Update check failed.";
+        } finally {
+            if (manual) {
+                manualButton.disabled = false;
+                manualButton.innerText = appSettings.language === "pt-BR" ? "Verificar agora" : "Check now";
+            }
         }
     }
 
