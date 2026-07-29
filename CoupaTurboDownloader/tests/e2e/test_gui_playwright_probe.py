@@ -22,6 +22,9 @@ def _assert_common_report(report: dict) -> None:
     assert sidebar["overflowY"] == "hidden"
     assert sidebar["scrollHeight"] <= sidebar["clientHeight"]
     assert sidebar["bottom"] <= sidebar["viewportHeight"] + 1
+    settings_save = dom_state["settings_save_metrics"]
+    assert settings_save["fullyVisible"] is True
+    assert settings_save["bottom"] <= settings_save["viewportHeight"]
 
 
 def test_gui_playwright_probe_mock(tmp_path: Path) -> None:
@@ -38,6 +41,7 @@ def test_gui_playwright_probe_mock(tmp_path: Path) -> None:
         "04_history.png",
         "05_modal.png",
         "06_done.png",
+        "07_settings_scrolled.png",
     ]
     for screen in expected_screens:
         assert (result.run_dir / screen).exists(), f"Missing screenshot: {screen}"

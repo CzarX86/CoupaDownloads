@@ -460,6 +460,7 @@ def run_probe(
     steps: list[str] = []
     modal_po_rows = 0
     status_filter_inputs = 0
+    settings_save_metrics: dict[str, Any] = {}
 
     bridge: MockBridge | RealBridge
     if mode == "mock":
@@ -554,6 +555,22 @@ def run_probe(
             steps.append("modal-closed")
             page.screenshot(path=str(run_dir / "06_done.png"), full_page=True)
 
+            # Guardrail: body zoom must not extend the main scroll viewport
+            # below the native window and make the Settings save button unreachable.
+            page.click("#btn-settings")
+            page.locator(".main-content").evaluate("el => { el.scrollTop = el.scrollHeight; }")
+            settings_save_metrics = page.locator("#btn-save-settings").evaluate("""el => {
+                const rect = el.getBoundingClientRect();
+                return {
+                    top: rect.top,
+                    bottom: rect.bottom,
+                    viewportHeight: window.innerHeight,
+                    fullyVisible: rect.top >= 0 && rect.bottom <= window.innerHeight,
+                };
+            }""")
+            steps.append("settings-save-visible")
+            page.screenshot(path=str(run_dir / "07_settings_scrolled.png"), full_page=False)
+
             sidebar_metrics = page.locator(".sidebar").evaluate("""el => {
                 const rect = el.getBoundingClientRect();
                 return {
@@ -578,6 +595,7 @@ def run_probe(
                 "status_filter_inputs": status_filter_inputs,
                 "sidebar_metrics": sidebar_metrics,
                 "sidebar_controls_visible": sidebar_controls_visible,
+                "settings_save_metrics": settings_save_metrics,
             }
 
             browser.close()
@@ -592,6 +610,7 @@ def run_probe(
             "status_filter_inputs": 0,
             "sidebar_metrics": {},
             "sidebar_controls_visible": False,
+            "settings_save_metrics": {},
         }
     finally:
         server.shutdown()
