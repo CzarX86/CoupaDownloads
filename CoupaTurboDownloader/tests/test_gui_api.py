@@ -71,6 +71,69 @@ def test_confirm_and_retry_company(temp_db):
     assert po2['status'] == "SUCCESS"
 
 
+def test_relative_download_path_is_resolved_under_user_home(temp_db, monkeypatch, tmp_path):
+    monkeypatch.setattr("src.gui.api.Path.home", lambda: tmp_path)
+    api = AppAPI(temp_db, "Downloads/CoupaAttachments")
+
+    assert api.default_download_dir == str(tmp_path / "Downloads" / "CoupaAttachments")
+
+
+def test_window_uses_85_percent_width_and_is_centered():
+    from src.main import calculate_window_geometry
+
+    geometry = calculate_window_geometry(1512, 982)
+
+    assert geometry == {"width": 1285, "height": 820, "x": 114, "y": 81}
+
+
+def test_macos_coupa_url_uses_configured_default_handler(temp_db, monkeypatch):
+    from src.main import TurboAPI
+
+    monkeypatch.setattr("src.main.sys.platform", "darwin")
+    api = TurboAPI(temp_db, "/tmp/downloads")
+    url = "https://unilever.coupahost.com/order_headers/17105916"
+    with patch("src.main.subprocess.run") as run:
+        result = api.open_external_url(url)
+
+    assert result["success"] is True
+    run.assert_called_once_with(
+        ["/usr/bin/open", url],
+        check=True,
+        timeout=10,
+    )
+
+
+def test_open_coupa_po_strips_prefix_and_uses_default_browser(temp_db):
+    from src.main import TurboAPI
+
+    api = TurboAPI(temp_db, "/tmp/downloads")
+    with patch.object(api, "open_external_url", return_value={"success": True}) as open_browser:
+        result = api.open_coupa_po("PO17138914")
+
+    assert result["success"] is True
+    open_browser.assert_called_once_with("https://unilever.coupahost.com/order_headers/17138914")
+
+
+def test_font_scale_setting_is_validated_and_persisted(temp_db, monkeypatch, tmp_path):
+    monkeypatch.setattr("src.gui.api.Path.home", lambda: tmp_path)
+    api = AppAPI(temp_db, "Downloads/CoupaAttachments")
+
+    result = api.set_app_settings({
+        "download_root": "Downloads/CoupaAttachments",
+        "font_scale": 1.2,
+    })
+
+    assert result["success"] is True
+    assert result["settings"]["font_scale"] == 1.2
+    assert AppAPI(temp_db, "Downloads/CoupaAttachments").get_app_settings()["font_scale"] == 1.2
+
+    clamped = api.set_app_settings({
+        "download_root": "Downloads/CoupaAttachments",
+        "font_scale": 9,
+    })
+    assert clamped["settings"]["font_scale"] == 1.3
+
+
 def test_import_file_csv_hierarchy_output_subdir(temp_db, tmp_path):
     csv_path = tmp_path / "hierarchy.csv"
     csv_path.write_text(

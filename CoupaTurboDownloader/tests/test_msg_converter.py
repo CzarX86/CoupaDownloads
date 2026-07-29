@@ -1,6 +1,16 @@
 from pathlib import Path
 
-from src.engine.msg_converter import _extract_attachments_to_subfolder
+from src.engine.msg_converter import _extract_attachments_to_subfolder, find_msg_files
+
+
+def test_find_msg_files_is_case_insensitive(tmp_path):
+    lower = tmp_path / "mail.msg"
+    upper = tmp_path / "approval.MSG"
+    lower.write_bytes(b"msg")
+    upper.write_bytes(b"msg")
+    (tmp_path / "not-a-message.txt").write_text("text", encoding="utf-8")
+
+    assert set(find_msg_files(tmp_path)) == {lower, upper}
 
 
 class _FakeMessage:

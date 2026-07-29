@@ -7,194 +7,161 @@
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
-    <div class="glass-container">
-        <!-- Sidebar Navigation -->
+    <div class="app-shell">
         <aside class="sidebar">
-            <div class="logo-area">
-                <span class="logo-icon">⚡</span>
-                <h1>CoupaTurbo</h1>
+            <div class="brand">
+                <div class="brand-mark">CT</div>
+                <div>
+                    <strong>Coupa Turbo</strong>
+                    <span>Attachment workspace</span>
+                </div>
             </div>
-            <nav class="nav-menu">
-                <button class="nav-btn active" id="btn-new">
-                    <span class="btn-icon">📁</span> New Run
-                </button>
-                <button class="nav-btn" id="btn-progress">
-                    <span class="btn-icon">📈</span> Active Progress
-                </button>
-                <button class="nav-btn" id="btn-history">
-                    <span class="btn-icon">📜</span> History
-                </button>
+
+            <nav class="nav-menu" aria-label="Main navigation">
+                <button class="nav-btn active" id="btn-new" data-screen="new">New run</button>
+                <button class="nav-btn" id="btn-progress" data-screen="progress">Active run</button>
+                <button class="nav-btn" id="btn-history" data-screen="history">Run history</button>
             </nav>
-            <div class="sidebar-footer">
-                <span class="status-indicator online"></span>
-                <span class="status-text">Engine Ready</span>
+
+            <div class="sidebar-bottom">
+                <nav class="nav-menu nav-secondary" aria-label="Information and settings">
+                    <button class="nav-btn" id="btn-learn" data-screen="learn">Learn</button>
+                    <button class="nav-btn" id="btn-settings" data-screen="settings">Settings</button>
+                </nav>
+                <div class="engine-status"><span class="status-dot online"></span><span>Engine ready</span></div>
+                <button class="sidebar-tool" id="btn-diagnostics" type="button">Run host diagnostics</button>
+                <button class="auth-card" id="btn-authenticate" type="button">
+                    <span id="auth-indicator" class="status-dot unauthenticated"></span>
+                    <span class="auth-copy"><strong id="auth-status-text">Checking session</strong><small id="auth-detail">Coupa login</small></span>
+                    <span class="auth-action">Sign in</span>
+                </button>
             </div>
         </aside>
 
-        <!-- Main Content Area -->
         <main class="main-content">
-            <!-- Screen 1: New Run -->
+            <header class="topbar">
+                <div class="topbar-meta"><span id="topbar-auth-label">Session checking</span><div class="update-banner" id="update-banner" hidden><span id="update-text">New version available</span><button class="btn btn-secondary btn-small" id="btn-download-update" type="button">Download update</button></div></div>
+            </header>
+
             <section class="screen active" id="screen-new">
-                <div class="screen-header">
-                    <h2>Start a New Download Session</h2>
-                    <p>Import your Excel (.xlsx) or CSV file with PO numbers and Legal Entities.</p>
-                </div>
-                
-                <div class="dropzone" id="dropzone">
-                    <div class="dropzone-content">
-                        <span class="dropzone-icon">📥</span>
-                        <h3>Drag & drop your file here</h3>
-                        <p>or</p>
-                        <button class="btn btn-primary" id="btn-browse">Browse Files</button>
-                        <input type="file" id="file-input" accept=".xlsx,.xls,.csv" style="display: none;">
+                <div class="intro-block new-run-intro">
+                    <div><p class="eyebrow">NEW RUN JOURNEY</p><h2 id="journey-title">Choose your input</h2><p id="journey-subtitle">Start with a completed CSV or Excel file, or create a new template.</p></div>
+                    <div class="step-indicator journey-steps" aria-label="Run preparation steps">
+                        <button class="step active" data-journey-step="1" type="button"><b>1</b><span>Input</span></button><i></i>
+                        <button class="step" data-journey-step="2" type="button" disabled><b>2</b><span>Validate</span></button><i></i>
+                        <button class="step" data-journey-step="3" type="button" disabled><b>3</b><span>Folders</span></button><i></i>
+                        <button class="step" data-journey-step="4" type="button" disabled><b>4</b><span>Destination</span></button><i></i>
+                        <button class="step" data-journey-step="5" type="button" disabled><b>5</b><span>Start</span></button>
                     </div>
                 </div>
+                <div class="journey-lock-message" id="journey-lock-message" hidden role="status"></div>
 
-                <div class="file-details" id="file-details" style="display: none;">
-                    <div class="file-info-card">
-                        <span class="file-icon">📄</span>
-                        <div class="file-meta">
-                            <h4 id="selected-filename">filename.xlsx</h4>
-                            <p id="selected-filesize">0 KB</p>
-                        </div>
-                        <button class="btn btn-danger btn-sm" id="btn-clear-file">Remove</button>
-                    </div>
-                    
-                    <div class="form-group">
-                        <label for="download-dir">Download Destination Directory</label>
-                        <div class="input-group">
-                            <input type="text" id="download-dir" readonly placeholder="Select destination folder...">
-                            <button class="btn btn-secondary" id="btn-choose-dir">Select Folder</button>
-                        </div>
-                    </div>
+                <div class="journey-panel active" data-journey-panel="1">
+                    <article class="workflow-card journey-card input-card">
+                        <div class="card-heading"><span class="card-index">01</span><div><h3>Choose your input</h3><p>Use a completed file or create a template to fill in.</p></div></div>
+                        <div class="template-actions"><div><strong>Starting from scratch?</strong><span>Create the Excel template, fill it in, then save and close it.</span></div><button class="btn btn-secondary" id="btn-download-template" type="button">Create template</button></div>
+                        <div class="choice-divider" aria-hidden="true"><span>OR</span></div>
+                        <div class="dropzone" id="dropzone"><div class="dropzone-icon">↑</div><h3>Drop your completed file here</h3><p>Excel or CSV · the original file is preserved</p><button class="btn btn-primary" id="btn-browse" type="button">Choose input file</button><input type="file" id="file-input" accept=".xlsx,.xls,.csv" hidden></div>
+                        <div class="file-details" id="file-details" hidden><div class="selected-file"><span class="file-type">CSV</span><div><strong id="selected-filename">—</strong><small id="selected-filesize">—</small></div><button class="btn btn-secondary btn-small" id="btn-open-selected-input" type="button">Open</button><button class="icon-btn" id="btn-clear-file" type="button" aria-label="Remove selected file">×</button></div><div class="file-state" id="file-state" hidden><span class="status-dot unauthenticated" id="file-state-dot"></span><span id="file-state-text">Checking file…</span></div></div>
+                        <div class="journey-footer"><span class="journey-hint">The next step checks that all required columns are present.</span><button class="btn btn-primary btn-large" id="btn-next-input" type="button" disabled>Continue to validation</button></div>
+                    </article>
+                </div>
 
-                    <button class="btn btn-success btn-lg btn-block" id="btn-start-run">Start Turbo Download</button>
+                <div class="journey-panel" data-journey-panel="2" hidden>
+                    <article class="workflow-card journey-card narrow-card">
+                        <div class="card-heading"><span class="card-index">02</span><div><h3>Validate your input</h3><p>Review the file before any run is created. Correct it in the same file if needed.</p></div></div>
+                        <div class="validation-file-summary"><span class="file-type">FILE</span><strong id="validation-filename">No file selected</strong></div>
+                        <div class="validation-feedback" id="validation-feedback" hidden></div>
+                        <button class="btn btn-secondary btn-block" id="btn-validate-file" type="button">Validate input</button>
+                        <div class="journey-footer"><button class="btn btn-quiet" data-journey-back="1" type="button">Back</button><button class="btn btn-primary btn-large" id="btn-next-hierarchy" type="button" disabled>Continue to folders</button></div>
+                    </article>
+                </div>
+
+                <div class="journey-panel" data-journey-panel="3" hidden>
+                    <article class="workflow-card journey-card narrow-card">
+                        <div class="card-heading"><span class="card-index">03</span><div><h3>Arrange folder hierarchy</h3><p>Drag the levels into the order that should be used for downloaded files.</p></div></div>
+                        <div class="folder-guide journey-folder-guide"><ol class="folder-hierarchy" id="folder-hierarchy"><li class="hierarchy-empty">Validate the input to load its folder levels.</li></ol><small>Columns after <code>&lt;|&gt;</code> become folders. Empty values become <code>Unknown</code>.</small></div>
+                        <div class="journey-footer"><button class="btn btn-quiet" data-journey-back="2" type="button">Back</button><button class="btn btn-primary btn-large" id="btn-next-destination" type="button">Continue to destination</button></div>
+                    </article>
+                </div>
+
+                <div class="journey-panel" data-journey-panel="4" hidden>
+                    <article class="workflow-card journey-card narrow-card">
+                        <div class="card-heading"><span class="card-index">04</span><div><h3>Choose the save location</h3><p>Select the parent folder where this run should store its attachments.</p></div></div>
+                        <label class="field-label" for="download-dir">Download folder</label><div class="input-with-action"><input id="download-dir" type="text" placeholder="Choose a folder" autocomplete="off"><button class="btn btn-secondary" id="btn-choose-dir" type="button">Choose folder</button></div>
+                        <div class="destination-note"><span>i</span><span>Existing valid files are preserved during retries.</span></div>
+                        <div class="journey-footer"><button class="btn btn-quiet" data-journey-back="3" type="button">Back</button><button class="btn btn-primary btn-large" id="btn-next-review" type="button" disabled>Review run</button></div>
+                    </article>
+                </div>
+
+                <div class="journey-panel" data-journey-panel="5" hidden>
+                    <article class="workflow-card journey-card narrow-card review-card">
+                        <div class="card-heading"><span class="card-index">05</span><div><h3>Review and start</h3><p>Everything is ready. Confirm these settings to begin the download.</p></div></div>
+                        <div class="review-list"><div><span>Input file</span><strong id="review-file">—</strong></div><div><span>Folder hierarchy</span><strong id="review-hierarchy">—</strong></div><div><span>Save location</span><strong id="review-destination">—</strong><small class="review-destination-hierarchy" id="review-destination-hierarchy"></small></div></div>
+                        <div class="ready-panel"><span class="status-dot unauthenticated" id="ready-indicator"></span><div><strong id="ready-title">Ready to start</strong><small id="ready-detail">The run will be created after confirmation.</small></div></div>
+                        <div class="journey-footer"><button class="btn btn-quiet" data-journey-back="4" type="button">Back</button><button class="btn btn-primary btn-large" id="btn-start-run" type="button">Start download</button></div>
+                    </article>
+                </div>
+                <div class="active-run-banner" id="active-run-banner" hidden><div><strong>A download is already running.</strong><span>Return to Active run to monitor it.</span></div><button class="btn btn-secondary" id="btn-go-active-run" type="button">View active run</button></div>
+            </section>
+
+            <section class="screen" id="screen-progress" hidden>
+                <div class="intro-block"><div><p class="eyebrow">LIVE RUN</p><h2 id="active-session-title">No active session</h2><p id="progress-subtitle">The worker queue will appear here.</p></div><button class="btn btn-secondary" id="btn-back-new" type="button">New run</button></div>
+                <div class="metrics-grid">
+                    <div class="metric-card wide"><span>Progress</span><strong id="progress-text">0% (0/0)</strong><div class="progress-track"><div class="progress-bar" id="progress-bar"></div></div></div>
+                    <div class="metric-card"><span>Speed</span><strong id="speed-val">0.0 <small>PO/min</small></strong><small class="metric-note" id="speed-note">Recent completed POs</small></div>
+                    <div class="metric-card"><span>ETA</span><strong id="eta-val">--:--</strong><small class="metric-note" id="eta-note">Updates with recent speed</small></div>
+                    <div class="metric-card"><span>Errors</span><strong class="danger-text" id="errors-val">0</strong></div>
+                </div>
+                <div class="run-actions"><span class="run-state" id="run-state">Waiting</span><button class="btn btn-secondary" id="btn-pause-resume" type="button" disabled>Pause</button><button class="btn btn-danger" id="btn-stop-session" type="button" disabled>Stop run</button></div>
+                <article class="log-card"><div class="section-header"><div><h3>Execution log</h3><p>Key progress, authentication, warning, error, and report events.</p></div><button class="btn btn-quiet" id="btn-clear-log" type="button">Clear</button></div><div class="console-body" id="console-log"><div class="log-line system">Waiting to start…</div></div></article>
+            </section>
+
+            <section class="screen" id="screen-history" hidden>
+                <div class="intro-block"><div><p class="eyebrow">AUDIT TRAIL</p><h2>Run history</h2><p>Review GUI results, inspect PO-level errors, and export a report. CLI pipeline runs remain separate.</p></div><div class="history-toolbar"><button class="btn btn-secondary" id="btn-refresh-history" type="button">Refresh</button><button class="btn btn-danger" id="btn-clear-history" type="button">Delete all history</button></div></div>
+                <article class="history-card"><div class="table-wrap"><table class="history-table"><thead><tr><th>Run</th><th>Input</th><th>Started</th><th>POs</th><th>Result</th><th>Actions</th></tr></thead><tbody id="history-list"><tr><td colspan="6" class="empty-state">No runs yet.</td></tr></tbody></table></div></article>
+            </section>
+
+            <section class="screen" id="screen-learn" hidden>
+                <div class="intro-block"><div><p class="eyebrow">LEARN</p><h2>How Coupa Turbo works</h2><p>A practical guide to prepare inputs, download attachments, and recover safely from errors.</p></div></div>
+                <div class="learn-grid">
+                    <article class="learn-card"><span class="learn-icon">01</span><h3>Prepare the input</h3><p>Use an Excel or CSV file with <code>PO_NUMBER</code> and <code>SUPPLIER</code>. The template includes an <code>&lt;|&gt;</code> separator. Save and close Excel before validating.</p><div class="learn-note">Columns after <code>&lt;|&gt;</code> become folder levels. Blank required fields are reported before any download starts.</div></article>
+                    <article class="learn-card"><span class="learn-icon">02</span><h3>Follow the journey</h3><p>The New Run journey has five stages: input, validation, folders, destination, and review. A run is created only after the final confirmation.</p><div class="learn-note">Completed steps remain available for navigation; future steps explain what is still missing.</div></article>
+                    <article class="learn-card"><span class="learn-icon">03</span><h3>What happens during a run?</h3><p>The app uses authenticated HTTP requests to Coupa, reads PO and PR pages, discovers attachments, and saves them inside the run folder.</p><div class="learn-note">Downloads simultaneous is capped at 8, with adaptive backoff when Coupa responds with rate limits.</div></article>
+                    <article class="learn-card"><span class="learn-icon">04</span><h3>Errors and retries</h3><p>Open Active run for progress and logs. Automatic retries can be configured in Settings, and failed POs can also be retried manually from History.</p><div class="learn-note">A retry uses the same run folder and preserves valid existing files.</div></article>
+                    <article class="learn-card"><span class="learn-icon">05</span><h3>History and reports</h3><p>Run history stores PO-level results, retry history, preserved inputs, reports, and links back to Coupa. You can delete one run or clear all history.</p><div class="learn-note">Deleting a run removes its run folder; original input files outside that folder are preserved.</div></article>
+                    <article class="learn-card"><span class="learn-icon">06</span><h3>Authentication and privacy</h3><p>Authentication reuses the Edge profile and cached session until Coupa invalidates it. Update checks contact GitHub only when enabled.</p><div class="learn-note">The app does not send telemetry. Cookies, credentials, and input documents stay on the local machine.</div></article>
                 </div>
             </section>
 
-            <!-- Screen 2: Active Progress -->
-            <section class="screen" id="screen-progress">
-                <div class="screen-header">
-                    <h2>Active Session Telemetry</h2>
-                    <p id="active-session-title">No session currently running.</p>
-                </div>
-
-                <div class="telemetry-grid">
-                    <div class="telemetry-card">
-                        <span class="card-label">Total Progress</span>
-                        <div class="progress-bar-container">
-                            <div class="progress-bar" id="progress-bar" style="width: 0%;"></div>
-                        </div>
-                        <span class="card-value" id="progress-text">0% (0/0)</span>
-                    </div>
-
-                    <div class="telemetry-card">
-                        <span class="card-label">Download Speed</span>
-                        <span class="card-value highlight" id="speed-val">0 POs/min</span>
-                    </div>
-
-                    <div class="telemetry-card">
-                        <span class="card-label">Estimated Time (ETA)</span>
-                        <span class="card-value highlight" id="eta-val">--:--</span>
-                    </div>
-
-                    <div class="telemetry-card">
-                        <span class="card-label">Active Errors</span>
-                        <span class="card-value danger" id="errors-val">0</span>
-                    </div>
-                </div>
-
-                <div class="actions-panel">
-                    <button class="btn btn-warning" id="btn-pause-resume" disabled>Pause Session</button>
-                    <button class="btn btn-danger" id="btn-stop-session" disabled>Stop / Cancel</button>
-                </div>
-
-                <div class="section-divider"></div>
-
-                <div class="console-log-area">
-                    <div class="console-header">
-                        <h3>Live Execution Log</h3>
-                        <button class="btn btn-sm btn-secondary" id="btn-clear-log">Clear</button>
-                    </div>
-                    <div class="console-body" id="console-log">
-                        <div class="log-line system">[System] Waiting to start...</div>
-                    </div>
-                </div>
-            </section>
-
-            <!-- Screen 3: History -->
-            <section class="screen" id="screen-history">
-                <div class="screen-header">
-                    <h2>Historic Session Dashboard</h2>
-                    <p>Review and resume past runs, export reports, and manage company codes.</p>
-                </div>
-
-                <div class="history-table-container">
-                    <table class="history-table">
-                        <thead>
-                            <tr>
-                                <th>Session ID</th>
-                                <th>File Name</th>
-                                <th>Date Started</th>
-                                <th>Status</th>
-                                <th>Actions</th>
-                            </tr>
-                        </thead>
-                        <tbody id="history-list">
-                            <!-- Populated dynamically -->
-                            <tr>
-                                <td colspan="5" class="text-center">No historic sessions found.</td>
-                            </tr>
-                        </tbody>
-                    </table>
-                </div>
+            <section class="screen" id="screen-settings" hidden>
+                <div class="intro-block"><div><p class="eyebrow">SETTINGS</p><h2>Preferences</h2><p>Control downloads, retries, updates, and how long runs remain in history.</p></div><button class="btn btn-secondary" id="btn-reset-settings" type="button">Reset defaults</button></div>
+                <article class="settings-card">
+                    <div class="settings-section"><div><h3>Language</h3><p>Changes the application interface language. CLI output and logs remain in English.</p></div><div class="settings-field"><label for="settings-language">Interface language</label><select id="settings-language"><option value="en">English (default)</option><option value="pt-BR">Português (Brasil)</option></select></div></div>
+                    <div class="settings-section"><div><h3>Text size</h3><p>Adjusts the interface scale for readability. The preview is applied immediately and saved on this computer.</p></div><div class="settings-field"><label for="settings-font-scale">Interface text size</label><select id="settings-font-scale"><option value="1">Standard — 100%</option><option value="1.1" selected>Comfortable — 110%</option><option value="1.2">Large — 120%</option><option value="1.3">Extra large — 130%</option></select></div></div>
+                    <div class="settings-section"><div><h3>Downloads</h3><p>Choose the base folder. Each run receives its own timestamped subfolder.</p></div><div class="settings-field wide-field"><label for="settings-download-root">Default download folder</label><div class="input-with-action"><input id="settings-download-root" type="text" autocomplete="off"><button class="btn btn-secondary" id="btn-settings-choose-dir" type="button">Choose</button></div></div></div>
+                    <div class="settings-section"><div><h3>Downloads simultaneous</h3><p>How many POs the app processes at the same time. Higher values may increase server load.</p></div><div class="settings-field"><label for="settings-concurrency">Speed profile</label><select id="settings-concurrency"><option value="2">Conservative — 2 downloads</option><option value="4">Balanced — 4 downloads</option><option value="6">Fast — 6 downloads</option><option value="8">Custom maximum — 8 downloads</option></select><small class="estimate-text" id="settings-concurrency-estimate">Estimate for 100 POs will be calculated from completed runs.</small></div></div>
+                    <div class="settings-section"><div><h3>Retry policy</h3><p>Automatic attempts for a PO before marking it as failed. Manual retry remains available from History.</p></div><div class="settings-field"><label for="settings-retry">Automatic retry</label><select id="settings-retry"><option value="1">No automatic retry</option><option value="2">Retry once</option><option value="3">Retry twice</option></select></div></div>
+                    <div class="settings-section"><div><h3>Email files (.msg)</h3><p>Choose whether downloaded email files are converted to PDF and whether their real attachments are extracted.</p></div><div class="settings-field"><label for="settings-msg-processing">Automatic processing</label><select id="settings-msg-processing"><option value="disabled">Disabled</option><option value="convert">Convert to PDF</option><option value="convert_extract">Convert to PDF and extract attachments</option></select></div></div>
+                    <div class="settings-section"><div><h3>Duplicate files</h3><p>Compare files with SHA-256. Identical files use a hard link when possible, or a reference sidecar when they are on different volumes.</p></div><label class="toggle-field"><input id="settings-deduplicate" type="checkbox"><span>Identify identical files</span></label></div>
+                    <div class="settings-section"><div><h3>Updates</h3><p>Check GitHub for a newer release when the app starts. Downloads are verified before installation.</p></div><label class="toggle-field"><input id="settings-auto-updates" type="checkbox"><span>Check automatically</span></label></div>
+                    <div class="settings-section"><div><h3>History retention</h3><p>Automatic cleanup only applies to completed runs and never removes an active run.</p></div><div class="settings-field"><label for="settings-retention">Keep</label><select id="settings-retention"><option value="all">Everything</option><option value="10">Last 10 runs</option><option value="30">Last 30 runs</option><option value="90">Runs from the last 90 days</option></select></div></div>
+                    <div class="settings-footer"><span id="settings-status">Changes are saved locally on this computer.</span><button class="btn btn-primary btn-large" id="btn-save-settings" type="button">Save settings</button></div>
+                </article>
             </section>
         </main>
     </div>
 
-    <!-- Modal for Session Details & Circuit Breaker Confirmation -->
-    <div class="modal" id="details-modal" style="display: none;">
-        <div class="modal-content glass-morphic">
-            <div class="modal-header">
-                <h3 id="modal-title">Session Details</h3>
-                <button class="btn-close" id="btn-close-modal">×</button>
-            </div>
-            <div class="modal-body">
-                <div class="modal-telemetry">
-                    <p><strong>Input File:</strong> <span id="modal-file">--</span></p>
-                    <p><strong>Status:</strong> <span id="modal-status">--</span></p>
-                </div>
-                <div class="company-status-list">
-                    <h4>Company Codes (Circuit Breakers)</h4>
-                    <ul id="company-status-items">
-                        <!-- Items populated dynamically -->
-                    </ul>
-                </div>
-                <div class="po-details-list">
-                    <h4>Purchase Orders status</h4>
-                    <div class="table-scroll-container">
-                        <table class="modal-pos-table">
-                            <thead>
-                                <tr>
-                                    <th>PO</th>
-                                    <th>Company</th>
-                                    <th>Status</th>
-                                    <th>Error Message</th>
-                                </tr>
-                            </thead>
-                            <tbody id="modal-pos-tbody">
-                                <!-- Populated dynamically -->
-                            </tbody>
-                        </table>
-                    </div>
-                </div>
-            </div>
-            <div class="modal-footer">
-                <button class="btn btn-secondary" id="btn-export-modal-report">Export Excel Report</button>
-            </div>
-        </div>
+    <div class="modal" id="folder-confirm-modal" hidden>
+        <div class="modal-card folder-confirm-card"><div class="modal-header"><div><p class="eyebrow">CONFIRM DESTINATION</p><h3>Review folder structure</h3><p class="modal-description">Attachments will be saved using this structure:</p></div><button class="icon-btn" id="btn-cancel-folder-confirm" type="button">×</button></div><pre class="folder-preview" id="folder-preview"></pre><div class="modal-footer"><button class="btn btn-secondary" id="btn-cancel-folder-run" type="button">Cancel</button><button class="btn btn-primary" id="btn-confirm-folder-run" type="button">Confirm and start</button></div></div>
     </div>
 
+    <div class="modal" id="details-modal" hidden>
+        <div class="modal-card"><div class="modal-header"><div><p class="eyebrow">RUN DETAILS</p><h3 id="modal-title">Session details</h3></div><button class="icon-btn" id="btn-close-modal" type="button">×</button></div><div class="modal-summary"><span>Input <strong id="modal-file">—</strong></span><span>Status <strong id="modal-status">—</strong></span><button class="btn btn-secondary btn-small" id="btn-open-input" type="button">Open input file</button></div><div class="retry-history-list" id="retry-history-list" hidden><h4>Retry history</h4><ul id="retry-history-items"></ul></div><div class="company-status-list"><h4>Supplier checks</h4><ul id="company-status-items"></ul></div><div class="po-details-list"><div class="details-toolbar"><h4>Purchase orders</h4><fieldset class="status-filter-group" id="status-filter"><legend>Show statuses</legend><label class="status-filter-option"><input type="checkbox" data-status-all checked><span>All</span></label><label class="status-filter-option"><input type="checkbox" data-status="SUCCESS" checked><span>Success</span></label><label class="status-filter-option"><input type="checkbox" data-status="ERROR" checked><span>Error</span></label><label class="status-filter-option"><input type="checkbox" data-status="PENDING" checked><span>Pending</span></label><label class="status-filter-option"><input type="checkbox" data-status="SKIPPED_VERIFICATION_REQUIRED" checked><span>Skipped</span></label></fieldset></div><div class="table-wrap"><table class="modal-pos-table"><thead><tr><th>PO</th><th>Supplier</th><th>Status</th><th class="retry-column">Retry</th><th class="message-column">Message</th></tr></thead><tbody id="modal-pos-tbody"></tbody></table></div></div><div class="modal-footer"><button class="btn btn-danger" id="btn-retry-errors" type="button">Retry failed POs</button><button class="btn btn-secondary" id="btn-export-modal-report" type="button">Export report</button></div></div>
+    </div>
+    <div class="modal" id="diagnostics-modal" hidden>
+        <div class="modal-card diagnostics-card"><div class="modal-header"><div><p class="eyebrow">SUPPORT TOOL</p><h3>Host diagnostics</h3><p class="modal-description">This report checks compatibility, connectivity and local permissions. It excludes passwords, cookies and PO contents.</p></div><button class="icon-btn" id="btn-close-diagnostics" type="button">×</button></div><pre class="diagnostics-report" id="diagnostics-report">Running diagnostics…</pre><div class="modal-footer"><button class="btn btn-secondary" id="btn-save-diagnostics" type="button" disabled>Save report</button><button class="btn btn-primary" id="btn-copy-diagnostics" type="button" disabled>Copy report</button></div></div>
+    </div>
     <script src="app.js"></script>
 </body>
 </html>

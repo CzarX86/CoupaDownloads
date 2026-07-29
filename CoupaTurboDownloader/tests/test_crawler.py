@@ -112,6 +112,40 @@ async def test_process_po_with_pr_and_dedup(tmp_download_dir):
 
 
 @pytest.mark.asyncio
+async def test_retry_preserves_valid_files_and_downloads_only_missing(tmp_download_dir):
+    db = MockSessionDB()
+    po_dir = os.path.join(tmp_download_dir, "CC1", "PO123")
+    os.makedirs(po_dir, exist_ok=True)
+    with open(os.path.join(po_dir, "fileA.pdf"), "wb") as stream:
+        stream.write(b"%PDF-1.7 existing-valid-file")
+
+    db.po_records[(1, "PO123")] = {
+        "status": "PENDING",
+        "output_subdir": "CC1",
+    }
+    crawler = CoupaCrawler(
+        db=db,
+        session_id=1,
+        base_download_dir=tmp_download_dir,
+        preserve_existing_files=True,
+    )
+    crawler._fetch_html = AsyncMock(return_value="""<html><body>
+        <a href='/attachments/a/download'>fileA.pdf</a>
+        <a href='/attachments/b/download'>fileB.docx</a>
+    </body></html>""")
+    crawler._download_attachment = AsyncMock()
+
+    await crawler.process_po(po_number="PO123", company_code="CC1")
+
+    assert crawler._download_attachment.call_count == 1
+    assert crawler._download_attachment.call_args.args[1].endswith("fileB.docx")
+    assert crawler._download_attachment.call_args.kwargs["replace_existing"] is True
+    with open(os.path.join(po_dir, "fileA.pdf"), "rb") as stream:
+        assert stream.read().startswith(b"%PDF-")
+    await crawler.close()
+
+
+@pytest.mark.asyncio
 async def test_process_po_no_attachments(tmp_download_dir):
     db = MockSessionDB()
     crawler = CoupaCrawler(db=db, session_id=1, base_download_dir=tmp_download_dir)

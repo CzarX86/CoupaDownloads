@@ -1,6 +1,9 @@
+import hashlib
+import shutil
 import sqlite3
 import datetime
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional, Dict, Any, List
 
 @dataclass
@@ -29,9 +32,25 @@ class SessionDB:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 input_file TEXT NOT NULL,
                 execution_type TEXT DEFAULT 'PROD',
+                concurrency INTEGER DEFAULT 4,
+                duration_seconds REAL,
                 status TEXT DEFAULT 'PENDING',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS retry_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id INTEGER NOT NULL,
+                po_number TEXT,
+                requested_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                completed_at TIMESTAMP,
+                status_before TEXT,
+                status_after TEXT,
+                error_message TEXT,
+                FOREIGN KEY (session_id) REFERENCES sessions (id)
             )
         ''')
 
@@ -64,6 +83,16 @@ class SessionDB:
             cursor.execute(
                 "ALTER TABLE sessions ADD COLUMN execution_type TEXT DEFAULT 'PROD'"
             )
+        for column, definition in {
+            "concurrency": "INTEGER DEFAULT 4",
+            "duration_seconds": "REAL",
+            "input_file_path": "TEXT",
+            "input_file_blob": "BLOB",
+            "input_file_sha256": "TEXT",
+            "input_file_size": "INTEGER",
+        }.items():
+            if column not in sessions_existing:
+                cursor.execute(f"ALTER TABLE sessions ADD COLUMN {column} {definition}")
 
         existing = {row[1] for row in cursor.execute("PRAGMA table_info(po_downloads)")}
 
@@ -88,6 +117,55 @@ class SessionDB:
         ''', (input_file, normalized_type))
         self.conn.commit()
         return cursor.lastrowid
+
+    def archive_session_input(self, session_id: int, source_path: str, archive_path: str) -> str:
+        source = Path(source_path).expanduser().resolve()
+        archive = Path(archive_path).expanduser().resolve()
+        data = source.read_bytes()
+        archive.parent.mkdir(parents=True, exist_ok=True)
+        if source != archive:
+            shutil.copy2(source, archive)
+        digest = hashlib.sha256(data).hexdigest()
+        self.conn.execute(
+            """
+            UPDATE sessions
+            SET input_file = ?, input_file_path = ?, input_file_blob = ?,
+                input_file_sha256 = ?, input_file_size = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (source.name, str(archive), data, digest, len(data), session_id),
+        )
+        self.conn.commit()
+        return str(archive)
+
+    def clone_session_input(self, source_session_id: int, target_session_id: int, archive_path: str) -> Optional[str]:
+        row = self.conn.execute(
+            "SELECT input_file, input_file_path, input_file_blob, input_file_sha256, input_file_size FROM sessions WHERE id = ?",
+            (source_session_id,),
+        ).fetchone()
+        if not row:
+            return None
+        source_path = Path(row["input_file_path"]) if row["input_file_path"] else None
+        data = row["input_file_blob"]
+        if data is None and source_path and source_path.exists():
+            data = source_path.read_bytes()
+        if data is None:
+            return None
+        archive = Path(archive_path).expanduser().resolve()
+        archive.parent.mkdir(parents=True, exist_ok=True)
+        archive.write_bytes(data)
+        digest = row["input_file_sha256"] or hashlib.sha256(data).hexdigest()
+        self.conn.execute(
+            """
+            UPDATE sessions
+            SET input_file = ?, input_file_path = ?, input_file_blob = ?,
+                input_file_sha256 = ?, input_file_size = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (row["input_file"] or archive.name, str(archive), data, digest, len(data), target_session_id),
+        )
+        self.conn.commit()
+        return str(archive)
 
     def get_session_execution_type(self, session_id: int) -> str:
         session = self.get_session(session_id)
@@ -125,7 +203,7 @@ class SessionDB:
             UPDATE po_downloads
             SET status = ?, download_folder = COALESCE(?, download_folder),
                 attachment_count = COALESCE(?, attachment_count),
-                error_message = ?, updated_at = CURRENT_TIMESTAMP
+                error_message = ?, updated_at = strftime('%Y-%m-%d %H:%M:%f', 'now')
             WHERE session_id = ? AND po_number = ?
         ''', (status, download_folder, attachment_count, error_message, session_id, po_number))
         self.conn.commit()
@@ -161,7 +239,7 @@ class SessionDB:
         cursor = self.conn.cursor()
         cursor.execute('''
             UPDATE po_downloads 
-            SET status = 'SKIPPED_VERIFICATION_REQUIRED', updated_at = CURRENT_TIMESTAMP
+            SET status = 'SKIPPED_VERIFICATION_REQUIRED', updated_at = strftime('%Y-%m-%d %H:%M:%f', 'now')
             WHERE session_id = ? AND company_code = ? AND status = 'PENDING'
         ''', (session_id, company_code))
         self.conn.commit()

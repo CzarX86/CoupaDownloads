@@ -19,7 +19,7 @@ class MsgConversionResult:
 def find_msg_files(download_root: Path) -> list[Path]:
     if not download_root or not download_root.exists():
         return []
-    return [p for p in download_root.rglob("*.msg") if p.is_file()]
+    return [p for p in download_root.rglob("*") if p.is_file() and p.suffix.lower() == ".msg"]
 
 
 def _to_text(value: Any) -> str:
@@ -49,6 +49,13 @@ def _strip_html(html: str) -> str:
 
 def _clean_for_pdf(value: Any, preserve_unicode: bool = False) -> str:
     text = _to_text(value)
+    # Strip invisible Unicode characters that most fonts lack glyphs for
+    text = text.replace("\ufeff", "")   # BOM / ZWNBS
+    text = text.replace("\u200b", "")   # zero-width space
+    text = text.replace("\u200c", "")   # zero-width non-joiner
+    text = text.replace("\u200d", "")   # zero-width joiner
+    text = text.replace("\u200e", "")   # left-to-right mark
+    text = text.replace("\u200f", "")   # right-to-left mark
     text = text.replace("\t", "    ")
     text = "".join(ch if ch in ("\n", "\r") or ord(ch) >= 32 else " " for ch in text)
     if preserve_unicode:
@@ -208,8 +215,9 @@ def _write_multiline(pdf: Any, text: str, h: int = 7) -> None:
 
 
 class MsgToPdfConverter:
-    def __init__(self, overwrite: bool = False):
+    def __init__(self, overwrite: bool = False, extract_attachments: bool = True):
         self.overwrite = overwrite
+        self.extract_attachments = extract_attachments
 
     def convert(self, msg_path: Path) -> MsgConversionResult:
         target = msg_path.with_suffix(".pdf")
@@ -219,9 +227,12 @@ class MsgToPdfConverter:
         try:
             import extract_msg  # type: ignore
             from fpdf import FPDF  # type: ignore
-        except Exception as exc:
+        except ModuleNotFoundError as exc:
             return MsgConversionResult(source=msg_path, target=target, status="failed", error=f"dependency missing: {exc}")
+        except Exception as exc:
+            return MsgConversionResult(source=msg_path, target=target, status="failed", error=f"packaged runtime could not load the converter: {exc}")
 
+        message = None
         try:
             message = extract_msg.Message(str(msg_path))
             subject = _to_text(getattr(message, "subject", "") or "")
@@ -241,9 +252,15 @@ class MsgToPdfConverter:
                 if name:
                     attachment_names.append(_to_text(name))
 
-            extracted_attachment_paths = _extract_attachments_to_subfolder(message, msg_path)
+            extracted_attachment_paths = _extract_attachments_to_subfolder(message, msg_path) if self.extract_attachments else []
         except Exception as exc:
             return MsgConversionResult(source=msg_path, target=target, status="failed", error=str(exc))
+        finally:
+            if message is not None:
+                try:
+                    message.close()
+                except Exception:
+                    pass
 
         try:
             pdf = FPDF()

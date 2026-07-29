@@ -9,11 +9,19 @@ def _assert_common_report(report: dict) -> None:
     assert "progress-visible" in report["steps"]
     assert "history-loaded" in report["steps"]
     assert "modal-opened" in report["steps"]
+    assert "po-edge-link-clicked" in report["steps"]
     assert "export-clicked" in report["steps"]
 
     dom_state = report["dom_state"]
     assert dom_state["history_rows"] >= 1
     assert dom_state["console_ui_lines"] >= 1
+    assert dom_state["modal_po_rows"] >= 1
+    assert dom_state["status_filter_inputs"] == 5
+    assert dom_state["sidebar_controls_visible"] is True
+    sidebar = dom_state["sidebar_metrics"]
+    assert sidebar["overflowY"] == "hidden"
+    assert sidebar["scrollHeight"] <= sidebar["clientHeight"]
+    assert sidebar["bottom"] <= sidebar["viewportHeight"] + 1
 
 
 def test_gui_playwright_probe_mock(tmp_path: Path) -> None:
@@ -49,10 +57,10 @@ def test_gui_playwright_probe_real_backend(tmp_path: Path) -> None:
 def test_gui_playwright_probe_start_without_file(tmp_path: Path) -> None:
     result = run_probe(mode="mock", timeout_ms=20000, output_root=tmp_path)
 
-    # Simulate clicking start without selecting a file
-    result.report["steps"].append("clicked-start-without-file")
-    assert "clicked-start-without-file" in result.report["steps"]
-    assert "Please select an input file before starting." in result.report["console_logs"]
+    # The journey starts with a disabled continuation control until an input
+    # file is selected, so starting is impossible at this stage.
+    assert "checked-next-without-file" in result.report["steps"]
+    assert "clicked-start" in result.report["steps"]
 
 
 def test_gui_playwright_probe_stop_during_execution(tmp_path: Path) -> None:

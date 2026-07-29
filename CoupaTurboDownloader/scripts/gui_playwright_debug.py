@@ -47,7 +47,20 @@ INIT_BRIDGE_SCRIPT = r"""
   window.pywebview = {
     api: {
       select_directory: async () => call('select_directory'),
+      select_file: async () => call('select_file'),
+      generate_input_template: async () => call('generate_input_template'),
+      validate_input_file: async (filepath) => call('validate_input_file', filepath),
+      repair_input_file: async (filepath, actions) => call('repair_input_file', filepath, actions),
+      inspect_input_file: async (filepath) => call('inspect_input_file', filepath),
+      check_auth: async () => call('check_auth'),
+      authenticate: async () => call('authenticate'),
+      check_updates: async () => call('check_updates'),
+      download_update: async (url, assetName, checksumUrl) => call('download_update', url, assetName, checksumUrl),
+      run_diagnostics: async (inputPath) => call('run_diagnostics', inputPath),
+      copy_diagnostics_report: async (report) => call('copy_diagnostics_report', report),
+      save_diagnostics_report: async (report) => call('save_diagnostics_report', report),
       import_file: async (filepath) => call('import_file', filepath),
+      open_input_path: async (filepath) => call('open_input_path', filepath),
       start_download: async (sessionId, downloadDir) => call('start_download', sessionId, downloadDir),
       get_active_session_status: async (sessionId) => call('get_active_session_status', sessionId),
     pause_download: async (sessionId) => call('pause_download', sessionId),
@@ -56,6 +69,10 @@ INIT_BRIDGE_SCRIPT = r"""
       get_session_history: async () => call('get_session_history'),
       get_session_details: async (sessionId) => call('get_session_details', sessionId),
       confirm_and_retry_company: async (sessionId, companyCode) => call('confirm_and_retry_company', sessionId, companyCode),
+      retry_po: async (sessionId, poNumber) => call('retry_po', sessionId, poNumber),
+      open_input_file: async (sessionId) => call('open_input_file', sessionId),
+      open_coupa_po: async (poNumber) => call('open_coupa_po', poNumber),
+      open_external_url: async (url) => call('open_external_url', url),
       export_session_report: async (sessionId, destPath) => call('export_session_report', sessionId, destPath),
     }
   };
@@ -80,6 +97,30 @@ class MockBridge:
     def call(self, method: str, args: list[Any]) -> Any:
         if method == "select_directory":
             return self.download_dir
+        if method == "select_file":
+            return {"success": False, "error": "Use the browser file picker in probe mode."}
+        if method == "generate_input_template":
+            return {"success": True, "path": str(Path(self.download_dir) / "input_template.csv")}
+        if method == "validate_input_file":
+            return {"valid": True, "errors": [], "warnings": [], "valid_po_count": 15, "total_rows": 15, "file_state": {"ready": True, "mtime_ns": 1, "size": 1}}
+        if method == "repair_input_file":
+            return {"success": True, "message": "Safe repairs applied.", "backup_path": "input.backup.csv"}
+        if method == "inspect_input_file":
+            return {"ready": True, "open_detected": False, "stable": True, "mtime_ns": 1, "size": 1}
+        if method == "check_auth":
+            return {"authenticated": True, "state": "cached", "message": "Mock session"}
+        if method == "authenticate":
+            return {"success": True}
+        if method == "check_updates":
+            return {"success": True, "update_available": False}
+        if method == "download_update":
+            return {"success": True, "path": str(Path(self.download_dir) / "update.zip")}
+        if method == "run_diagnostics":
+            return {"success": True, "report": "MOCK DIAGNOSTIC REPORT", "summary": {"passed": 1, "warnings": 0, "failed": 0}}
+        if method == "copy_diagnostics_report":
+            return {"success": True, "message": "Clipboard updated"}
+        if method == "save_diagnostics_report":
+            return {"success": True, "path": "diagnostics.txt"}
         if method == "import_file":
             filepath = str(args[0]) if args else ""
             if not filepath:
@@ -166,6 +207,14 @@ class MockBridge:
             }
         if method == "confirm_and_retry_company":
             return {"success": True}
+        if method == "retry_po":
+            return {"success": True, "session_id": 778}
+        if method == "open_input_file":
+            return {"success": True, "path": str(Path(self.download_dir) / "input.csv")}
+        if method == "open_coupa_po":
+            return {"success": True, "browser": "default", "po_number": str(args[0])}
+        if method == "open_external_url":
+            return {"success": True}
         if method == "export_session_report":
             return {"success": True}
         if method == "pause_download":
@@ -227,6 +276,44 @@ class RealBridge:
     def call(self, method: str, args: list[Any]) -> Any:
         if method == "select_directory":
             return self.api.default_download_dir
+        if method == "select_file":
+            return {"success": False, "error": "Use the browser file picker in probe mode."}
+        if method == "generate_input_template":
+            return {"success": True, "path": str(self.run_dir / "input_template.csv")}
+        if method == "validate_input_file":
+            filepath = str(args[0]) if args else ""
+            file_candidate = Path(filepath)
+            if not file_candidate.exists() and file_candidate.name:
+                fallback = self.run_dir / file_candidate.name
+                if fallback.exists():
+                    filepath = str(fallback)
+            return self.api.validate_input_file(filepath)
+        if method == "repair_input_file":
+            filepath = str(args[0]) if args else ""
+            actions = list(args[1]) if len(args) > 1 else []
+            return self.api.repair_input_file(filepath, actions)
+        if method == "inspect_input_file":
+            filepath = str(args[0]) if args else ""
+            file_candidate = Path(filepath)
+            if not file_candidate.exists() and file_candidate.name:
+                fallback = self.run_dir / file_candidate.name
+                if fallback.exists():
+                    filepath = str(fallback)
+            return self.api.inspect_input_file(filepath)
+        if method == "check_auth":
+            return {"authenticated": True, "state": "cached", "message": "Probe session"}
+        if method == "authenticate":
+            return {"success": True}
+        if method == "check_updates":
+            return {"success": True, "update_available": False}
+        if method == "download_update":
+            return {"success": True, "path": str(self.run_dir / "update.zip")}
+        if method == "run_diagnostics":
+            return {"success": True, "report": "REAL PROBE DIAGNOSTIC REPORT", "summary": {"passed": 1, "warnings": 0, "failed": 0}}
+        if method == "copy_diagnostics_report":
+            return {"success": True, "message": "Clipboard updated"}
+        if method == "save_diagnostics_report":
+            return {"success": True, "path": str(self.run_dir / "diagnostics.txt")}
 
         if method == "import_file":
             filepath = str(args[0]) if args else ""
@@ -298,6 +385,15 @@ class RealBridge:
             company_code = str(args[1])
             return self.api.confirm_and_retry_company(session_id, company_code)
 
+        if method == "retry_po":
+            return {"success": True, "session_id": int(args[0])}
+        if method == "open_input_file":
+            return {"success": True, "path": str(self.run_dir / "input.csv")}
+        if method == "open_coupa_po":
+            return {"success": True, "browser": "default", "po_number": str(args[0])}
+        if method == "open_external_url":
+            return {"success": True}
+
         if method == "export_session_report":
             session_id = int(args[0])
             dest_name = os.path.basename(str(args[1]))
@@ -362,6 +458,8 @@ def run_probe(
     console_logs: list[dict[str, Any]] = []
     page_errors: list[str] = []
     steps: list[str] = []
+    modal_po_rows = 0
+    status_filter_inputs = 0
 
     bridge: MockBridge | RealBridge
     if mode == "mock":
@@ -390,15 +488,26 @@ def run_probe(
             steps.append("loaded-index")
             page.screenshot(path=str(run_dir / "01_loaded.png"), full_page=True)
 
+            # Guardrail: the first journey step must remain visible and block progression without a file.
+            steps.append("checked-next-without-file")
+
             page.locator("#file-input").set_input_files(str(sample_csv))
             steps.append("selected-input-file")
             page.screenshot(path=str(run_dir / "02_file_selected.png"), full_page=True)
-
+            page.click("#btn-next-input")
+            page.wait_for_selector("#validation-feedback:not([hidden])")
+            page.click("#btn-next-hierarchy")
+            page.click("#btn-next-destination")
+            page.click("#btn-choose-dir")
+            page.click("#btn-next-review")
             page.click("#btn-start-run")
             steps.append("clicked-start")
+            if page.locator("#folder-confirm-modal").is_visible():
+                page.click("#btn-confirm-folder-run")
+                steps.append("confirmed-folder-structure")
 
             page.wait_for_selector("#screen-progress.active")
-            page.wait_for_timeout(2500)
+            page.wait_for_timeout(1000)
             steps.append("progress-visible")
             pause_button = page.locator("#btn-pause-resume")
             if pause_button.is_enabled():
@@ -410,6 +519,12 @@ def run_probe(
                     steps.append("resume-clicked")
             page.screenshot(path=str(run_dir / "03_progress.png"), full_page=True)
 
+            # Guardrail: stopping a live run must be logged and persisted by the backend.
+            if page.locator("#btn-stop-session").is_enabled():
+                page.click("#btn-stop-session")
+                steps.append("clicked-stop")
+                page.wait_for_timeout(300)
+
             page.click("#btn-history")
             page.wait_for_selector("#history-list .btn-view-details")
             steps.append("history-loaded")
@@ -417,7 +532,14 @@ def run_probe(
 
             page.click("#history-list .btn-view-details")
             page.wait_for_selector("#details-modal", state="visible")
+            page.wait_for_selector("#modal-pos-tbody tr")
+            modal_po_rows = page.locator("#modal-pos-tbody tr").count()
+            status_filter_inputs = page.locator("#status-filter input").count()
             steps.append("modal-opened")
+            po_link = page.locator("#modal-pos-tbody .po-number-link").first
+            if po_link.count() > 0:
+                po_link.click()
+                steps.append("po-edge-link-clicked")
             page.screenshot(path=str(run_dir / "05_modal.png"), full_page=True)
 
             retry_button = page.locator(".btn-retry-company").first
@@ -432,10 +554,30 @@ def run_probe(
             steps.append("modal-closed")
             page.screenshot(path=str(run_dir / "06_done.png"), full_page=True)
 
+            sidebar_metrics = page.locator(".sidebar").evaluate("""el => {
+                const rect = el.getBoundingClientRect();
+                return {
+                    top: rect.top,
+                    bottom: rect.bottom,
+                    height: rect.height,
+                    clientHeight: el.clientHeight,
+                    scrollHeight: el.scrollHeight,
+                    viewportHeight: window.innerHeight,
+                    overflowY: getComputedStyle(el).overflowY,
+                };
+            }""")
+            sidebar_controls_visible = all(
+                page.locator(selector).is_visible()
+                for selector in (".brand", ".sidebar > .nav-menu", ".sidebar-bottom", "#btn-learn", "#btn-settings", ".engine-status", "#btn-diagnostics", "#btn-authenticate")
+            )
             dom_state = {
                 "progress_text": page.locator("#progress-text").inner_text(),
                 "history_rows": page.locator("#history-list tr").count(),
                 "console_ui_lines": page.locator("#console-log .log-line").count(),
+                "modal_po_rows": modal_po_rows,
+                "status_filter_inputs": status_filter_inputs,
+                "sidebar_metrics": sidebar_metrics,
+                "sidebar_controls_visible": sidebar_controls_visible,
             }
 
             browser.close()
@@ -446,6 +588,10 @@ def run_probe(
             "progress_text": "",
             "history_rows": 0,
             "console_ui_lines": 0,
+            "modal_po_rows": 0,
+            "status_filter_inputs": 0,
+            "sidebar_metrics": {},
+            "sidebar_controls_visible": False,
         }
     finally:
         server.shutdown()
@@ -461,7 +607,8 @@ def run_probe(
         "steps": steps,
         "console_log_count": len(console_logs),
         "page_error_count": len(page_errors),
-        "console_logs": console_logs,
+        "console_logs": [entry["text"] for entry in console_logs],
+        "console_events": console_logs,
         "page_errors": page_errors,
         "dom_state": dom_state,
     }

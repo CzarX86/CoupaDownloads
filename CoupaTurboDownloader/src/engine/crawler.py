@@ -4,6 +4,7 @@ import os
 import re
 import shutil
 import time
+import zipfile
 from urllib.parse import unquote
 from typing import Optional, List, Dict, Any
 
@@ -26,6 +27,7 @@ class CoupaCrawler:
         request_delay: float = 0.03,
         timeout: float = 10.0,
         enable_circuit_breaker: Optional[bool] = None,
+        preserve_existing_files: bool = False,
     ):
         self.db = db
         self.session_id = session_id
@@ -34,6 +36,7 @@ class CoupaCrawler:
         self.concurrency = concurrency
         self.request_delay = request_delay
         self.timeout = timeout
+        self.preserve_existing_files = preserve_existing_files
         if enable_circuit_breaker is None:
             disable_env = os.environ.get("COUPA_DISABLE_CIRCUIT_BREAKER", "").strip().lower()
             self.enable_circuit_breaker = disable_env not in {"1", "true", "yes", "on"}
@@ -101,7 +104,27 @@ class CoupaCrawler:
                 print(f"[TIMING] _fetch_html {label}: total={elapsed_total:.0f}ms sem_wait={(t_sem - t0)*1000:.0f}ms rl_wait={(t_rl - t_sem)*1000:.0f}ms http={(t_http - t_rl)*1000:.0f}ms")
             return response.text
 
-    async def _download_attachment(self, url: str, dest_path: str) -> None:
+    @staticmethod
+    def _is_valid_existing_file(path: str) -> bool:
+        candidate = os.path.abspath(path)
+        if not os.path.isfile(candidate) or os.path.getsize(candidate) <= 0:
+            return False
+        extension = os.path.splitext(candidate)[1].lower()
+        if extension in {".xlsx", ".xlsm", ".docx", ".pptx", ".zip"}:
+            return zipfile.is_zipfile(candidate)
+        if extension == ".pdf":
+            with open(candidate, "rb") as stream:
+                return stream.read(5) == b"%PDF-"
+        if extension in {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tif", ".tiff"}:
+            try:
+                from PIL import Image
+                with Image.open(candidate) as image:
+                    image.verify()
+            except Exception:
+                return False
+        return True
+
+    async def _download_attachment(self, url: str, dest_path: str, *, replace_existing: bool = False) -> None:
         t0 = time.monotonic()
         async with self.semaphore:
             t_sem = time.monotonic()
@@ -122,13 +145,15 @@ class CoupaCrawler:
 
             final_path = dest_path
             header_name = self._filename_from_content_disposition(response.headers.get("content-disposition", ""))
-            if header_name:
+            if header_name and not replace_existing:
                 safe_header_name = self._safe_attachment_filename(header_name, url)
                 if safe_header_name:
                     final_path = os.path.join(os.path.dirname(dest_path), safe_header_name)
 
-            # Avoid accidental overwrite when two attachments resolve to same final name.
-            if os.path.exists(final_path):
+            # Normal runs never overwrite. Individual retries replace only an
+            # invalid file at the expected path; valid files are skipped before
+            # reaching this method.
+            if os.path.exists(final_path) and not replace_existing:
                 base, ext = os.path.splitext(final_path)
                 idx = 2
                 while os.path.exists(f"{base}_{idx}{ext}"):
@@ -139,8 +164,16 @@ class CoupaCrawler:
 
     @staticmethod
     def _write_file(path: str, content: bytes) -> None:
-        with open(path, "wb") as f:
-            f.write(content)
+        partial_path = f"{path}.part"
+        try:
+            with open(partial_path, "wb") as stream:
+                stream.write(content)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(partial_path, path)
+        finally:
+            if os.path.exists(partial_path):
+                os.remove(partial_path)
 
     @staticmethod
     def _safe_attachment_filename(raw_name: str, download_url: str, max_component_len: int = 180) -> str:
@@ -260,7 +293,12 @@ class CoupaCrawler:
             for att in attachments:
                 fallback_name = self._safe_attachment_filename(att.get("filename", ""), att.get("url", ""))
                 dest_path = os.path.join(po_dir, fallback_name)
-                await self._download_attachment(att["url"], dest_path)
+                if self.preserve_existing_files and self._is_valid_existing_file(dest_path):
+                    continue
+                if self.preserve_existing_files:
+                    await self._download_attachment(att["url"], dest_path, replace_existing=True)
+                else:
+                    await self._download_attachment(att["url"], dest_path)
 
             self.db.update_po_status(
                 self.session_id, po_number, "SUCCESS", po_dir, len(attachments), None
@@ -274,7 +312,7 @@ class CoupaCrawler:
             }
 
         except Exception as e:
-            if dir_created and os.path.exists(po_dir):
+            if dir_created and os.path.exists(po_dir) and not self.preserve_existing_files:
                 shutil.rmtree(po_dir, ignore_errors=True)
             error_msg = str(e)
             self.db.update_po_status(self.session_id, po_number, "ERROR", None, 0, error_msg)

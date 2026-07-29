@@ -119,4 +119,9 @@
 
 ---
 *Roadmap created: 2026-05-20*
-*Last updated: 2026-05-21 after ingest of 3 docs (1 PRD + 2 SPECs)*
+## Pós-v1 planejado
+
+- **Alinhamento de input e relatórios:** `docs/plan-alinhamento-input-relatorios.md` — template configurável, normalização de schema, preservação do input e retries completos.
+- **Integração Power BI:** `docs/roadmap-integracao-powerbi.md` — adiada; não faz parte da implementação atual.
+
+*Last updated: 2026-07-29 with input/report alignment and deferred Power BI roadmap*

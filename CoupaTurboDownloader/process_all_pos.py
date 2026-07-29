@@ -3,6 +3,7 @@ import sys
 import asyncio
 import time
 import argparse
+import json
 from datetime import datetime
 from pathlib import Path
 import pandas as pd
@@ -31,16 +32,42 @@ def parse_args() -> argparse.Namespace:
         help="Base download directory (default: ~/Downloads/CoupaAttachments)",
     )
     parser.add_argument(
+        "--run-dir",
+        default=None,
+        help="Use this exact run directory instead of creating a timestamped directory",
+    )
+    parser.add_argument(
         "--concurrency",
         type=int,
-        default=11,
-        help="Concurrent workers (default: 11)",
+        default=4,
+        help="Concurrent downloads (1-8, default: 4)",
+    )
+    parser.add_argument(
+        "--retry-attempts",
+        type=int,
+        default=None,
+        help="Total attempts per PO (1-3; GUI settings may override)",
     )
     parser.add_argument(
         "--retry-session-id",
         type=int,
         default=None,
         help="Optional source session id for retry mode (uses latest with ERROR if omitted)",
+    )
+    parser.add_argument(
+        "--retry-po",
+        default=None,
+        help="Retry one PO in a new session, preserving valid files",
+    )
+    parser.add_argument(
+        "--retry-in-place-po",
+        default=None,
+        help="Retry one PO without creating a new session id",
+    )
+    parser.add_argument(
+        "--retry-in-place-errors",
+        action="store_true",
+        help="Retry ERROR/SKIPPED rows in the existing session",
     )
     parser.add_argument(
         "--retry-incomplete-session-id",
@@ -51,7 +78,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--disable-circuit-breaker",
         action="store_true",
-        help="Disable company-level circuit breaker and process 100% of rows",
+        help="Disable company-level circuit breaker and process 100%% of rows",
     )
     parser.add_argument(
         "--skip-msg-to-pdf",
@@ -62,6 +89,18 @@ def parse_args() -> argparse.Namespace:
         "--overwrite-msg-pdf",
         action="store_true",
         help="Overwrite existing generated PDF files for .msg conversion",
+    )
+    parser.add_argument(
+        "--msg-processing",
+        choices=["disabled", "convert", "convert_extract"],
+        default=None,
+        help="MSG handling: disabled, convert to PDF, or convert and extract attachments",
+    )
+    parser.add_argument(
+        "--deduplicate-files",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Identify identical files by SHA-256 and create hard-link/reference duplicates",
     )
     parser.add_argument(
         "--execution-type",
@@ -89,11 +128,15 @@ def resolve_execution_type(args: argparse.Namespace, input_name: str, source_ses
     return _detect_execution_type_from_name(input_name)
 
 
-def build_run_download_dir(download_root: str, mode: str) -> str:
+def build_run_download_dir(download_root: str, mode: str, run_dir: str | None = None) -> str:
+    if run_dir:
+        resolved = os.path.abspath(os.path.expanduser(run_dir))
+        os.makedirs(resolved, exist_ok=True)
+        return resolved
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    run_dir = os.path.join(os.path.expanduser(download_root), f"run_{stamp}_{mode}")
-    os.makedirs(run_dir, exist_ok=True)
-    return run_dir
+    resolved = os.path.join(os.path.expanduser(download_root), f"run_{stamp}_{mode}")
+    os.makedirs(resolved, exist_ok=True)
+    return resolved
 
 
 def detect_separator(filepath: str) -> str:
@@ -112,7 +155,10 @@ def _clean_folder_part(value: str) -> str:
     return cleaned or "Unknown"
 
 
-def _extract_hierarchy_columns(df: pd.DataFrame) -> tuple[list[str], bool]:
+def _extract_hierarchy_columns(
+    df: pd.DataFrame,
+    requested_order: list[str] | None = None,
+) -> tuple[list[str], bool]:
     sep_col = None
     for c in df.columns:
         if str(c).strip() == "<|>":
@@ -124,6 +170,9 @@ def _extract_hierarchy_columns(df: pd.DataFrame) -> tuple[list[str], bool]:
     cols = list(df.columns)
     sep_idx = cols.index(sep_col)
     hierarchy_cols = cols[sep_idx + 1 :]
+    if requested_order:
+        requested = [str(column) for column in requested_order if str(column) in hierarchy_cols]
+        hierarchy_cols = requested + [column for column in hierarchy_cols if column not in requested]
     if not hierarchy_cols:
         return [], False
 
@@ -280,11 +329,16 @@ def export_original_like_excel_report(
     return report_path
 
 
-def create_session_from_csv(db: SessionDB, input_csv: str, execution_type: str = "PROD") -> tuple[int, int]:
+def create_session_from_csv(
+    db: SessionDB,
+    input_csv: str,
+    execution_type: str = "PROD",
+    hierarchy_order: list[str] | None = None,
+) -> tuple[int, int]:
     cursor = db.conn.cursor()
     sep = detect_separator(input_csv)
     df = pd.read_csv(input_csv, sep=sep, dtype=str)
-    hierarchy_cols, has_hierarchy_data = _extract_hierarchy_columns(df)
+    hierarchy_cols, has_hierarchy_data = _extract_hierarchy_columns(df, hierarchy_order)
     session_id = db.create_session(os.path.basename(input_csv), execution_type=execution_type)
 
     count = 0
@@ -358,6 +412,83 @@ def create_retry_session_from_last_errors(
     return source_session_id, session_id, len(error_rows)
 
 
+def prepare_in_place_retry(
+    db: SessionDB,
+    session_id: int,
+    po_number: str | None = None,
+    errors_only: bool = False,
+) -> int:
+    cursor = db.conn.cursor()
+    if po_number:
+        rows = cursor.execute(
+            "SELECT po_number, status FROM po_downloads WHERE session_id = ? AND po_number = ?",
+            (session_id, str(po_number).strip()),
+        ).fetchall()
+    else:
+        statuses = ("ERROR", "SKIPPED_VERIFICATION_REQUIRED") if errors_only else ("PENDING", "ERROR", "SKIPPED_VERIFICATION_REQUIRED")
+        placeholders = ",".join("?" for _ in statuses)
+        rows = cursor.execute(
+            f"SELECT po_number, status FROM po_downloads WHERE session_id = ? AND status IN ({placeholders})",
+            (session_id, *statuses),
+        ).fetchall()
+    for row in rows:
+        cursor.execute(
+            "INSERT INTO retry_events (session_id, po_number, status_before) VALUES (?, ?, ?)",
+            (session_id, row["po_number"], row["status"]),
+        )
+        cursor.execute(
+            "UPDATE po_downloads SET status = 'PENDING', error_message = NULL, updated_at = strftime('%Y-%m-%d %H:%M:%f', 'now') WHERE session_id = ? AND po_number = ?",
+            (session_id, row["po_number"]),
+        )
+    db.conn.commit()
+    return len(rows)
+
+
+def create_retry_session_for_po(
+    db: SessionDB,
+    po_number: str,
+    source_session_id: int | None = None,
+    input_csv: str | None = None,
+    execution_type: str = "PROD",
+) -> tuple[int, int, int]:
+    cursor = db.conn.cursor()
+    normalized_po = str(po_number or "").strip()
+    if source_session_id is None:
+        source_row = cursor.execute(
+            "SELECT session_id FROM po_downloads WHERE po_number = ? ORDER BY session_id DESC LIMIT 1",
+            (normalized_po,),
+        ).fetchone()
+    else:
+        source_row = cursor.execute(
+            "SELECT session_id FROM po_downloads WHERE session_id = ? AND po_number = ?",
+            (source_session_id, normalized_po),
+        ).fetchone()
+    if not source_row:
+        return 0, 0, 0
+
+    source_session_id = int(source_row["session_id"])
+    row = cursor.execute(
+        "SELECT po_number, company_code, output_subdir FROM po_downloads WHERE session_id = ? AND po_number = ?",
+        (source_session_id, normalized_po),
+    ).fetchone()
+    if not row:
+        return source_session_id, 0, 0
+
+    output_subdir = row["output_subdir"]
+    if not output_subdir and input_csv:
+        output_subdir = build_output_subdir_map_from_csv(input_csv).get(normalized_po, "")
+    session_id = db.create_session(
+        f"retry_po_{normalized_po}_from_{source_session_id}",
+        execution_type=execution_type,
+    )
+    cursor.execute(
+        "INSERT INTO po_downloads (session_id, po_number, company_code, output_subdir, status) VALUES (?, ?, ?, ?, 'PENDING')",
+        (session_id, row["po_number"], row["company_code"], output_subdir),
+    )
+    db.conn.commit()
+    return source_session_id, session_id, 1
+
+
 def create_retry_session_from_incomplete(
     db: SessionDB,
     source_session_id: int,
@@ -398,19 +529,24 @@ def create_retry_session_from_incomplete(
 
 async def main():
     args = parse_args()
+    args.concurrency = max(1, min(8, int(args.concurrency)))
+    configured_retries = os.environ.get("COUPA_RETRY_ATTEMPTS")
+    args.retry_attempts = max(1, min(3, int(configured_retries or args.retry_attempts or 1)))
+    args.msg_processing = args.msg_processing or os.environ.get("COUPA_MSG_PROCESSING", "convert_extract")
+    args.deduplicate_files = args.deduplicate_files if args.deduplicate_files is not None else os.environ.get("COUPA_DEDUPLICATE_FILES", "1") != "0"
 
-    if not args.retry_last_errors and not os.path.exists(INPUT_CSV):
-        print(f"[ERRO] Arquivo nao encontrado: {INPUT_CSV}")
+    if not (args.retry_last_errors or args.retry_incomplete_session_id is not None or args.retry_po or args.retry_in_place_po or args.retry_in_place_errors) and not os.path.exists(INPUT_CSV):
+        print(f"[ERROR] Input file not found: {INPUT_CSV}")
         sys.exit(1)
 
-    # --- Autenticacao ---
+    # --- Authentication ---
     cookies = load_cached_cookies()
     if cookies:
-        print("[AUTH] Cookies carregados do cache. Validando...")
+        print("[AUTH] Cached cookies loaded. Validating session...")
         if await validate_cookies(cookies):
-            print("[AUTH] Cookies validos.\n")
+            print("[AUTH] Coupa session is valid.\n")
         else:
-            print("[AUTH] Cookies expirados. Reautenticacao necessaria.")
+            print("[AUTH] Cached session expired. Sign-in is required.")
             cookies = None
 
     if not cookies:
@@ -420,7 +556,58 @@ async def main():
 
     mode = "full"
     report_source_csv = INPUT_CSV
-    if args.retry_incomplete_session_id is not None:
+    source_session_id: int | None = None
+    if args.retry_in_place_po or args.retry_in_place_errors:
+        source_session_id = args.retry_session_id
+        if not source_session_id:
+            print("[ERROR] --retry-session-id is required for in-place retry.")
+            db.close()
+            return
+        run_type = resolve_execution_type(
+            args,
+            input_name=f"retry_in_place_{source_session_id}",
+            source_session_id=source_session_id,
+            db=db,
+        )
+        count = prepare_in_place_retry(
+            db,
+            source_session_id,
+            po_number=args.retry_in_place_po,
+            errors_only=args.retry_in_place_errors,
+        )
+        if count == 0:
+            print(f"[INFO] Session {source_session_id} has no POs eligible for retry.")
+            db.close()
+            return
+        session_id = source_session_id
+        mode = "retry_in_place"
+        # The report belongs to this same session and must be updated in place.
+        # The archived input is selected again after the archive step below so
+        # retries keep every original column in the existing workbook.
+        print(f"[INFO] In-place retry: session={session_id}, POs={count}, type={run_type}")
+    elif args.retry_po:
+        run_type = resolve_execution_type(
+            args,
+            input_name=f"retry_po_{args.retry_po}",
+            source_session_id=args.retry_session_id,
+            db=db,
+        )
+        source_session_id, session_id, count = create_retry_session_for_po(
+            db,
+            po_number=args.retry_po,
+            source_session_id=args.retry_session_id,
+            input_csv=INPUT_CSV,
+            execution_type=run_type,
+        )
+        if source_session_id == 0 or session_id == 0 or count == 0:
+            print(f"[ERROR] PO {args.retry_po} was not found in the source session.")
+            db.close()
+            return
+        mode = "retry_po"
+        # Legacy CLI retry sessions still use the source schema for reporting;
+        # the GUI uses the in-place path above to update the original workbook.
+        print(f"[INFO] Single-PO retry: source_session={source_session_id}, PO={args.retry_po}, new_session={session_id}, type={run_type}")
+    elif args.retry_incomplete_session_id is not None:
         run_type = resolve_execution_type(
             args,
             input_name=f"retry_incomplete_from_{args.retry_incomplete_session_id}",
@@ -434,16 +621,16 @@ async def main():
             execution_type=run_type,
         )
         if source_session_id == 0:
-            print(f"[ERRO] Sessao {args.retry_incomplete_session_id} nao encontrada.")
+            print(f"[ERROR] Session {args.retry_incomplete_session_id} was not found.")
             db.close()
             sys.exit(1)
         if session_id == 0 or count == 0:
-            print(f"[INFO] Sessao {source_session_id} nao possui PENDING/ERROR para retomar.")
+            print(f"[INFO] Session {source_session_id} has no pending or failed POs to resume.")
             db.close()
             return
         mode = "retry_incomplete"
-        report_source_csv = None
-        print(f"[INFO] Retry incomplete mode: sessao origem={source_session_id}, pendentes+erros={count}, nova sessao={session_id}, tipo={run_type}")
+        # Keep the source schema available when producing the retry report.
+        print(f"[INFO] Incomplete-session retry: source_session={source_session_id}, pending_or_failed={count}, new_session={session_id}, type={run_type}")
     elif args.retry_last_errors:
         run_type = resolve_execution_type(
             args,
@@ -458,37 +645,64 @@ async def main():
             execution_type=run_type,
         )
         if source_session_id == 0:
-            print("[ERRO] Nenhuma sessao anterior encontrada para retry.")
+            print("[ERROR] No previous session was found for retry.")
             db.close()
             sys.exit(1)
         if session_id == 0 or count == 0:
-            print(f"[INFO] Sessao {source_session_id} nao possui erros para retry.")
+            print(f"[INFO] Session {source_session_id} has no failed POs to retry.")
             db.close()
             return
         mode = "retry_errors"
-        report_source_csv = None
-        print(f"[INFO] Retry mode: sessao origem={source_session_id}, erros isolados={count}, nova sessao={session_id}, tipo={run_type}")
+        # Keep the source schema available when producing the retry report.
+        print(f"[INFO] Failed-PO retry: source_session={source_session_id}, failed={count}, new_session={session_id}, type={run_type}")
     else:
-        print(f"[INFO] Importando {INPUT_CSV}...")
+        print(f"[INFO] Reading input: {INPUT_CSV}")
         run_type = resolve_execution_type(args, input_name=os.path.basename(INPUT_CSV))
-        session_id, count = create_session_from_csv(db, INPUT_CSV, execution_type=run_type)
-        print(f"[INFO] {count} POs importadas. Iniciando processamento...")
-        print(f"[INFO] Tipo da sessao: {run_type}")
+        hierarchy_order = None
+        if os.environ.get("COUPA_HIERARCHY_ORDER"):
+            try:
+                hierarchy_order = json.loads(os.environ["COUPA_HIERARCHY_ORDER"])
+            except json.JSONDecodeError:
+                hierarchy_order = None
+        session_id, count = create_session_from_csv(
+            db,
+            INPUT_CSV,
+            execution_type=run_type,
+            hierarchy_order=hierarchy_order,
+        )
+        print(f"[INFO] {count} POs imported and queued for processing.")
+        print(f"[INFO] Session type: {run_type}")
 
-    run_download_dir = build_run_download_dir(args.download_root, mode)
-    print(f"[INFO] Pasta desta execucao: {run_download_dir}")
+    run_download_dir = build_run_download_dir(args.download_root, mode, args.run_dir)
+    db.conn.execute("UPDATE sessions SET concurrency = ? WHERE id = ?", (args.concurrency, session_id))
+    db.conn.commit()
+    archive_suffix = Path(INPUT_CSV).suffix or ".csv"
+    archive_path = os.path.join(run_download_dir, f"input_source_{session_id}{archive_suffix}")
+    if os.path.exists(INPUT_CSV):
+        db.archive_session_input(session_id, INPUT_CSV, archive_path)
+    elif source_session_id:
+        db.clone_session_input(source_session_id, session_id, archive_path)
+
+    # Always build the workbook from the archived snapshot. For an in-place
+    # retry this is the same session's source and the report path below is the
+    # existing report, so the retry updates it instead of creating a reduced
+    # second workbook.
+    if os.path.exists(archive_path):
+        report_source_csv = archive_path
+    print(f"[INFO] Run folder: {run_download_dir}")
     if args.disable_circuit_breaker:
-        print("[INFO] Circuit breaker desabilitado: processando 100% das linhas")
+        print("[INFO] Circuit breaker disabled; processing every row.")
 
     cursor = db.conn.cursor()
 
-    # --- Processar ---
+    # --- Processing ---
     crawler = CoupaCrawler(
         db, session_id, run_download_dir,
         cookies=cookies,
         concurrency=args.concurrency,
         request_delay=0.03,
         enable_circuit_breaker=not args.disable_circuit_breaker,
+        preserve_existing_files=bool(args.retry_po or args.retry_in_place_po or args.retry_in_place_errors),
     )
 
     rows = cursor.execute(
@@ -497,14 +711,19 @@ async def main():
     ).fetchall()
 
     pos_list = [(r["po_number"], r["company_code"]) for r in rows]
-    print(f"[INFO] Processando {len(pos_list)} POs com {crawler.concurrency} workers...\n")
+    print(f"[INFO] Processing {len(pos_list)} POs with {crawler.concurrency} concurrent workers...\n")
 
     counters = {"done": 0, "ok": 0, "err": 0, "files": 0}
     total = len(pos_list)
     start_ts = time.time()
 
     async def process_one(po_number, company_code):
-        result = await crawler.process_po(po_number, company_code)
+        result = {"po": po_number, "success": False, "error": "No attempt completed"}
+        for attempt in range(args.retry_attempts):
+            result = await crawler.process_po(po_number, company_code)
+            if result.get("success") or attempt == args.retry_attempts - 1:
+                break
+            await asyncio.sleep(min(5.0, 1.0 * (attempt + 1)))
         counters["done"] += 1
         if result.get("success"):
             counters["ok"] += 1
@@ -532,6 +751,24 @@ async def main():
 
     results = await asyncio.gather(*[bounded(po, co) for po, co in pos_list], return_exceptions=True)
     results = [r for r in results if not isinstance(r, BaseException)]
+    if args.retry_in_place_po or args.retry_in_place_errors:
+        for result in results:
+            po_value = str(result.get("po", ""))
+            db.conn.execute(
+                """
+                UPDATE retry_events
+                SET completed_at = CURRENT_TIMESTAMP,
+                    status_after = (SELECT status FROM po_downloads WHERE session_id = ? AND po_number = ?),
+                    error_message = ?
+                WHERE id = (
+                    SELECT id FROM retry_events
+                    WHERE session_id = ? AND po_number = ? AND completed_at IS NULL
+                    ORDER BY id DESC LIMIT 1
+                )
+                """,
+                (session_id, po_value, result.get("error"), session_id, po_value),
+            )
+        db.conn.commit()
 
     success = counters["ok"]
     failed = counters["err"]
@@ -544,22 +781,25 @@ async def main():
     )
 
     print(f"\n{'=' * 60}")
-    print(f"  RESULTADO")
+    print("  RESULT")
     print(f"  Success: {success} | Failed: {failed}")
-    print(f"  POs com anexos: {downloaded_files}")
-    print(f"  Total de anexos: {total_attachments}")
+    print(f"  POs with attachments: {downloaded_files}")
+    print(f"  Total attachments: {total_attachments}")
     if auth_fails:
-        print(f"  [AVISO] {auth_fails} falhas de autenticacao")
+        print(f"  [WARNING] Authentication failures: {auth_fails}")
     if rate_limits:
-        print(f"  [AVISO] {rate_limits} rate limits (429)")
+        print(f"  [WARNING] Coupa rate limits (429): {rate_limits}")
     print(f"  Downloads: {run_download_dir}")
     print(f"{'=' * 60}")
 
-    if not args.skip_msg_to_pdf:
+    if not args.skip_msg_to_pdf and args.msg_processing != "disabled":
         try:
             msg_files = find_msg_files(Path(run_download_dir))
             if msg_files:
-                converter = MsgToPdfConverter(overwrite=args.overwrite_msg_pdf)
+                converter = MsgToPdfConverter(
+                    overwrite=args.overwrite_msg_pdf,
+                    extract_attachments=args.msg_processing == "convert_extract",
+                )
                 summary = converter.convert_all(msg_files)
                 print(
                     "[MSG2PDF] "
@@ -568,11 +808,27 @@ async def main():
                 )
                 if summary["failed"]:
                     first_error = summary["errors"][0]
-                    print(f"[MSG2PDF][WARN] Exemplo de falha: {first_error['file']} -> {first_error['error']}")
+                    print(f"[MSG2PDF][WARNING] Example failure: {first_error['file']} -> {first_error['error']}")
             else:
-                print("[MSG2PDF] Nenhum arquivo .msg encontrado para conversao")
+                print("[MSG2PDF] No .msg files found for conversion")
         except Exception as e:
-            print(f"[MSG2PDF][WARN] Falha na conversao .msg -> .pdf: {e}")
+            print(f"[MSG2PDF][WARNING] MSG-to-PDF conversion failed: {e}")
+    else:
+        print("[MSG2PDF] MSG conversion disabled")
+
+    if args.deduplicate_files:
+        try:
+            from src.engine.file_deduplicator import FileDeduplicator
+            dedup_summary = FileDeduplicator().process_tree(Path(run_download_dir))
+            print(
+                "[DEDUP] "
+                f"scanned={dedup_summary['scanned']} duplicates={dedup_summary['duplicates']} "
+                f"hardlinks={dedup_summary['hardlinks']} references={dedup_summary['references']}"
+            )
+            if dedup_summary["errors"]:
+                print(f"[DEDUP][WARNING] File-level failures: {len(dedup_summary['errors'])}")
+        except Exception as e:
+            print(f"[DEDUP][WARNING] Deduplication failed: {e}")
 
     report_path = os.path.join(run_download_dir, f"report_session_{session_id}.xlsx")
     try:
@@ -582,10 +838,15 @@ async def main():
             report_path=report_path,
             input_csv=report_source_csv,
         )
-        print(f"[REPORT] Excel gerado: {saved_report}")
+        print(f"[REPORT] Excel report generated: {saved_report}")
     except Exception as e:
-        print(f"[REPORT][ERRO] Falha ao gerar Excel: {e}")
+        print(f"[REPORT][ERROR] Excel report generation failed: {e}")
 
+    db.conn.execute(
+        "UPDATE sessions SET duration_seconds = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+        (max(0.0, time.time() - start_ts), session_id),
+    )
+    db.conn.commit()
     await crawler.close()
     db.close()
 
@@ -594,4 +855,4 @@ if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        print("\n[INFO] Execucao interrompida pelo usuario (Ctrl+C).")
+        print("\n[INFO] Run interrupted by the user (Ctrl+C).")
