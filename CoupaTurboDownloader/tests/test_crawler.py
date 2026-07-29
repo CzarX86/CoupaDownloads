@@ -175,8 +175,9 @@ async def test_process_po_uses_output_subdir_for_path(tmp_download_dir):
     await crawler.process_po(po_number="PO777", company_code="CC1")
 
     assert crawler._download_attachment.call_count == 1
-    dest_path = crawler._download_attachment.call_args.args[1]
-    assert "2026/Q12026/Yellow_Wood/PO777" in dest_path
+    dest_path = os.path.normpath(crawler._download_attachment.call_args.args[1])
+    expected_subdir = os.path.join("2026", "Q12026", "Yellow_Wood", "PO777")
+    assert expected_subdir in dest_path
     await crawler.close()
 
 

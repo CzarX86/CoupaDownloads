@@ -1,9 +1,7 @@
 import os
-from pathlib import Path
-
 import pandas as pd
 import pytest
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 from src.db.session_db import SessionDB
 from src.gui.api import AppAPI
@@ -12,17 +10,11 @@ from src.engine.crawler import CoupaCrawler
 
 @pytest.mark.asyncio
 async def test_e2e_pipeline_with_sample_from_input_csv(tmp_path):
-    repo_root = Path(__file__).resolve().parents[2]
-    source_csv = repo_root / "input.csv"
-    assert source_csv.exists(), "Expected sample source CSV to exist at project root"
-
-    raw_df = pd.read_csv(source_csv, sep=";", dtype=str)
-    sample_df = raw_df[["PO_NUMBER", "SUPPLIER"]].dropna().head(3).copy()
-    assert len(sample_df) == 3, "Need at least 3 valid rows in input.csv for E2E sample"
-
-    normalized_df = sample_df.rename(columns={
-        "PO_NUMBER": "PO Number",
-        "SUPPLIER": "legal entity",
+    # Keep the E2E fixture deterministic and independent from ignored local
+    # input files, which are intentionally unavailable on CI runners.
+    normalized_df = pd.DataFrame({
+        "PO Number": ["PO1001", "PO1002", "PO1003"],
+        "legal entity": ["ACME-BR", "ACME-BR", "ACME-US"],
     })
     normalized_csv = tmp_path / "sample_for_e2e.csv"
     normalized_df.to_csv(normalized_csv, index=False)

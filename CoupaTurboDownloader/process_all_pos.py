@@ -5,7 +5,7 @@ import time
 import argparse
 import json
 from datetime import datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import pandas as pd
 from src.db.session_db import SessionDB
 from src.engine.crawler import CoupaCrawler
@@ -189,7 +189,7 @@ def _build_output_subdir(row: pd.Series, supplier: str, hierarchy_cols: list[str
         parts = [_clean_folder_part(row.get(col, "")) for col in hierarchy_cols]
     else:
         parts = [str(supplier).strip() or "Unknown"]
-    return os.path.join(*parts)
+    return PurePosixPath(*parts).as_posix()
 
 
 def build_output_subdir_map_from_csv(input_csv: str) -> dict[str, str]:
