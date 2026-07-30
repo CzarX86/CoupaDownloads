@@ -314,22 +314,31 @@ def _edge_is_running() -> bool:
 
 
 def _start_edge_with_profile(headless: bool, prefer_existing: bool = True) -> Any:
+    """Start Selenium with the user's existing Edge profile.
+
+    Edge locks its user-data directory while running. We therefore require all
+    Edge windows to be closed instead of silently creating a second profile.
+    An app-owned profile remains available only as an explicit legacy opt-in
+    through COUPA_USE_APP_EDGE_PROFILE=1.
+    """
     profile_dir = _edge_user_data_dir() if prefer_existing and not headless else None
-    if profile_dir and not _edge_is_running():
+    use_legacy_app_profile = os.environ.get("COUPA_USE_APP_EDGE_PROFILE") == "1"
+    if profile_dir:
+        if _edge_is_running():
+            raise RuntimeError("Close all Microsoft Edge windows before Coupa sign-in so the existing profile can be used.")
         try:
             profile_name = _edge_profile_directory(profile_dir)
-            print(f"[AUTH] Usando o perfil Work do Edge: {profile_dir}/{profile_name}")
+            print(f"[AUTH] Usando o perfil existente do Edge: {profile_dir}/{profile_name}")
             return webdriver.Edge(options=_edge_options(headless, profile_dir, profile_name))
         except WebDriverException as exc:
-            print(f"[AUTH] Perfil Work indisponivel; usando perfil persistente do app: {exc}")
-    elif profile_dir:
-        print("[AUTH] Edge ja esta aberto; evitando conflito com o perfil Work.")
+            if not use_legacy_app_profile:
+                raise RuntimeError(f"Could not open the existing Edge profile: {exc}") from exc
 
-    # A dedicated persistent profile can coexist with the user's normal Edge
-    # and keeps Microsoft/Coupa browser state between app launches. Unlike the
-    # old temporary profile, it is deliberately not deleted after login.
+    if not use_legacy_app_profile:
+        raise RuntimeError("The existing Microsoft Edge profile could not be located. Open Edge once, close it, and try again.")
+
     EDGE_AUTH_PROFILE_DIR.mkdir(parents=True, exist_ok=True)
-    print(f"[AUTH] Usando perfil persistente do app: {EDGE_AUTH_PROFILE_DIR}")
+    print(f"[AUTH] Usando perfil legado persistente do app: {EDGE_AUTH_PROFILE_DIR}")
     return webdriver.Edge(options=_edge_options(headless, EDGE_AUTH_PROFILE_DIR))
 
 
@@ -367,7 +376,7 @@ async def get_coupa_cookies(
     print("  Pressione ENTER para forcar verificacao imediata.")
     print("=" * 60 + "\n")
 
-    driver = _start_edge_with_profile(headless, prefer_existing=not fresh)
+    driver = _start_edge_with_profile(headless, prefer_existing=True)
 
     def _safe_current_url_lower() -> str:
         try:
@@ -399,13 +408,8 @@ async def get_coupa_cookies(
         login_url = COUPA_URL + "/order_headers"
         try:
             driver.get(login_url)
-        except WebDriverException:
-            # A reused profile may be attached to an existing Edge process.
-            # Reopen the navigation in the isolated profile before reporting
-            # an authentication failure to the GUI.
-            _close_auth_driver(driver)
-            driver = _start_edge_with_profile(headless, prefer_existing=False)
-            driver.get(login_url)
+        except WebDriverException as exc:
+            raise RuntimeError(f"Could not open Coupa in the existing Edge profile: {exc}") from exc
 
         print("[AUTH] Aguardando login (detecao passiva, ENTER para forcar verificacao)...")
 
