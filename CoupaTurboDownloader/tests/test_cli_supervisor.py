@@ -87,5 +87,7 @@ def test_history_status_translation_preserves_filter_inputs():
     assert 'id="btn-check-updates"' in html
     assert 'id="btn-start-over"' in html
     assert 'reset_new_run' in javascript
+    assert 'get_authentication_status' in javascript
+    assert 'Action required' in javascript
     assert 'checkForUpdates(true)' in javascript
     assert '$("#modal-pos-tbody").addEventListener("click"' in javascript

@@ -53,27 +53,62 @@ class TurboAPI(AppAPI):
         self.cli_backend = CliProcessSupervisor()
         self._pending_input_path: str | None = None
         self._fresh_auth_requested = False
+        self._auth_lock = threading.Lock()
+        self._auth_thread: threading.Thread | None = None
+        self._auth_status: dict[str, str] = {"state": "idle", "message": ""}
+
+    def _set_auth_status(self, state: str, message: str) -> None:
+        with self._auth_lock:
+            self._auth_status = {"state": state, "message": message}
+
+    def _authenticate_worker(self, fresh: bool) -> None:
+        try:
+            cookies = asyncio.run(get_coupa_cookies(
+                load_from_file=not fresh,
+                fresh=fresh,
+                status_callback=self._set_auth_status,
+            ))
+            self.set_auth_cookies(cookies)
+            self._set_auth_status("success", "Coupa session captured and validated.")
+        except Exception as exc:
+            self._set_auth_status("error", str(exc))
+        finally:
+            with self._auth_lock:
+                self._auth_thread = None
+
+    def get_authentication_status(self) -> dict:
+        with self._auth_lock:
+            return dict(self._auth_status)
 
     def reset_authentication(self) -> dict:
         """Clear app authentication without touching downloads or input files."""
+        with self._auth_lock:
+            if self._auth_thread and self._auth_thread.is_alive():
+                return {"success": False, "error": "Wait for the current Coupa sign-in attempt to finish."}
         result = clear_cached_authentication(remove_app_profile=True)
         if result.get("success"):
             self._cookies = None
             self._fresh_auth_requested = True
+            self._set_auth_status("idle", "Sign-in state reset.")
         return result
 
     def authenticate(self) -> dict:
-        """Open Edge for Coupa login, return extracted cookies dict."""
-        try:
-            cookies = asyncio.run(get_coupa_cookies(
-                load_from_file=not self._fresh_auth_requested,
-                fresh=self._fresh_auth_requested,
-            ))
+        """Start Coupa authentication and expose progress through polling."""
+        with self._auth_lock:
+            if self._auth_thread and self._auth_thread.is_alive():
+                return {"success": True, "started": False, "message": "Authentication is already in progress."}
+            fresh = self._fresh_auth_requested
             self._fresh_auth_requested = False
-            self.set_auth_cookies(cookies)
-            return {"success": True}
-        except Exception as e:
-            return {"success": False, "error": str(e)}
+            self._auth_status = {"state": "starting", "message": "Preparing Coupa sign-in…"}
+            worker = threading.Thread(
+                target=self._authenticate_worker,
+                args=(fresh,),
+                name="coupa-authentication",
+                daemon=True,
+            )
+            self._auth_thread = worker
+            worker.start()
+        return {"success": True, "started": True}
 
     def run_benchmark(self, urls: list[str], base_url: str = "https://unilever.coupahost.com") -> dict:
         """Run network benchmark against sample URLs, return optimal params."""

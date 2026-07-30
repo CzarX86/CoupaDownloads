@@ -71,6 +71,38 @@ def test_confirm_and_retry_company(temp_db):
     assert po2['status'] == "SUCCESS"
 
 
+def test_authentication_exposes_progress_states_without_blocking(temp_db, monkeypatch):
+    import asyncio
+    import time
+    from src.main import TurboAPI
+
+    async def fake_authenticate(*, load_from_file=True, fresh=False, status_callback=None):
+        status_callback("starting", "Opening Edge and loading Coupa…")
+        await asyncio.sleep(0.08)
+        status_callback("user_action_required", "Complete the Coupa sign-in in the Edge window.")
+        await asyncio.sleep(0.08)
+        status_callback("validating", "Sign-in detected; validating the Coupa session…")
+        return {"_coupa_session": "session-value"}
+
+    monkeypatch.setattr("src.main.get_coupa_cookies", fake_authenticate)
+    api = TurboAPI(temp_db, "/tmp/downloads")
+
+    started = api.authenticate()
+    assert started == {"success": True, "started": True}
+
+    states = []
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline:
+        status = api.get_authentication_status()
+        states.append(status["state"])
+        if status["state"] == "success":
+            break
+        time.sleep(0.01)
+
+    assert states[-1] == "success"
+    assert api._cookies == {"_coupa_session": "session-value"}
+
+
 def test_relative_download_path_is_resolved_under_user_home(temp_db, monkeypatch, tmp_path):
     monkeypatch.setattr("src.gui.api.Path.home", lambda: tmp_path)
     api = AppAPI(temp_db, "Downloads/CoupaAttachments")
