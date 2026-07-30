@@ -283,16 +283,37 @@ document.addEventListener("DOMContentLoaded", () => {
         const text = $("#auth-status-text");
         const detailEl = $("#auth-detail");
         const topLabel = $("#topbar-auth-label");
-        indicator.className = `status-dot ${state}`;
+        const visualState = state.startsWith("auth_") ? "authenticating" : state;
+        indicator.className = `status-dot ${visualState}`;
         const pt = appSettings.language === "pt-BR";
         if (state === "authenticated") {
             text.innerText = pt ? "Autenticado" : "Authenticated";
             detailEl.innerText = detail || (pt ? "Sessão Coupa pronta" : "Coupa session ready");
             topLabel.innerText = pt ? "Sessão Coupa pronta" : "Coupa session ready";
+        } else if (state === "auth_starting") {
+            text.innerText = pt ? "Preparando login…" : "Preparing sign-in…";
+            detailEl.innerText = pt ? "Abrindo o Edge e carregando o Coupa" : "Opening Edge and loading Coupa";
+            topLabel.innerText = pt ? "Abrindo o Coupa" : "Opening Coupa";
+        } else if (state === "auth_browser_ready") {
+            text.innerText = pt ? "Verificando o Coupa…" : "Checking Coupa…";
+            detailEl.innerText = pt ? "A página foi carregada; verificando a sessão" : "Page loaded; checking the session";
+            topLabel.innerText = pt ? "Verificando sessão" : "Checking session";
+        } else if (state === "auth_user_action_required") {
+            text.innerText = pt ? "Ação necessária" : "Action required";
+            detailEl.innerText = pt ? "Conclua o login na janela do Edge" : "Complete sign-in in the Edge window";
+            topLabel.innerText = pt ? "Aguardando sua ação" : "Waiting for your action";
+        } else if (state === "auth_checking") {
+            text.innerText = pt ? "Verificando sessão…" : "Checking session…";
+            detailEl.innerText = pt ? "O Coupa está sendo consultado" : "Coupa is being checked";
+            topLabel.innerText = pt ? "Verificando acesso" : "Checking access";
+        } else if (state === "auth_validating") {
+            text.innerText = pt ? "Validando login…" : "Validating sign-in…";
+            detailEl.innerText = pt ? "Login detectado; confirmando acesso ao Coupa" : "Sign-in detected; confirming Coupa access";
+            topLabel.innerText = pt ? "Validando sessão" : "Validating session";
         } else if (state === "authenticating") {
             text.innerText = pt ? "Entrando…" : "Signing in…";
-            detailEl.innerText = pt ? "Conclua o login no Edge" : "Complete login in Edge";
-            topLabel.innerText = pt ? "Aguardando login do Coupa" : "Waiting for Coupa login";
+            detailEl.innerText = pt ? "Preparando a autenticação" : "Preparing authentication";
+            topLabel.innerText = pt ? "Preparando login" : "Preparing sign-in";
         } else if (state === "expired") {
             text.innerText = pt ? "Login necessário" : "Login required";
             detailEl.innerText = pt ? "A sessão em cache expirou" : "Cached session expired";
@@ -307,6 +328,46 @@ document.addEventListener("DOMContentLoaded", () => {
             topLabel.innerText = pt ? "Login necessário" : "Login required";
         }
         $("#btn-authenticate").classList.toggle("is-authenticated", state === "authenticated");
+        const action = $("#btn-authenticate .auth-action");
+        if (action) action.innerText = state === "authenticated" ? (pt ? "Autenticado" : "Ready") : (state.startsWith("auth_") || state === "authenticating" ? (pt ? "Aguarde…" : "Please wait…") : (pt ? "Entrar" : "Sign in"));
+        $("#btn-authenticate").disabled = state.startsWith("auth_") || state === "authenticating";
+    }
+
+    const authStateLabels = {
+        starting: "auth_starting",
+        browser_ready: "auth_browser_ready",
+        user_action_required: "auth_user_action_required",
+        checking: "auth_checking",
+        validating: "auth_validating",
+        success: "authenticated",
+        error: "expired",
+    };
+
+    function normalizeAuthState(state) {
+        return authStateLabels[state] || state || "authenticating";
+    }
+
+    async function authenticateWithProgress() {
+        if (!hasApi("authenticate")) return { success: false, error: "Authentication API unavailable." };
+        updateAuthUI("auth_starting");
+        logToConsole("System", appSettings.language === "pt-BR" ? "Preparando o login do Coupa…" : "Preparing Coupa sign-in…");
+        const started = await api().authenticate();
+        if (!started || !started.success) return started || { success: false, error: "Authentication failed." };
+        if (!hasApi("get_authentication_status")) return started;
+
+        let lastMessage = "";
+        while (true) {
+            const status = await api().get_authentication_status();
+            const uiState = normalizeAuthState(status.state);
+            updateAuthUI(uiState, status.message);
+            if (status.message && status.message !== lastMessage) {
+                logToConsole(uiState === "auth_user_action_required" ? "Warning" : "System", status.message);
+                lastMessage = status.message;
+            }
+            if (status.state === "success") return { success: true };
+            if (status.state === "error") return { success: false, error: status.message || "Authentication failed." };
+            await new Promise((resolve) => setTimeout(resolve, 250));
+        }
     }
 
     function syncHierarchyLevels(list) {
@@ -732,9 +793,7 @@ document.addEventListener("DOMContentLoaded", () => {
             updateAuthUI("unavailable", authCheck.message);
             logToConsole("Warning", "Session verification is unavailable; the CLI will try the cached Coupa session.");
         } else if (!authCheck.authenticated) {
-            updateAuthUI("authenticating");
-            logToConsole("System", "Login required. Complete the Coupa login in Edge.");
-            const authResult = hasApi("authenticate") ? await api().authenticate() : { success: false, error: "Authentication API unavailable." };
+            const authResult = await authenticateWithProgress();
             if (!authResult.success) {
                 updateAuthUI("expired", authResult.error);
                 logToConsole("Error", authResult.error || "Authentication failed.");
@@ -1275,12 +1334,14 @@ document.addEventListener("DOMContentLoaded", () => {
     });
 
     $("#btn-authenticate").addEventListener("click", async () => {
-        if (!hasApi("authenticate")) return;
-        updateAuthUI("authenticating");
-        logToConsole("System", "Opening Coupa login…");
-        const result = await api().authenticate();
-        if (result.success) { updateAuthUI("authenticated"); logToConsole("Success", "Coupa authentication successful."); }
-        else { updateAuthUI("expired", result.error); logToConsole("Error", result.error || "Authentication failed."); }
+        const result = await authenticateWithProgress();
+        if (result.success) {
+            updateAuthUI("authenticated");
+            logToConsole("Success", "Coupa authentication successful.");
+        } else {
+            updateAuthUI("expired", result.error);
+            logToConsole("Error", result.error || "Authentication failed.");
+        }
     });
 
     async function initializeAuth() {

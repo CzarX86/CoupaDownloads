@@ -8,7 +8,7 @@ import threading
 import time
 import shutil
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 import httpx
 from selenium import webdriver
@@ -344,6 +344,7 @@ async def get_coupa_cookies(
     headless: bool = False,
     load_from_file: bool = True,
     fresh: bool = False,
+    status_callback: Optional[Callable[[str, str], None]] = None,
 ) -> Dict[str, str]:
     """
     Obtain Coupa session cookies via Selenium Edge.
@@ -352,6 +353,11 @@ async def get_coupa_cookies(
     login including SSO/OAuth flow. System validates cookies by navigating to
     a PO page, then extracts and caches them.
     """
+    def report_status(state: str, message: str) -> None:
+        if status_callback:
+            status_callback(state, message)
+
+    report_status("starting", "Opening Edge and loading Coupa…")
     if fresh:
         cleared = clear_cached_authentication(remove_app_profile=True)
         if not cleared.get("success"):
@@ -361,6 +367,7 @@ async def get_coupa_cookies(
     if load_from_file:
         cached = load_cached_cookies()
         if cached and await validate_cookies(cached):
+            report_status("success", "Cached Coupa session is valid.")
             return cached
 
     print("\n" + "=" * 60)
@@ -371,6 +378,7 @@ async def get_coupa_cookies(
     print("=" * 60 + "\n")
 
     driver = _start_edge_with_profile(headless, prefer_existing=True)
+    report_status("browser_ready", "Edge is open; checking the Coupa page…")
 
     def _safe_current_url_lower() -> str:
         try:
@@ -405,6 +413,11 @@ async def get_coupa_cookies(
         except WebDriverException as exc:
             raise RuntimeError(f"Could not open Coupa in the existing Edge profile: {exc}") from exc
 
+        current_after_navigation = _safe_current_url_lower()
+        if _is_auth_redirect(current_after_navigation):
+            report_status("user_action_required", "Complete the Coupa sign-in in the Edge window.")
+        else:
+            report_status("checking", "Coupa is open; checking the current session…")
         print("[AUTH] Aguardando login (detecao passiva, ENTER para forcar verificacao)...")
 
         enter_event = threading.Event()
@@ -442,6 +455,7 @@ async def get_coupa_cookies(
             on_coupa = "unilever.coupahost.com" in current
             on_auth = _is_auth_redirect(current)
             if on_coupa and not on_auth and _has_coupa_session_cookie():
+                report_status("validating", "Sign-in detected; validating the Coupa session…")
                 break
 
         print("[AUTH] Login detectado! Navegando para o Coupa para capturar cookies de sessao...")
@@ -463,6 +477,7 @@ async def get_coupa_cookies(
         print(f"[AUTH] {len(cookies)} cookies capturados do dominio: {shown_url[:80]}")
         if not cookies.get("_coupa_session"):
             raise RuntimeError("O login foi concluido, mas o cookie de sessao do Coupa nao foi encontrado.")
+        report_status("validating", "Checking access to Coupa and capturing the session…")
         valid, reason = await validate_cookies_detailed(cookies)
         if not valid and reason == "expired":
             raise RuntimeError("O Coupa rejeitou a sessao capturada. Conclua o login e tente novamente.")
@@ -478,6 +493,7 @@ async def get_coupa_cookies(
             pass
         save_cached_cookies_db(cookies)
 
+        report_status("success", "Coupa session captured and validated.")
         print(f"[AUTH] Cookies extraidos e cacheados sem expiracao artificial. Total: {len(cookies)} cookies.")
         print(f"[AUTH] Chaves: {list(cookies.keys())}\n")
         return cookies
