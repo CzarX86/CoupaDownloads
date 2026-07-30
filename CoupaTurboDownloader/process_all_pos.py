@@ -70,6 +70,22 @@ def parse_args() -> argparse.Namespace:
         help="Retry ERROR/SKIPPED rows in the existing session",
     )
     parser.add_argument(
+        "--provisional-retry",
+        action="store_true",
+        help="Run an edited PO in staging until the GUI commits or discards it",
+    )
+    parser.add_argument(
+        "--retry-attempt-id",
+        type=int,
+        default=None,
+        help="Provisional retry attempt id",
+    )
+    parser.add_argument(
+        "--retry-staging-dir",
+        default=None,
+        help="Temporary directory for provisional retry files",
+    )
+    parser.add_argument(
         "--retry-incomplete-session-id",
         type=int,
         default=None,
@@ -261,7 +277,7 @@ def export_original_like_excel_report(
     cursor = db.conn.cursor()
     rows = cursor.execute(
         """
-        SELECT po_number, company_code, status, attachment_count, error_message, download_folder, updated_at
+        SELECT po_number, company_code, status, attachment_count, error_message, remarks, download_folder, updated_at
         FROM po_downloads
         WHERE session_id = ?
         ORDER BY id ASC
@@ -278,6 +294,7 @@ def export_original_like_excel_report(
                 "status",
                 "attachment_count",
                 "error_message",
+                "remarks",
                 "download_folder",
                 "updated_at",
             ]
@@ -292,6 +309,7 @@ def export_original_like_excel_report(
     )
     db_df["STATUS"] = db_df["status"]
     db_df["ERROR_MESSAGE"] = db_df["error_message"].fillna("")
+    db_df["REMARKS"] = db_df["remarks"].fillna("")
     db_df["DOWNLOAD_FOLDER"] = db_df["download_folder"].fillna("")
     db_df["LAST_PROCESSED"] = db_df["updated_at"].fillna("")
     db_df["COUPA_URL"] = db_df["po_number"].apply(
@@ -309,6 +327,7 @@ def export_original_like_excel_report(
         "AttachmentName": "AttachmentName",
         "LAST_PROCESSED": "LAST_PROCESSED",
         "ERROR_MESSAGE": "ERROR_MESSAGE",
+        "REMARKS": "REMARKS",
         "DOWNLOAD_FOLDER": "DOWNLOAD_FOLDER",
         "COUPA_URL": "COUPA_URL",
     }
@@ -333,6 +352,7 @@ def export_original_like_excel_report(
             "AttachmentName",
             "LAST_PROCESSED",
             "ERROR_MESSAGE",
+            "REMARKS",
             "DOWNLOAD_FOLDER",
             "COUPA_URL",
         ]:
@@ -563,7 +583,7 @@ async def main():
     args.msg_processing = args.msg_processing or os.environ.get("COUPA_MSG_PROCESSING", "convert_extract")
     args.deduplicate_files = args.deduplicate_files if args.deduplicate_files is not None else os.environ.get("COUPA_DEDUPLICATE_FILES", "1") != "0"
 
-    if not (args.retry_last_errors or args.retry_incomplete_session_id is not None or args.retry_po or args.retry_in_place_po or args.retry_in_place_errors) and not os.path.exists(INPUT_CSV):
+    if not (args.retry_last_errors or args.retry_incomplete_session_id is not None or args.retry_po or args.retry_in_place_po or args.retry_in_place_errors or args.provisional_retry) and not os.path.exists(INPUT_CSV):
         print(f"[ERROR] Input file not found: {INPUT_CSV}")
         sys.exit(1)
 
@@ -588,7 +608,33 @@ async def main():
     mode = "full"
     report_source_csv = INPUT_CSV
     source_session_id: int | None = None
-    if args.retry_in_place_po or args.retry_in_place_errors:
+    if args.provisional_retry:
+        if not args.retry_attempt_id or not args.retry_session_id or not args.retry_staging_dir:
+            print("[ERROR] Provisional retry requires attempt, session, and staging ids.")
+            db.close()
+            return
+        attempt = db.conn.execute(
+            "SELECT * FROM retry_attempts WHERE id = ? AND session_id = ? AND status = 'RUNNING'",
+            (args.retry_attempt_id, args.retry_session_id),
+        ).fetchone()
+        if not attempt:
+            print("[ERROR] Provisional retry attempt was not found or is no longer active.")
+            db.close()
+            return
+        source_session_id = int(args.retry_session_id)
+        session_id = source_session_id
+        mode = "provisional_retry"
+        run_type = resolve_execution_type(
+            args,
+            input_name=f"provisional_retry_{attempt['edited_po_number']}",
+            source_session_id=source_session_id,
+            db=db,
+        )
+        print(
+            f"[INFO] Provisional retry: session={session_id}, "
+            f"{attempt['original_po_number']} -> {attempt['edited_po_number']}, type={run_type}"
+        )
+    elif args.retry_in_place_po or args.retry_in_place_errors:
         source_session_id = args.retry_session_id
         if not source_session_id:
             print("[ERROR] --retry-session-id is required for in-place retry.")
@@ -709,10 +755,11 @@ async def main():
     db.conn.commit()
     archive_suffix = Path(INPUT_CSV).suffix or ".csv"
     archive_path = os.path.join(run_download_dir, f"input_source_{session_id}{archive_suffix}")
-    if os.path.exists(INPUT_CSV):
-        db.archive_session_input(session_id, INPUT_CSV, archive_path)
-    elif source_session_id:
-        db.clone_session_input(source_session_id, session_id, archive_path)
+    if not args.provisional_retry:
+        if os.path.exists(INPUT_CSV):
+            db.archive_session_input(session_id, INPUT_CSV, archive_path)
+        elif source_session_id:
+            db.clone_session_input(source_session_id, session_id, archive_path)
 
     # Always build the workbook from the archived snapshot. For an in-place
     # retry this is the same session's source and the report path below is the
@@ -810,6 +857,19 @@ async def main():
         1 for r in results
         if r.get("success") and len(r.get("attachments", [])) > 0
     )
+
+    if args.provisional_retry:
+        attempt_status = "SUCCESS" if failed == 0 and success > 0 else "FAILED"
+        first_error = next((str(r.get("error", "")) for r in results if not r.get("success")), None)
+        db.conn.execute(
+            "UPDATE retry_attempts SET status = ?, error_message = ?, completed_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (attempt_status, first_error, args.retry_attempt_id),
+        )
+        db.conn.commit()
+        print(f"[INFO] Provisional retry finished with status: {attempt_status}")
+        await crawler.close()
+        db.close()
+        return
 
     print(f"\n{'=' * 60}")
     print("  RESULT")

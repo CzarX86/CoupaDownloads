@@ -222,6 +222,24 @@ class TurboAPI(AppAPI):
     def retry_po(self, session_id: int, po_number: str) -> dict:
         return self.cli_backend.retry_po(int(session_id), po_number)
 
+    def retry_po_with_edit(self, session_id: int, original_po: str, edited_po: str) -> dict:
+        return self.cli_backend.retry_po_with_edit(int(session_id), original_po, edited_po)
+
+    def get_retry_attempt_status(self, attempt_id: int) -> dict:
+        return self.cli_backend.get_retry_attempt_status(int(attempt_id))
+
+    def save_retry_attempt(self, attempt_id: int) -> dict:
+        committed = self.cli_backend.commit_retry_attempt(int(attempt_id))
+        if not committed.get("success"):
+            return committed
+        persisted = self.cli_backend.persist_retry_files(int(attempt_id))
+        if not persisted.get("success"):
+            return persisted
+        return {**committed, **persisted}
+
+    def discard_retry_attempt(self, attempt_id: int) -> dict:
+        return self.cli_backend.discard_retry_attempt(int(attempt_id))
+
     def open_input_file(self, session_id: int) -> dict:
         return self.cli_backend.open_input_file(int(session_id))
 
@@ -287,6 +305,7 @@ class TurboAPI(AppAPI):
             return local
         try:
             self.db.conn.execute("DELETE FROM retry_events")
+            self.db.conn.execute("DELETE FROM retry_attempts")
             self.db.conn.execute("DELETE FROM po_downloads")
             self.db.conn.execute("DELETE FROM sessions")
             self.db.conn.commit()
