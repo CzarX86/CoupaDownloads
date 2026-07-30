@@ -147,7 +147,7 @@ except Exception:
         "setlocal\r\n"
         "set \"COUPA_PYTHON_PORTABLE=1\"\r\n"
         "cd /d \"%~dp0\"\r\n"
-        "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \"try { $root = [IO.Path]::GetFullPath($args[0]); Get-ChildItem -LiteralPath $root -Recurse -File | Unblock-File; exit 0 } catch { $_ | Out-File -FilePath ([IO.Path]::Combine($root, 'startup.log')) -Append; exit 1 }\" \"%~dp0\"\r\n"
+        "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \"$ErrorActionPreference = 'Stop'; try { Get-ChildItem -LiteralPath '%~dp0' -Recurse -File | Unblock-File; exit 0 } catch { $_ | Out-File -FilePath '%~dp0startup.log' -Append; exit 1 }\"\r\n"
         "if not exist \"%~dp0runtime\\pythonw.exe\" (echo Portable Python runtime was not found. & pause & exit /b 1)\r\n"
         "start \"Coupa Turbo Downloader\" \"%~dp0runtime\\pythonw.exe\" \"%~dp0app\\launcher.py\"\r\n"
         "exit /b 0\r\n",
