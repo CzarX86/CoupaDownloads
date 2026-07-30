@@ -657,6 +657,38 @@ class AppAPI:
         edge_status = "PASS" if edge_path and not edge_version.startswith("unavailable") else "WARN"
         check("Microsoft Edge", edge_status, edge_version)
 
+        # ---- Edge profile ----
+        try:
+            from src.engine.authenticator import _edge_user_data_dir, _edge_profile_directory
+            user_data = _edge_user_data_dir()
+            if user_data:
+                profile = _edge_profile_directory(user_data)
+                check("Edge profile", "PASS", f"{self._safe_user_path(str(user_data))}/{profile}")
+            else:
+                check("Edge profile", "WARN", "Edge user-data directory was not found")
+        except Exception as exc:
+            check("Edge profile", "WARN", f"Could not detect the Edge profile: {exc}")
+
+        # ---- Coupa session ----
+        try:
+            cookies = load_cached_cookies()
+            if not cookies:
+                check("Coupa session", "WARN", "No cached Coupa session; sign-in is required")
+            else:
+                valid, reason = asyncio.run(validate_cookies_detailed(cookies))
+                if valid:
+                    check("Coupa session", "PASS", "Cached session is valid")
+                elif reason == "unavailable":
+                    check("Coupa session", "WARN", "Session validation unavailable — Coupa or network may be unreachable")
+                else:
+                    check("Coupa session", "WARN", "Cached session expired; re-authentication is required")
+        except Exception as exc:
+            check("Coupa session", "WARN", f"Could not validate session: {exc}")
+
+        # ---- Python portable edition ----
+        if self._is_python_portable():
+            check("Distribution", "PASS", "Python portable edition (no installation required)")
+
         driver_path = self._edge_driver_path()
         driver_version = self._command_version([driver_path, "--version"]) if driver_path else "EdgeDriver was not resolved by Selenium Manager"
         edge_numbers = self._version_components(edge_version)
