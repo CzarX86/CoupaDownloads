@@ -933,11 +933,11 @@ class CliProcessSupervisor:
                 if str(source["download_folder"] or "").strip() and source_folder.exists() and source_folder != target_folder:
                     shutil.rmtree(source_folder)
                 note = f"Corrected from {attempt['original_po_number']} to {attempt['edited_po_number']}; retry succeeded."
+                conn.execute("DELETE FROM po_downloads WHERE id = ?", (target["id"],))
                 conn.execute(
                     "UPDATE po_downloads SET po_number = ?, status = 'SUCCESS', download_folder = ?, attachment_count = ?, error_message = NULL, remarks = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
                     (attempt["edited_po_number"], str(target_folder), target["attachment_count"], note, source["id"]),
                 )
-                conn.execute("DELETE FROM po_downloads WHERE id = ?", (target["id"],))
                 conn.execute(
                     "UPDATE retry_attempts SET status = 'COMMITTED', completed_at = CURRENT_TIMESTAMP, error_message = ? WHERE id = ?",
                     (note, int(attempt_id)),
