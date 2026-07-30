@@ -95,6 +95,10 @@ def test_retry_file_update_replaces_po_and_adds_remark(tmp_path):
     row = list(load_workbook(path, read_only=True).active.iter_rows(values_only=True))[1]
     assert row == ("1234567", "ACME", "Corrected from 12345678 to 1234567; retry succeeded.")
 
+    # Existing archived values may have a PO prefix or numeric Excel formatting.
+    assert CliProcessSupervisor._po_values_equal("168012998", "PO168012998")
+    assert CliProcessSupervisor._po_values_equal("168012998.0", "PO168012998")
+
 
 def test_history_status_translation_preserves_filter_inputs():
     web_root = Path(__file__).parents[1] / "src" / "gui" / "web"
