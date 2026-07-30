@@ -11,7 +11,7 @@ import webview
 from src.db.session_db import SessionDB
 from src.gui.api import AppAPI
 from src.gui.cli_supervisor import CliProcessSupervisor
-from src.engine.authenticator import get_coupa_cookies, load_cached_cookies
+from src.engine.authenticator import clear_cached_authentication, get_coupa_cookies, load_cached_cookies
 from src.engine.benchmarker import benchmark
 from src.engine.updater import (
     apply_update_and_restart,
@@ -52,11 +52,24 @@ class TurboAPI(AppAPI):
         super().__init__(db, default_download_dir)
         self.cli_backend = CliProcessSupervisor()
         self._pending_input_path: str | None = None
+        self._fresh_auth_requested = False
+
+    def reset_authentication(self) -> dict:
+        """Clear app authentication without touching downloads or input files."""
+        result = clear_cached_authentication(remove_app_profile=True)
+        if result.get("success"):
+            self._cookies = None
+            self._fresh_auth_requested = True
+        return result
 
     def authenticate(self) -> dict:
         """Open Edge for Coupa login, return extracted cookies dict."""
         try:
-            cookies = asyncio.run(get_coupa_cookies(load_from_file=True))
+            cookies = asyncio.run(get_coupa_cookies(
+                load_from_file=not self._fresh_auth_requested,
+                fresh=self._fresh_auth_requested,
+            ))
+            self._fresh_auth_requested = False
             self.set_auth_cookies(cookies)
             return {"success": True}
         except Exception as e:
@@ -222,6 +235,24 @@ class TurboAPI(AppAPI):
 
     def clear_all_sessions(self) -> dict:
         return self.cli_backend.clear_all_sessions()
+
+    def reset_application_state(self) -> dict:
+        """Reset sign-in and local run records while preserving user files."""
+        auth = self.reset_authentication()
+        if not auth.get("success"):
+            return auth
+        local = self.cli_backend.reset_local_state_preserving_files()
+        if not local.get("success"):
+            return local
+        try:
+            self.db.conn.execute("DELETE FROM retry_events")
+            self.db.conn.execute("DELETE FROM po_downloads")
+            self.db.conn.execute("DELETE FROM sessions")
+            self.db.conn.commit()
+        except Exception as exc:
+            return {"success": False, "error": f"Could not reset GUI run state: {exc}"}
+        self._pending_input_path = None
+        return {"success": True, "files_preserved": True}
 
     def export_session_report(self, session_id: int, dest_filepath: str) -> dict:
         return self.cli_backend.export_report(int(session_id), dest_filepath)

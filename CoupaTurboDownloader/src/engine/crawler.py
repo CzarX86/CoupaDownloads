@@ -13,6 +13,7 @@ import httpx
 from src.db.session_db import SessionDB
 from src.engine.parser import CoupaParser
 from src.engine.rate_limiter import RateLimiter
+from src.engine.tls import system_ssl_context
 
 
 class CoupaCrawler:
@@ -63,6 +64,7 @@ class CoupaCrawler:
             limits=limits,
             follow_redirects=True,
             timeout=httpx.Timeout(timeout),
+            verify=system_ssl_context(),
         )
 
     def _po_url(self, po_number: str) -> str:

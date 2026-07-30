@@ -14,6 +14,7 @@ def test_portable_dependencies_exclude_test_and_packaging_tools():
     dependencies = portable._project_dependencies()
 
     assert any(value.startswith("pywebview") for value in dependencies)
+    assert any(value.startswith("truststore") for value in dependencies)
     assert not any(value.startswith("pytest") for value in dependencies)
     assert not any(value.startswith("pyinstaller") for value in dependencies)
 
