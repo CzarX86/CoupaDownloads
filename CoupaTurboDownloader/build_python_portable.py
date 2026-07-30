@@ -21,7 +21,9 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 DIST_DIR = PROJECT_ROOT / "dist"
-BUNDLE_NAME = "CoupaTurboDownloader-python-portable"
+PRODUCT_NAME = "Contract Downloader"
+PRODUCT_SLUG = "ContractDownloader"
+BUNDLE_NAME = "ContractDownloader-python-portable"
 BUNDLE_DIR = DIST_DIR / BUNDLE_NAME
 RUNTIME_DIR = BUNDLE_DIR / "runtime"
 APP_DIR = BUNDLE_DIR / "app"
@@ -132,7 +134,7 @@ def write_log(message: str) -> None:
         pass
 
 
-write_log("Starting Coupa Turbo Downloader")
+write_log("Starting Contract Downloader")
 try:
     runpy.run_path(str(MAIN), run_name="__main__")
 except Exception:
@@ -141,8 +143,8 @@ except Exception:
     try:
         ctypes.windll.user32.MessageBoxW(
             0,
-            "Coupa Turbo Downloader could not start.\\n\\nSee startup.log in the application folder.",
-            "Coupa Turbo Downloader",
+            "Contract Downloader could not start.\\n\\nSee startup.log in the application folder.",
+            "Contract Downloader",
             0x10,
         )
     except Exception:
@@ -151,18 +153,18 @@ except Exception:
 ''',
         encoding="utf-8",
     )
-    (BUNDLE_DIR / "Start-CoupaTurbo.cmd").write_text(
+    (BUNDLE_DIR / "Start-ContractDownloader.cmd").write_text(
         "@echo off\r\n"
         "setlocal\r\n"
         "set \"COUPA_PYTHON_PORTABLE=1\"\r\n"
         "cd /d \"%~dp0\"\r\n"
         "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \"$ErrorActionPreference = 'Stop'; try { Get-ChildItem -LiteralPath '%~dp0' -Recurse -File | Unblock-File; exit 0 } catch { $_ | Out-File -FilePath '%~dp0startup.log' -Append; exit 1 }\"\r\n"
         "if not exist \"%~dp0runtime\\pythonw.exe\" (echo Portable Python runtime was not found. & pause & exit /b 1)\r\n"
-        "start \"Coupa Turbo Downloader\" \"%~dp0runtime\\pythonw.exe\" \"%~dp0app\\launcher.py\"\r\n"
+        "start \"Contract Downloader\" \"%~dp0runtime\\pythonw.exe\" \"%~dp0app\\launcher.py\"\r\n"
         "exit /b 0\r\n",
         encoding="ascii",
     )
-    (BUNDLE_DIR / "Run-Diagnostics.cmd").write_text(
+    (BUNDLE_DIR / "ContractDownloader-Diagnostics.cmd").write_text(
         "@echo off\r\n"
         "setlocal\r\n"
         "set \"COUPA_PYTHON_PORTABLE=1\"\r\n"
@@ -171,11 +173,11 @@ except Exception:
         "pause\r\n",
         encoding="ascii",
     )
-    (BUNDLE_DIR / "portable-python.json").write_text(
+    (BUNDLE_DIR / "contract-downloader.json").write_text(
         json.dumps(
             {
                 "format": 1,
-                "application": "CoupaTurboDownloader",
+                "application": PRODUCT_NAME,
                 "python": PYTHON_VERSION,
                 "architecture": "x86_64",
                 "automatic_update_check_default": False,
@@ -185,20 +187,17 @@ except Exception:
         ),
         encoding="utf-8",
     )
-    (BUNDLE_DIR / "PORTABLE_README.txt").write_text(
-        "Coupa Turbo Downloader - Python portable edition\n"
-        "=================================================\n\n"
-        "1. Extract the complete folder.\n"
-        "2. Run Start-CoupaTurbo.cmd.\n"
-        "3. Keep runtime/ and app/ beside the launcher.\n\n"
-        "Python installation and administrator privileges are not required.\n"
-        "The runtime/python.exe and runtime/pythonw.exe files come from the\n"
-        "official Python Software Foundation embedded distribution.\n\n"
-        "Automatic update checks are disabled by default in this edition.\n"
-        "Use Settings > Updates > Check now for a manual verified update.\n"
-        "Application data and downloads remain outside this folder.\n"
-        "If the GUI does not open, check startup.log in this folder.\n",
+    (BUNDLE_DIR / "LEIA-ME.txt").write_text(
+        "Contract Downloader - Windows portable edition\n"
+        "===============================================\n\n"
+        "Leia as instruções do arquivo INSTRUCOES_CONTRACT_DOWNLOADER.md antes de iniciar.\n\n"
+        "Não é necessário instalar Python ou executar como administrador.\n"
+        "Se o aplicativo não abrir, verifique startup.log nesta pasta.\n",
         encoding="utf-8",
+    )
+    shutil.copy2(
+        PROJECT_ROOT / "docs" / "INSTRUCOES_CONTRACT_DOWNLOADER.md",
+        BUNDLE_DIR / "INSTRUCOES_CONTRACT_DOWNLOADER.md",
     )
 
 

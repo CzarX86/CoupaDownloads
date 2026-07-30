@@ -175,7 +175,7 @@ def test_font_scale_setting_is_validated_and_persisted(temp_db, monkeypatch, tmp
 
 def test_reset_new_run_deletes_only_app_generated_template(temp_db, monkeypatch, tmp_path):
     monkeypatch.setattr("src.gui.api.Path.home", lambda: tmp_path)
-    template_dir = tmp_path / "Documents" / "CoupaTurboDownloader" / "templates"
+    template_dir = tmp_path / "Documents" / "Contract Downloader" / "templates"
     template_dir.mkdir(parents=True)
     generated = template_dir / "input_template_20260729-213140.xlsx"
     generated.write_bytes(b"template")

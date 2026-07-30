@@ -31,13 +31,16 @@ def test_portable_launcher_uses_official_pythonw_and_manual_updates(monkeypatch,
 
     portable._write_launchers()
 
-    launcher = (bundle / "Start-CoupaTurbo.cmd").read_text(encoding="ascii")
+    launcher = (bundle / "Start-ContractDownloader.cmd").read_text(encoding="ascii")
     python_launcher = (app / "launcher.py").read_text(encoding="utf-8")
-    metadata = json.loads((bundle / "portable-python.json").read_text(encoding="utf-8"))
+    metadata = json.loads((bundle / "contract-downloader.json").read_text(encoding="utf-8"))
     assert "COUPA_PYTHON_PORTABLE=1" in launcher
     assert "Unblock-File" in launcher
     assert "runtime\\pythonw.exe" in launcher
+    assert "Contract Downloader" in launcher
     assert "startup.log" in launcher
+    assert (bundle / "LEIA-ME.txt").is_file()
+    assert (bundle / "INSTRUCOES_CONTRACT_DOWNLOADER.md").is_file()
     assert "runpy.run_path" in python_launcher
     assert metadata["automatic_update_check_default"] is False
     assert metadata["manual_updates"] is True
