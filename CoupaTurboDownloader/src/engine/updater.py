@@ -17,6 +17,7 @@ import httpx
 GITHUB_REPOSITORY = os.environ.get("COUPA_UPDATE_REPO", "CzarX86/CoupaPilot")
 GITHUB_API = f"https://api.github.com/repos/{GITHUB_REPOSITORY}/releases/latest"
 VERSION_FILE = os.path.join(os.path.dirname(__file__), "..", "..", ".version")
+PORTABLE_MARKERS = ("contract-downloader.json", "portable-python.json")
 
 
 def _version_path() -> Path:
@@ -42,7 +43,7 @@ def _python_portable_root() -> Optional[Path]:
     if os.environ.get("COUPA_PYTHON_PORTABLE") != "1":
         return None
     candidate = Path(sys.executable).resolve().parent.parent
-    return candidate if (candidate / "portable-python.json").is_file() else None
+    return candidate if any((candidate / marker).is_file() for marker in PORTABLE_MARKERS) else None
 
 
 def _find_platform_asset(assets: list) -> Optional[dict]:
@@ -96,7 +97,7 @@ async def check_for_update() -> Optional[Dict[str, Any]]:
             return {
                 "version": latest,
                 "current": current,
-                "name": release.get("name") or f"Coupa Turbo Downloader {latest}",
+                "name": release.get("name") or f"Contract Downloader {latest}",
                 "download_url": asset["browser_download_url"],
                 "asset_name": asset.get("name", "update.zip"),
                 "checksum_url": checksum_asset.get("browser_download_url") if checksum_asset else None,
@@ -178,7 +179,7 @@ def _find_update_payload(extracted: Path) -> Path:
         if candidates:
             return candidates[0]
     elif sys.platform == "win32":
-        portable_roots = [marker.parent for marker in extracted.rglob("portable-python.json")]
+        portable_roots = [marker.parent for marker_name in PORTABLE_MARKERS for marker in extracted.rglob(marker_name)]
         if _python_portable_root() is not None and portable_roots:
             return portable_roots[0]
         candidates = [path for path in extracted.rglob("*.exe") if path.name.lower() != "uninstall.exe"]
@@ -242,11 +243,13 @@ def apply_update_and_restart(new_payload: str) -> None:
     if sys.platform == "win32":
         portable_root = _python_portable_root()
         if portable_root is not None:
-            if not (payload / "portable-python.json").is_file():
+            if not any((payload / marker).is_file() for marker in PORTABLE_MARKERS):
                 raise OSError("The update is not a Python portable package.")
             target = portable_root
             backup = target.with_name(f".{target.name}.backup")
-            launcher = target / "Start-CoupaTurbo.cmd"
+            launcher = target / "Start-ContractDownloader.cmd"
+            if not launcher.is_file():
+                launcher = target / "Start-CoupaTurbo.cmd"
             staging = payload.parent
             script = "\n".join([
                 "@echo off",

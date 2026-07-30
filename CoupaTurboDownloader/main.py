@@ -1,5 +1,5 @@
 def main():
-    print("Hello from coupaturbodownloader!")
+    print("Hello from Contract Downloader!")
 
 
 if __name__ == "__main__":

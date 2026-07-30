@@ -1,5 +1,5 @@
 """
-Build script for CoupaTurboDownloader portable executables.
+Build script for Contract Downloader portable executables.
 
 Usage:
     uv run --group build python build.py          # build for current OS
@@ -20,7 +20,7 @@ from pathlib import Path
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent
-APP_NAME = "CoupaTurboDownloader"
+APP_NAME = "ContractDownloader"
 ENTRY_POINT = str(PROJECT_ROOT / "src" / "main.py")
 WEB_ASSETS_SRC = str(PROJECT_ROOT / "src" / "gui" / "web")
 # The frozen app resolves assets from _MEIPASS/gui/web. Keep the package
@@ -168,7 +168,7 @@ def build():
 
 if __name__ == "__main__":
     import argparse
-    parser = argparse.ArgumentParser(description="Build CoupaTurboDownloader executable")
+    parser = argparse.ArgumentParser(description="Build Contract Downloader executable")
     parser.add_argument(
         "--macos", action="store_true",
         help="Build for macOS (default on macOS)"

@@ -371,7 +371,7 @@ def main():
     )
 
     window = webview.create_window(
-        title="Coupa Turbo Downloader",
+        title="Contract Downloader",
         url=html_file,
         js_api=api,
         width=geometry["width"],

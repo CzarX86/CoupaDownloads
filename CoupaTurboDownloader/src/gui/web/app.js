@@ -136,7 +136,7 @@ document.addEventListener("DOMContentLoaded", () => {
         setMany(".engine-status span:last-child", [pt ? "Motor pronto" : "Engine ready"]);
         setMany("#btn-diagnostics", [pt ? "Executar diagnóstico do computador" : "Run host diagnostics"]);
         setMany(".auth-action", [pt ? "Entrar" : "Sign in"]);
-        $("#screen-learn h2").innerText = appSettings.language === "pt-BR" ? "Como o Coupa Turbo funciona" : "How Coupa Turbo works";
+        $("#screen-learn h2").innerText = appSettings.language === "pt-BR" ? "Como o Contract Downloader funciona" : "How Contract Downloader works";
         $("#screen-settings h2").innerText = appSettings.language === "pt-BR" ? "Preferências" : "Preferences";
         const languageOption = $("#settings-language option[value='pt-BR']");
         if (languageOption) languageOption.innerText = "Português (Brasil)";

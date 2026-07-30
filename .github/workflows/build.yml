@@ -58,20 +58,20 @@ jobs:
       - name: Verify Windows executable
         shell: pwsh
         run: |
-          if (-not (Test-Path "dist/CoupaTurboDownloader.exe")) {
+          if (-not (Test-Path "dist/ContractDownloader.exe")) {
             throw "Windows executable was not generated"
           }
-          Get-Item "dist/CoupaTurboDownloader.exe" | Format-List Name,Length,LastWriteTime
+          Get-Item "dist/ContractDownloader.exe" | Format-List Name,Length,LastWriteTime
 
       - name: Package Windows release
         shell: pwsh
-        run: Compress-Archive -Path dist/CoupaTurboDownloader.exe -DestinationPath dist/CoupaTurboDownloader-windows-x64.zip -Force
+        run: Compress-Archive -Path dist/ContractDownloader.exe -DestinationPath dist/ContractDownloader-windows-x64.zip -Force
 
       - name: Upload Windows package
         uses: actions/upload-artifact@v4
         with:
-          name: windows-package
-          path: CoupaTurboDownloader/dist/CoupaTurboDownloader-windows-x64.zip
+          name: contract-downloader-windows
+          path: CoupaTurboDownloader/dist/ContractDownloader-windows-x64.zip
           if-no-files-found: error
           retention-days: 14
 
@@ -81,8 +81,8 @@ jobs:
       - name: Verify official Python signatures
         shell: pwsh
         run: |
-          $python = Get-AuthenticodeSignature "dist/CoupaTurboDownloader-python-portable/runtime/python.exe"
-          $pythonw = Get-AuthenticodeSignature "dist/CoupaTurboDownloader-python-portable/runtime/pythonw.exe"
+          $python = Get-AuthenticodeSignature "dist/ContractDownloader-python-portable/runtime/python.exe"
+          $pythonw = Get-AuthenticodeSignature "dist/ContractDownloader-python-portable/runtime/pythonw.exe"
           if ($python.Status -ne "Valid" -or $pythonw.Status -ne "Valid") {
             throw "Official embedded Python executables do not have valid Authenticode signatures"
           }
@@ -91,15 +91,15 @@ jobs:
       - name: Package Python portable release
         shell: pwsh
         run: |
-          Push-Location dist/CoupaTurboDownloader-python-portable
-          Compress-Archive -Path * -DestinationPath ../CoupaTurboDownloader-windows-python-portable-x64.zip -Force
+          Push-Location dist/ContractDownloader-python-portable
+          Compress-Archive -Path * -DestinationPath ../ContractDownloader-windows-python-portable-x64.zip -Force
           Pop-Location
 
       - name: Upload Python portable package
         uses: actions/upload-artifact@v4
         with:
-          name: windows-python-portable
-          path: CoupaTurboDownloader/dist/CoupaTurboDownloader-windows-python-portable-x64.zip
+          name: contract-downloader-windows-portable
+          path: CoupaTurboDownloader/dist/ContractDownloader-windows-python-portable-x64.zip
           if-no-files-found: error
           retention-days: 14
 
@@ -132,16 +132,16 @@ jobs:
         run: uv run --package coupaturbodownloader --group build python build.py --macos
 
       - name: Verify macOS application
-        run: test -d dist/CoupaTurboDownloader.app
+        run: test -d dist/ContractDownloader.app
 
       - name: Package macOS release
-        run: ditto -c -k --sequesterRsrc --keepParent dist/CoupaTurboDownloader.app dist/CoupaTurboDownloader-macos.zip
+        run: ditto -c -k --sequesterRsrc --keepParent dist/ContractDownloader.app dist/ContractDownloader-macos.zip
 
       - name: Upload macOS package
         uses: actions/upload-artifact@v4
         with:
-          name: macos-package
-          path: CoupaTurboDownloader/dist/CoupaTurboDownloader-macos.zip
+          name: contract-downloader-macos
+          path: CoupaTurboDownloader/dist/ContractDownloader-macos.zip
           if-no-files-found: error
           retention-days: 14
 
@@ -159,19 +159,19 @@ jobs:
       - name: Download Windows package
         uses: actions/download-artifact@v4
         with:
-          name: windows-package
+          name: contract-downloader-windows
           path: release-assets
 
       - name: Download Python portable package
         uses: actions/download-artifact@v4
         with:
-          name: windows-python-portable
+          name: contract-downloader-windows-portable
           path: release-assets
 
       - name: Download macOS package
         uses: actions/download-artifact@v4
         with:
-          name: macos-package
+          name: contract-downloader-macos
           path: release-assets
 
       - name: Generate checksums

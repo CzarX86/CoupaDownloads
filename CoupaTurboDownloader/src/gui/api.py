@@ -784,7 +784,7 @@ class AppAPI:
         failed = sum(item["status"] == "FAIL" for item in checks)
         warnings = sum(item["status"] == "WARN" for item in checks)
         lines = [
-            "COUPA TURBO DOWNLOADER - HOST DIAGNOSTIC REPORT",
+            "CONTRACT DOWNLOADER - HOST DIAGNOSTIC REPORT",
             f"Generated: {datetime.now(timezone.utc).isoformat()}",
             "",
             f"Summary: {passed} pass | {warnings} warning(s) | {failed} failure(s)",
@@ -859,7 +859,7 @@ class AppAPI:
         if not value:
             return {"success": True, "deleted": False, "preserved": False}
         path = Path(value).expanduser().resolve()
-        template_dir = (Path.home() / "Documents" / "CoupaTurboDownloader" / "templates").resolve()
+        template_dir = (Path.home() / "Documents" / "Contract Downloader" / "templates").resolve()
         is_generated_template = (
             path.parent == template_dir
             and re.fullmatch(r"input_template_\d{8}-\d{6}\.xlsx", path.name) is not None
@@ -878,7 +878,7 @@ class AppAPI:
         Creates a file next to the default input CSV location with a timestamp
         so the user can fill it out without overwriting anything.
         """
-        template_dir = Path.home() / "Documents" / "CoupaTurboDownloader" / "templates"
+        template_dir = Path.home() / "Documents" / "Contract Downloader" / "templates"
         template_dir.mkdir(parents=True, exist_ok=True)
 
         timestamp = time.strftime("%Y%m%d-%H%M%S")
@@ -914,7 +914,7 @@ class AppAPI:
         instructions = workbook.create_sheet("Instructions")
         instructions.column_dimensions["A"].width = 24
         instructions.column_dimensions["B"].width = 100
-        instructions.append(["Coupa Turbo Downloader — input guide", ""])
+        instructions.append(["Contract Downloader — input guide", ""])
         instructions.append(["Required fields", "PO_NUMBER and SUPPLIER must be filled for every row."])
         instructions.append(["The <|> separator", "Columns before <|> identify the PO. Columns after <|> define the destination folder hierarchy."])
         instructions.append(["Folder levels", "The first column after <|> is level 1, the next is level 2, and so on. Blank values become Unknown."])
