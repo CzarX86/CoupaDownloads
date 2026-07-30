@@ -584,6 +584,18 @@ class AppAPI:
         return next((candidate for candidate in candidates if candidate and Path(candidate).exists()), None)
 
     @staticmethod
+    def _edge_driver_path() -> Optional[str]:
+        """Resolve the EdgeDriver Selenium will use without starting Edge."""
+        try:
+            from selenium.webdriver.common.selenium_manager import SeleniumManager
+
+            result = SeleniumManager().binary_paths(["--browser", "edge"])
+            path = result.get("driver_path") if isinstance(result, dict) else None
+            return str(path) if path and Path(path).exists() else None
+        except Exception:
+            return shutil.which("msedgedriver") or shutil.which("msedgedriver.exe")
+
+    @staticmethod
     def _edge_version(edge_path: str | None) -> str:
         if not edge_path:
             return "Microsoft Edge was not found"
@@ -597,6 +609,13 @@ class AppAPI:
             except (OSError, ValueError, KeyError):
                 pass
         return AppAPI._command_version([edge_path, "--version"])
+
+    @staticmethod
+    def _version_components(value: str) -> tuple[int, ...]:
+        import re
+
+        match = re.search(r"\b(\d+(?:\.\d+){1,3})\b", value or "")
+        return tuple(int(part) for part in match.group(1).split(".")) if match else ()
 
     @staticmethod
     def _command_version(command: list[str]) -> str:
@@ -637,6 +656,22 @@ class AppAPI:
         edge_version = self._edge_version(edge_path)
         edge_status = "PASS" if edge_path and not edge_version.startswith("unavailable") else "WARN"
         check("Microsoft Edge", edge_status, edge_version)
+
+        driver_path = self._edge_driver_path()
+        driver_version = self._command_version([driver_path, "--version"]) if driver_path else "EdgeDriver was not resolved by Selenium Manager"
+        edge_numbers = self._version_components(edge_version)
+        driver_numbers = self._version_components(driver_version)
+        if not driver_path:
+            driver_status = "WARN"
+            driver_detail = driver_version
+        elif edge_numbers and driver_numbers and edge_numbers[:3] != driver_numbers[:3]:
+            driver_status = "WARN"
+            driver_detail = f"{driver_version} — browser/driver versions differ"
+        else:
+            driver_status = "PASS"
+            driver_detail = f"{driver_version} ({Path(driver_path).name})"
+        check("Microsoft EdgeDriver", driver_status, driver_detail)
+
         webview_version = self._package_version("pywebview", "webview")
         check("WebView runtime", "PASS" if webview_version != "not installed" else "FAIL", f"pywebview {webview_version}")
 

@@ -145,7 +145,7 @@ class CliProcessSupervisor:
         if "perfil Work do Edge" in line or "perfil existente do Edge" in line:
             return {"type": "System", "message": "Opening Edge with the existing user profile."}
         if "perfil persistente do app" in line or "perfil persistente do aplicativo" in line:
-            return {"type": "System", "message": "Opening Edge with the existing user profile."}
+            return {"type": "System", "message": "Opening Edge with the separate Coupa sign-in profile."}
         if "Aguardando login" in line:
             return {"type": "System", "message": "Waiting for Coupa sign-in in Edge…"}
         if "Login detectado" in line:
