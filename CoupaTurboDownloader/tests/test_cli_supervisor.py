@@ -116,3 +116,7 @@ def test_history_status_translation_preserves_filter_inputs():
     assert 'retry_po_with_edit' in javascript
     assert 'save_retry_attempt' in javascript
     assert 'discard_retry_attempt' in javascript
+    assert 'id="retry-result-modal"' in html
+    assert 'id="btn-save-retry-result"' in html
+    assert 'id="btn-discard-retry-result"' in html
+    assert '#retry-edit-modal, #retry-result-modal' in (web_root / "style.css").read_text(encoding="utf-8")
