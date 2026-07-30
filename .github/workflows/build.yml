@@ -90,7 +90,10 @@ jobs:
 
       - name: Package Python portable release
         shell: pwsh
-        run: Compress-Archive -Path dist/CoupaTurboDownloader-python-portable -DestinationPath dist/CoupaTurboDownloader-windows-python-portable-x64.zip -Force
+        run: |
+          Push-Location dist/CoupaTurboDownloader-python-portable
+          Compress-Archive -Path * -DestinationPath ../CoupaTurboDownloader-windows-python-portable-x64.zip -Force
+          Pop-Location
 
       - name: Upload Python portable package
         uses: actions/upload-artifact@v4
