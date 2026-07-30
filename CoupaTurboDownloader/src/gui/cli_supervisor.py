@@ -756,6 +756,17 @@ class CliProcessSupervisor:
             return {"success": False, "error": str(exc)}
 
     @staticmethod
+    def _po_values_equal(left: Any, right: Any) -> bool:
+        def normalize(value: Any) -> str:
+            text = str(value or "").strip().upper()
+            text = re.sub(r"\.0+$", "", text)
+            if text.startswith(("PO", "PM")):
+                text = text[2:]
+            return text
+
+        return normalize(left) == normalize(right)
+
+    @staticmethod
     def _replace_po_in_file(path: Path, old_po: str, new_po: str, note: str) -> None:
         if not path.exists():
             raise FileNotFoundError(str(path))
@@ -772,12 +783,17 @@ class CliProcessSupervisor:
                 remarks_index = sheet.max_column + 1
                 sheet.cell(1, remarks_index).value = "REMARKS"
             found = False
+            already_updated = False
             for row in range(2, sheet.max_row + 1):
-                if str(sheet.cell(row, po_index).value or "").strip() == old_po:
+                value = sheet.cell(row, po_index).value
+                if CliProcessSupervisor._po_values_equal(value, old_po):
                     sheet.cell(row, po_index).value = new_po
                     sheet.cell(row, remarks_index).value = note
                     found = True
-            if not found:
+                elif CliProcessSupervisor._po_values_equal(value, new_po):
+                    sheet.cell(row, remarks_index).value = note
+                    already_updated = True
+            if not found and not already_updated:
                 raise ValueError(f"PO {old_po} was not found in {path.name}")
             workbook.save(path)
             return
@@ -789,10 +805,13 @@ class CliProcessSupervisor:
         po_column = next((column for column in frame.columns if re.sub(r"[^a-z0-9]+", "", str(column).lower()) in {"ponumber", "po", "pedido"}), None)
         if po_column is None:
             raise ValueError(f"PO_NUMBER column not found in {path.name}")
-        mask = frame[po_column].astype(str).str.strip().eq(old_po)
-        if not mask.any():
+        values = frame[po_column].astype(str).str.strip()
+        mask = values.map(lambda value: CliProcessSupervisor._po_values_equal(value, old_po))
+        already_updated = values.map(lambda value: CliProcessSupervisor._po_values_equal(value, new_po))
+        if not mask.any() and not already_updated.any():
             raise ValueError(f"PO {old_po} was not found in {path.name}")
         frame.loc[mask, po_column] = new_po
+        mask = mask | already_updated
         remarks_column = next((column for column in frame.columns if re.sub(r"[^a-z0-9]+", "", str(column).lower()) in {"remarks", "observations", "observacao", "observacoes"}), "REMARKS")
         if remarks_column not in frame.columns:
             frame[remarks_column] = ""
