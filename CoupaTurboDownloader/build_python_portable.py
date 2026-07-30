@@ -90,6 +90,15 @@ def _install_dependencies() -> None:
     subprocess.check_call(command, cwd=PROJECT_ROOT)
 
 
+def _prune_windows_long_path_resources() -> None:
+    """Remove optional lxml resources that trigger Explorer's 260-char limit."""
+    optional_paths = [
+        RUNTIME_DIR / "Lib" / "site-packages" / "lxml" / "isoschematron",
+    ]
+    for path in optional_paths:
+        shutil.rmtree(path, ignore_errors=True)
+
+
 def _copy_application() -> None:
     shutil.copytree(
         PROJECT_ROOT / "src",
@@ -234,6 +243,7 @@ def build() -> Path:
         archive.extractall(RUNTIME_DIR)
     _configure_runtime()
     _install_dependencies()
+    _prune_windows_long_path_resources()
     _copy_application()
     _write_launchers()
     _smoke_test()
