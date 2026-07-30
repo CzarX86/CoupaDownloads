@@ -78,6 +78,13 @@ def test_relative_download_path_is_resolved_under_user_home(temp_db, monkeypatch
     assert api.default_download_dir == str(tmp_path / "Downloads" / "CoupaAttachments")
 
 
+def test_edge_driver_version_components_can_be_compared():
+    from src.gui.api import AppAPI
+
+    assert AppAPI._version_components("Microsoft Edge 140.0.3485.54") == (140, 0, 3485, 54)
+    assert AppAPI._version_components("MSEdgeDriver 140.0.3485.54")[:3] == (140, 0, 3485)
+
+
 def test_window_uses_85_percent_width_and_is_centered():
     from src.main import calculate_window_geometry
 

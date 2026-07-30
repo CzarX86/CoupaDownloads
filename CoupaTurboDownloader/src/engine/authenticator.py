@@ -314,31 +314,25 @@ def _edge_is_running() -> bool:
 
 
 def _start_edge_with_profile(headless: bool, prefer_existing: bool = True) -> Any:
-    """Start Selenium with the user's existing Edge profile.
+    """Prefer the user's Edge profile and fall back when it is locked.
 
-    Edge locks its user-data directory while running. We therefore require all
-    Edge windows to be closed instead of silently creating a second profile.
-    An app-owned profile remains available only as an explicit legacy opt-in
-    through COUPA_USE_APP_EDGE_PROFILE=1.
+    Edge locks its user-data directory while running. If that happens, a
+    separate persistent Coupa profile lets the user keep Edge open without
+    attempting to attach to or modify the running browser process.
     """
     profile_dir = _edge_user_data_dir() if prefer_existing and not headless else None
-    use_legacy_app_profile = os.environ.get("COUPA_USE_APP_EDGE_PROFILE") == "1"
-    if profile_dir:
-        if _edge_is_running():
-            raise RuntimeError("Close all Microsoft Edge windows before Coupa sign-in so the existing profile can be used.")
+    if profile_dir and not _edge_is_running():
         try:
             profile_name = _edge_profile_directory(profile_dir)
             print(f"[AUTH] Usando o perfil existente do Edge: {profile_dir}/{profile_name}")
             return webdriver.Edge(options=_edge_options(headless, profile_dir, profile_name))
         except WebDriverException as exc:
-            if not use_legacy_app_profile:
-                raise RuntimeError(f"Could not open the existing Edge profile: {exc}") from exc
-
-    if not use_legacy_app_profile:
-        raise RuntimeError("The existing Microsoft Edge profile could not be located. Open Edge once, close it, and try again.")
+            print(f"[AUTH] Perfil existente indisponível; usando perfil Coupa separado: {exc}")
+    elif profile_dir:
+        print("[AUTH] Edge já está aberto; usando perfil Coupa separado para evitar conflito.")
 
     EDGE_AUTH_PROFILE_DIR.mkdir(parents=True, exist_ok=True)
-    print(f"[AUTH] Usando perfil legado persistente do app: {EDGE_AUTH_PROFILE_DIR}")
+    print(f"[AUTH] Usando perfil persistente do app: {EDGE_AUTH_PROFILE_DIR}")
     return webdriver.Edge(options=_edge_options(headless, EDGE_AUTH_PROFILE_DIR))
 
 
