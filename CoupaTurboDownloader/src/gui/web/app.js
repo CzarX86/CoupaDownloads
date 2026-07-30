@@ -1131,8 +1131,10 @@ document.addEventListener("DOMContentLoaded", () => {
 
     const modal = $("#details-modal");
     const retryEditModal = $("#retry-edit-modal");
+    const retryResultModal = $("#retry-result-modal");
     let currentDetails = null;
     let pendingRetryPo = null;
+    let retryDecisionResolver = null;
     $("#btn-close-modal").addEventListener("click", () => { modal.hidden = true; });
 
     function selectedStatusFilters() {
@@ -1239,15 +1241,30 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     }
 
+    function requestRetryResultDecision(status) {
+        $("#retry-result-title").innerText = "Retry succeeded";
+        $("#retry-result-message").innerText = `The corrected PO ${status.edited_po} was found and ${status.attachment_count || 0} attachment(s) were downloaded.`;
+        retryResultModal.hidden = false;
+        return new Promise((resolve) => { retryDecisionResolver = resolve; });
+    }
+
+    function resolveRetryResultDecision(decision) {
+        retryResultModal.hidden = true;
+        if (retryDecisionResolver) {
+            const resolve = retryDecisionResolver;
+            retryDecisionResolver = null;
+            resolve(decision);
+        }
+    }
+
     async function finishProvisionalRetry(sessionId, attemptId, status) {
         runInProgress = false;
         syncUpdateButton();
         $("#btn-stop-session").disabled = true;
         $("#btn-pause-resume").disabled = true;
         if (status.status === "SUCCESS") {
-            const keep = confirm(
-                `Retry succeeded for ${status.edited_po}.\n\nSave this correction to the input file and report, and keep the downloaded attachments?`
-            );
+            const decision = await requestRetryResultDecision(status);
+            const keep = decision === "save";
             const result = keep
                 ? await api().save_retry_attempt(attemptId)
                 : await api().discard_retry_attempt(attemptId);
@@ -1306,6 +1323,8 @@ document.addEventListener("DOMContentLoaded", () => {
     $("#btn-close-retry-edit").addEventListener("click", closeRetryEditModal);
     $("#btn-cancel-retry-edit").addEventListener("click", closeRetryEditModal);
     $("#btn-confirm-retry-edit").addEventListener("click", beginRetryAttempt);
+    $("#btn-save-retry-result").addEventListener("click", () => resolveRetryResultDecision("save"));
+    $("#btn-discard-retry-result").addEventListener("click", () => resolveRetryResultDecision("discard"));
     $("#retry-po-input").addEventListener("keydown", (event) => {
         if (event.key === "Enter") beginRetryAttempt();
         if (event.key === "Escape") closeRetryEditModal();
