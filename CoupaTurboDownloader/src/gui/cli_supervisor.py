@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -10,6 +11,7 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
 from collections import deque
 from pathlib import Path
 from typing import Any, Optional
@@ -90,6 +92,25 @@ class CliProcessSupervisor:
                     status_before TEXT,
                     status_after TEXT,
                     error_message TEXT
+                )
+                """
+            )
+            try:
+                conn.execute("ALTER TABLE po_downloads ADD COLUMN remarks TEXT")
+            except sqlite3.OperationalError:
+                pass
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS retry_attempts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id INTEGER NOT NULL,
+                    original_po_number TEXT NOT NULL,
+                    edited_po_number TEXT NOT NULL,
+                    staging_dir TEXT NOT NULL,
+                    status TEXT DEFAULT 'RUNNING',
+                    error_message TEXT,
+                    requested_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    completed_at TIMESTAMP
                 )
                 """
             )
@@ -229,6 +250,8 @@ class CliProcessSupervisor:
         retry_po: Optional[str] = None,
         retry_in_place_po: Optional[str] = None,
         retry_in_place_errors: bool = False,
+        provisional_retry_attempt_id: Optional[int] = None,
+        retry_staging_dir: Optional[str] = None,
         source_session_id: Optional[int] = None,
         run_dir: Optional[str] = None,
         concurrency: int = 4,
@@ -255,6 +278,16 @@ class CliProcessSupervisor:
             command.append("--retry-in-place-errors")
             if source_session_id:
                 command.extend(["--retry-session-id", str(source_session_id)])
+        if provisional_retry_attempt_id:
+            command.extend([
+                "--provisional-retry",
+                "--retry-attempt-id",
+                str(provisional_retry_attempt_id),
+                "--retry-staging-dir",
+                str(retry_staging_dir or ""),
+            ])
+            if source_session_id:
+                command.extend(["--retry-session-id", str(source_session_id)])
         if retry_po:
             command.extend(["--retry-po", retry_po])
             if source_session_id:
@@ -278,8 +311,11 @@ class CliProcessSupervisor:
         retry_po: Optional[str] = None,
         retry_in_place_po: Optional[str] = None,
         retry_in_place_errors: bool = False,
+        provisional_retry_attempt_id: Optional[int] = None,
+        retry_staging_dir: Optional[str] = None,
         source_session_id: Optional[int] = None,
         run_dir: Optional[str] = None,
+        process_run_dir: Optional[str] = None,
         hierarchy_order: Optional[list[str]] = None,
         retry_attempts: Optional[int] = None,
         msg_processing: str = "convert_extract",
@@ -292,7 +328,7 @@ class CliProcessSupervisor:
             self.download_root = str(Path(download_root or self.default_download_root).expanduser().resolve())
             self.source_session_id = source_session_id
             self.run_dir = run_dir
-            self.session_id = source_session_id if (retry_in_place_po or retry_in_place_errors) else None
+            self.session_id = source_session_id if (retry_in_place_po or retry_in_place_errors or provisional_retry_attempt_id) else None
             self.stop_requested = False
             self.cancel_requested = False
             self.started_at = time.time()
@@ -321,8 +357,10 @@ class CliProcessSupervisor:
                 retry_po=retry_po,
                 retry_in_place_po=retry_in_place_po,
                 retry_in_place_errors=retry_in_place_errors,
+                provisional_retry_attempt_id=provisional_retry_attempt_id,
+                retry_staging_dir=retry_staging_dir,
                 source_session_id=source_session_id,
-                run_dir=run_dir,
+                run_dir=process_run_dir or run_dir,
                 concurrency=concurrency,
             )
             try:
@@ -648,6 +686,272 @@ class CliProcessSupervisor:
         except OSError as exc:
             return {"success": False, "error": str(exc)}
 
+    def retry_po_with_edit(self, session_id: int, original_po: str, edited_po: str) -> dict[str, Any]:
+        """Run an edited PO in a staging directory until the user commits it."""
+        original = str(original_po or "").strip()
+        edited = str(edited_po or "").strip()
+        if not original or not edited:
+            return {"success": False, "error": "A PO number is required."}
+        if original == edited:
+            return self.retry_po(session_id, original)
+        if not re.fullmatch(r"(?i)(?:PO|PM)?[0-9]+", edited):
+            return {"success": False, "error": "Enter a valid PO number using digits, PO, or PM."}
+
+        context = self._session_context(session_id, original)
+        run_dir = context.get("run_dir") or self.run_dir
+        input_path = context.get("input_path") or self.input_path
+        if not run_dir or not input_path or not Path(input_path).exists():
+            return {"success": False, "error": "The original run files are not available."}
+
+        attempt_token = uuid.uuid4().hex[:12]
+        staging_dir = Path(run_dir) / ".retry_staging" / f"attempt_{attempt_token}"
+        attempt_id = 0
+        try:
+            with self._connect() as conn:
+                source = conn.execute(
+                    "SELECT po_number, company_code, output_subdir, status FROM po_downloads WHERE session_id = ? AND po_number = ?",
+                    (session_id, original),
+                ).fetchone()
+                if not source:
+                    return {"success": False, "error": "The original PO was not found in this run."}
+                duplicate = conn.execute(
+                    "SELECT 1 FROM po_downloads WHERE session_id = ? AND po_number = ?",
+                    (session_id, edited),
+                ).fetchone()
+                if duplicate:
+                    return {"success": False, "error": "The corrected PO already exists in this run."}
+                staging_dir.mkdir(parents=True, exist_ok=True)
+                cursor = conn.execute(
+                    "INSERT INTO retry_attempts (session_id, original_po_number, edited_po_number, staging_dir) VALUES (?, ?, ?, ?)",
+                    (session_id, original, edited, str(staging_dir)),
+                )
+                attempt_id = int(cursor.lastrowid)
+                conn.execute(
+                    "INSERT INTO po_downloads (session_id, po_number, company_code, output_subdir, status) VALUES (?, ?, ?, ?, 'PENDING')",
+                    (session_id, edited, source["company_code"], source["output_subdir"]),
+                )
+                conn.commit()
+
+            self.input_path = str(Path(input_path).expanduser().resolve())
+            self.run_dir = str(Path(run_dir).expanduser().resolve())
+            result = self.start(
+                self.input_path,
+                str(Path(run_dir).parent),
+                retry_attempts=1,
+                source_session_id=session_id,
+                run_dir=self.run_dir,
+                process_run_dir=str(staging_dir),
+                provisional_retry_attempt_id=attempt_id,
+                retry_staging_dir=str(staging_dir),
+                msg_processing="disabled",
+                deduplicate_files=False,
+            )
+            if not result.get("success"):
+                self.discard_retry_attempt(attempt_id)
+                return result
+            return {**result, "session_id": session_id, "attempt_id": attempt_id, "original_po": original, "edited_po": edited}
+        except (OSError, sqlite3.Error) as exc:
+            if attempt_id:
+                self.discard_retry_attempt(attempt_id)
+            return {"success": False, "error": str(exc)}
+
+    @staticmethod
+    def _replace_po_in_file(path: Path, old_po: str, new_po: str, note: str) -> None:
+        if not path.exists():
+            raise FileNotFoundError(str(path))
+        if path.suffix.lower() in {".xlsx", ".xlsm"}:
+            from openpyxl import load_workbook
+            workbook = load_workbook(path)
+            sheet = workbook["Input"] if "Input" in workbook.sheetnames else workbook.active
+            headers = [str(cell.value or "").strip() for cell in sheet[1]]
+            po_index = next((index for index, value in enumerate(headers, 1) if re.sub(r"[^a-z0-9]+", "", value.lower()) in {"ponumber", "po", "pedido"}), None)
+            if not po_index:
+                raise ValueError(f"PO_NUMBER column not found in {path.name}")
+            remarks_index = next((index for index, value in enumerate(headers, 1) if re.sub(r"[^a-z0-9]+", "", value.lower()) in {"remarks", "observations", "observacao", "observacoes"}), None)
+            if not remarks_index:
+                remarks_index = sheet.max_column + 1
+                sheet.cell(1, remarks_index).value = "REMARKS"
+            found = False
+            for row in range(2, sheet.max_row + 1):
+                if str(sheet.cell(row, po_index).value or "").strip() == old_po:
+                    sheet.cell(row, po_index).value = new_po
+                    sheet.cell(row, remarks_index).value = note
+                    found = True
+            if not found:
+                raise ValueError(f"PO {old_po} was not found in {path.name}")
+            workbook.save(path)
+            return
+        import pandas as pd
+        with open(path, encoding="utf-8-sig", newline="") as handle:
+            sample = handle.read(4096)
+        separator = ";" if sample.count(";") > sample.count(",") else ","
+        frame = pd.read_csv(path, sep=separator, dtype=str, encoding="utf-8-sig").fillna("")
+        po_column = next((column for column in frame.columns if re.sub(r"[^a-z0-9]+", "", str(column).lower()) in {"ponumber", "po", "pedido"}), None)
+        if po_column is None:
+            raise ValueError(f"PO_NUMBER column not found in {path.name}")
+        mask = frame[po_column].astype(str).str.strip().eq(old_po)
+        if not mask.any():
+            raise ValueError(f"PO {old_po} was not found in {path.name}")
+        frame.loc[mask, po_column] = new_po
+        remarks_column = next((column for column in frame.columns if re.sub(r"[^a-z0-9]+", "", str(column).lower()) in {"remarks", "observations", "observacao", "observacoes"}), "REMARKS")
+        if remarks_column not in frame.columns:
+            frame[remarks_column] = ""
+        frame.loc[mask, remarks_column] = note
+        frame.to_csv(path, sep=separator, index=False, encoding="utf-8-sig")
+
+    def persist_retry_files(self, attempt_id: int) -> dict[str, Any]:
+        """Persist a committed retry in the archived input, original input, and report."""
+        with self._connect() as conn:
+            attempt = conn.execute("SELECT * FROM retry_attempts WHERE id = ? AND status = 'COMMITTED'", (int(attempt_id),)).fetchone()
+            session = conn.execute("SELECT input_file_path FROM sessions WHERE id = ?", (attempt["session_id"],)).fetchone() if attempt else None
+        if not attempt or not session:
+            return {"success": False, "error": "Committed retry metadata was not found."}
+        note = str(attempt["error_message"] or f"Corrected from {attempt['original_po_number']} to {attempt['edited_po_number']}; retry succeeded.")
+        archive = Path(str(session["input_file_path"] or ""))
+        metadata = self._session_metadata.get(str(attempt["session_id"]), {})
+        original_value = metadata.get("source_input_path") or metadata.get("input_path") or ""
+        original = Path(str(original_value)).expanduser() if original_value else None
+        report_dir = Path(self._session_context(int(attempt["session_id"])).get("run_dir") or self.run_dir or "")
+        report = report_dir / f"report_session_{attempt['session_id']}.xlsx"
+        required_paths = [archive, original, report]
+        missing = [str(path) for path in required_paths if not path or not path.exists()]
+        if missing:
+            return {"success": False, "error": f"Could not find files to update: {', '.join(missing)}"}
+        paths: list[Path] = []
+        for path in required_paths:
+            if path not in paths:
+                paths.append(path)
+        try:
+            backups: list[tuple[Path, Path]] = []
+            for path in paths:
+                backup = path.with_name(f"{path.stem}.before_retry_{time.strftime('%Y%m%d-%H%M%S')}{path.suffix}")
+                shutil.copy2(path, backup)
+                backups.append((path, backup))
+            for path in paths:
+                self._replace_po_in_file(path, str(attempt["original_po_number"]), str(attempt["edited_po_number"]), note)
+            if archive.exists():
+                data = archive.read_bytes()
+                with self._connect() as conn:
+                    conn.execute(
+                        "UPDATE sessions SET input_file_path = ?, input_file_blob = ?, input_file_sha256 = ?, input_file_size = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                        (str(archive), data, hashlib.sha256(data).hexdigest(), len(data), int(attempt["session_id"])),
+                    )
+                    conn.commit()
+            return {"success": True, "paths": [str(path) for path in paths], "note": note}
+        except (OSError, ValueError, sqlite3.Error) as exc:
+            for path, backup in locals().get("backups", []):
+                try:
+                    shutil.copy2(backup, path)
+                except OSError:
+                    pass
+            return {"success": False, "error": f"Could not persist retry correction: {exc}"}
+
+    def get_retry_attempt_status(self, attempt_id: int) -> dict[str, Any]:
+        with self._connect() as conn:
+            row = conn.execute("SELECT * FROM retry_attempts WHERE id = ?", (int(attempt_id),)).fetchone()
+            if not row:
+                return {"success": False, "error": "Retry attempt not found."}
+            target = conn.execute(
+                "SELECT status, attachment_count, error_message, download_folder FROM po_downloads WHERE session_id = ? AND po_number = ?",
+                (row["session_id"], row["edited_po_number"]),
+            ).fetchone()
+        status = str(row["status"] or "RUNNING")
+        target_status = str(target["status"] if target else "PENDING")
+        process_running = bool(self.process and self.process.poll() is None)
+        if process_running:
+            status = "RUNNING"
+        elif status == "RUNNING":
+            status = "SUCCESS" if target_status == "SUCCESS" else "FAILED"
+        return {
+            "success": True,
+            "attempt_id": int(row["id"]),
+            "session_id": int(row["session_id"]),
+            "original_po": row["original_po_number"],
+            "edited_po": row["edited_po_number"],
+            "status": status,
+            "target_status": target_status,
+            "attachment_count": int((target["attachment_count"] if target else 0) or 0),
+            "error_message": (target["error_message"] if target else None) or row["error_message"],
+            "download_folder": target["download_folder"] if target else None,
+            "staging_dir": row["staging_dir"],
+        }
+
+    def discard_retry_attempt(self, attempt_id: int) -> dict[str, Any]:
+        with self._lock:
+            if self.process and self.process.poll() is None:
+                return {"success": False, "error": "Wait for the retry to finish before discarding it."}
+        try:
+            with self._connect() as conn:
+                row = conn.execute("SELECT * FROM retry_attempts WHERE id = ?", (int(attempt_id),)).fetchone()
+                if not row:
+                    return {"success": False, "error": "Retry attempt not found."}
+                conn.execute(
+                    "DELETE FROM po_downloads WHERE session_id = ? AND po_number = ?",
+                    (row["session_id"], row["edited_po_number"]),
+                )
+                conn.execute(
+                    "UPDATE retry_attempts SET status = 'DISCARDED', completed_at = CURRENT_TIMESTAMP WHERE id = ?",
+                    (int(attempt_id),),
+                )
+                conn.commit()
+            shutil.rmtree(str(row["staging_dir"]), ignore_errors=True)
+            return {"success": True, "session_id": int(row["session_id"])}
+        except (OSError, sqlite3.Error) as exc:
+            return {"success": False, "error": str(exc)}
+
+    def commit_retry_attempt(self, attempt_id: int) -> dict[str, Any]:
+        with self._lock:
+            if self.process and self.process.poll() is None:
+                return {"success": False, "error": "Wait for the retry to finish before saving it."}
+        try:
+            with self._connect() as conn:
+                attempt = conn.execute("SELECT * FROM retry_attempts WHERE id = ?", (int(attempt_id),)).fetchone()
+                if not attempt:
+                    return {"success": False, "error": "Retry attempt not found."}
+                target = conn.execute(
+                    "SELECT * FROM po_downloads WHERE session_id = ? AND po_number = ?",
+                    (attempt["session_id"], attempt["edited_po_number"]),
+                ).fetchone()
+                if not target or target["status"] != "SUCCESS":
+                    return {"success": False, "error": "Only a successful retry can be saved."}
+                source = conn.execute(
+                    "SELECT * FROM po_downloads WHERE session_id = ? AND po_number = ?",
+                    (attempt["session_id"], attempt["original_po_number"]),
+                ).fetchone()
+                if not source:
+                    return {"success": False, "error": "The original PO record was not found."}
+                final_dir = Path(self._session_context(int(attempt["session_id"])).get("run_dir") or self.run_dir or "")
+                staged = Path(str(attempt["staging_dir"]))
+                source_folder = Path(str(source["download_folder"] or ""))
+                target_folder = final_dir / str(target["output_subdir"] or source["output_subdir"] or target["company_code"]) / str(target["po_number"])
+                staged_folder = staged / str(target["output_subdir"] or target["company_code"]) / str(target["po_number"])
+                if staged_folder.exists():
+                    target_folder.parent.mkdir(parents=True, exist_ok=True)
+                    if target_folder.exists():
+                        shutil.rmtree(target_folder)
+                    shutil.move(str(staged_folder), str(target_folder))
+                if str(source["download_folder"] or "").strip() and source_folder.exists() and source_folder != target_folder:
+                    shutil.rmtree(source_folder)
+                note = f"Corrected from {attempt['original_po_number']} to {attempt['edited_po_number']}; retry succeeded."
+                conn.execute(
+                    "UPDATE po_downloads SET po_number = ?, status = 'SUCCESS', download_folder = ?, attachment_count = ?, error_message = NULL, remarks = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                    (attempt["edited_po_number"], str(target_folder), target["attachment_count"], note, source["id"]),
+                )
+                conn.execute("DELETE FROM po_downloads WHERE id = ?", (target["id"],))
+                conn.execute(
+                    "UPDATE retry_attempts SET status = 'COMMITTED', completed_at = CURRENT_TIMESTAMP, error_message = ? WHERE id = ?",
+                    (note, int(attempt_id)),
+                )
+                conn.execute(
+                    "INSERT INTO retry_events (session_id, po_number, status_before, status_after, error_message, completed_at) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
+                    (attempt["session_id"], attempt["edited_po_number"], source["status"], "SUCCESS", note),
+                )
+                conn.commit()
+            shutil.rmtree(str(attempt["staging_dir"]), ignore_errors=True)
+            return {"success": True, "session_id": int(attempt["session_id"]), "po_number": attempt["edited_po_number"], "note": note}
+        except (OSError, sqlite3.Error) as exc:
+            return {"success": False, "error": str(exc)}
+
     def retry_po(self, session_id: int, po_number: str) -> dict[str, Any]:
         normalized_po = str(po_number or "").strip()
         if not normalized_po:
@@ -780,10 +1084,11 @@ class CliProcessSupervisor:
         try:
             with self._connect() as conn:
                 conn.execute("DELETE FROM retry_events")
+                conn.execute("DELETE FROM retry_attempts")
                 conn.execute("DELETE FROM po_downloads")
                 conn.execute("DELETE FROM sessions")
                 try:
-                    conn.execute("DELETE FROM sqlite_sequence WHERE name IN ('sessions', 'po_downloads', 'retry_events')")
+                    conn.execute("DELETE FROM sqlite_sequence WHERE name IN ('sessions', 'po_downloads', 'retry_events', 'retry_attempts')")
                 except sqlite3.OperationalError:
                     pass
                 conn.commit()
@@ -857,10 +1162,11 @@ class CliProcessSupervisor:
         try:
             with self._connect() as conn:
                 conn.execute("DELETE FROM retry_events")
+                conn.execute("DELETE FROM retry_attempts")
                 conn.execute("DELETE FROM po_downloads")
                 conn.execute("DELETE FROM sessions")
                 try:
-                    conn.execute("DELETE FROM sqlite_sequence WHERE name IN ('sessions', 'po_downloads', 'retry_events')")
+                    conn.execute("DELETE FROM sqlite_sequence WHERE name IN ('sessions', 'po_downloads', 'retry_events', 'retry_attempts')")
                 except sqlite3.OperationalError:
                     pass
                 conn.commit()
@@ -913,6 +1219,7 @@ class CliProcessSupervisor:
                 if not exists:
                     return {"success": False, "error": "Run not found."}
                 conn.execute("DELETE FROM retry_events WHERE session_id = ?", (session_id,))
+                conn.execute("DELETE FROM retry_attempts WHERE session_id = ?", (session_id,))
                 conn.execute("DELETE FROM po_downloads WHERE session_id = ?", (session_id,))
                 conn.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
                 conn.commit()

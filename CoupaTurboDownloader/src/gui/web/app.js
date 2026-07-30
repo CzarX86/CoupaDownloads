@@ -1130,7 +1130,9 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     const modal = $("#details-modal");
+    const retryEditModal = $("#retry-edit-modal");
     let currentDetails = null;
+    let pendingRetryPo = null;
     $("#btn-close-modal").addEventListener("click", () => { modal.hidden = true; });
 
     function selectedStatusFilters() {
@@ -1156,7 +1158,7 @@ document.addEventListener("DOMContentLoaded", () => {
         if (!currentDetails) return;
         const filters = selectedStatusFilters();
         const rows = currentDetails.pos.filter((po) => filters.includes(String(po.status).toUpperCase()));
-        $("#modal-pos-tbody").innerHTML = rows.map((po) => `<tr><td><button class="coupa-link po-number-link" data-po="${escapeHtml(po.po_number)}" title="Open ${escapeHtml(po.po_number)} in the default browser" type="button">${escapeHtml(po.po_number)}</button></td><td>${escapeHtml(po.company_code)}</td><td><span class="status-badge status-${String(po.status).toLowerCase()}">${escapeHtml(po.status)}</span></td><td><button class="btn btn-secondary btn-small btn-po-retry" data-po="${escapeHtml(po.po_number)}" type="button">Retry</button></td><td class="message-cell">${escapeHtml(po.error_message || "No error message recorded")}</td></tr>`).join("") || '<tr><td colspan="5" class="empty-state">No POs match this filter.</td></tr>';
+        $("#modal-pos-tbody").innerHTML = rows.map((po) => `<tr><td><button class="coupa-link po-number-link" data-po="${escapeHtml(po.po_number)}" title="Open ${escapeHtml(po.po_number)} in the default browser" type="button">${escapeHtml(po.po_number)}</button></td><td>${escapeHtml(po.company_code)}</td><td><span class="status-badge status-${String(po.status).toLowerCase()}">${escapeHtml(po.status)}</span></td><td><button class="btn btn-secondary btn-small btn-po-retry" data-po="${escapeHtml(po.po_number)}" type="button">Retry</button></td><td class="message-cell">${escapeHtml(po.remarks || po.error_message || "No error message recorded")}</td></tr>`).join("") || '<tr><td colspan="5" class="empty-state">No POs match this filter.</td></tr>';
         $("#modal-pos-tbody").querySelectorAll(".btn-po-retry").forEach((button) => {
             button.addEventListener("click", () => retrySinglePo(button));
         });
@@ -1197,22 +1199,117 @@ document.addEventListener("DOMContentLoaded", () => {
         if (button) openPoInBrowser(button);
     });
 
-    async function retrySinglePo(button) {
-        if (!currentDetails || !hasApi("retry_po")) return;
-        const poNumber = button.dataset.po || "";
-        if (!confirm(`Retry ${poNumber}? Valid existing documents will be preserved; only missing or invalid files will be downloaded.`)) return;
-        button.disabled = true;
-        const result = await api().retry_po(currentDetails.session.id, poNumber);
+    function openRetryEditModal(poNumber) {
+        pendingRetryPo = { sessionId: currentDetails.session.id, original: poNumber };
+        $("#retry-po-input").value = poNumber;
+        retryEditModal.hidden = false;
+        $("#retry-po-input").focus();
+        $("#retry-po-input").select();
+    }
+
+    function closeRetryEditModal() {
+        pendingRetryPo = null;
+        retryEditModal.hidden = true;
+    }
+
+    async function beginRetryAttempt() {
+        if (!pendingRetryPo || !hasApi("retry_po_with_edit")) return;
+        const edited = $("#retry-po-input").value.trim();
+        if (!edited) {
+            alert("Enter a PO number before retrying.");
+            return;
+        }
+        const confirmButton = $("#btn-confirm-retry-edit");
+        confirmButton.disabled = true;
+        const request = pendingRetryPo;
+        const result = await api().retry_po_with_edit(request.sessionId, request.original, edited);
+        confirmButton.disabled = false;
         if (!result.success) {
-            button.disabled = false;
             alert(result.error || "PO retry could not be started.");
             return;
         }
+        closeRetryEditModal();
         modal.hidden = true;
-        importedSessionId = result.session_id || 0;
-        showScreen("progress");
-        startTelemetryPolling(importedSessionId);
+        if (result.attempt_id) {
+            startProvisionalRetryPolling(result.session_id || request.sessionId, result.attempt_id);
+        } else {
+            importedSessionId = result.session_id || request.sessionId;
+            showScreen("progress");
+            startTelemetryPolling(importedSessionId);
+        }
     }
+
+    async function finishProvisionalRetry(sessionId, attemptId, status) {
+        runInProgress = false;
+        syncUpdateButton();
+        $("#btn-stop-session").disabled = true;
+        $("#btn-pause-resume").disabled = true;
+        if (status.status === "SUCCESS") {
+            const keep = confirm(
+                `Retry succeeded for ${status.edited_po}.\n\nSave this correction to the input file and report, and keep the downloaded attachments?`
+            );
+            const result = keep
+                ? await api().save_retry_attempt(attemptId)
+                : await api().discard_retry_attempt(attemptId);
+            if (!result.success) {
+                alert(result.error || "Could not finalize the retry result.");
+                return;
+            }
+            logToConsole(keep ? "Success" : "System", keep ? "PO correction saved to the input and report." : "Successful retry discarded; the run was left unchanged.");
+        } else {
+            await api().discard_retry_attempt(attemptId);
+            alert(status.error_message || `Retry failed for ${status.edited_po}. The original error was preserved.`);
+        }
+        await openDetailsModal(sessionId);
+    }
+
+    function startProvisionalRetryPolling(sessionId, attemptId) {
+        runInProgress = true;
+        syncUpdateButton();
+        importedSessionId = sessionId;
+        showScreen("progress");
+        $("#active-session-title").innerText = `Run #${sessionId}`;
+        $("#progress-subtitle").innerText = "Testing the corrected PO before saving it.";
+        $("#btn-pause-resume").disabled = true;
+        $("#btn-stop-session").disabled = true;
+        if (activePollInterval) clearInterval(activePollInterval);
+        const poll = async () => {
+            try {
+                const status = await api().get_retry_attempt_status(attemptId);
+                if (!status.success) throw new Error(status.error || "Retry status unavailable.");
+                const finished = ["SUCCESS", "FAILED"].includes(status.status);
+                updateProgressUI({
+                    status: status.status,
+                    total: 1,
+                    processed: finished ? 1 : 0,
+                    success: status.status === "SUCCESS" ? 1 : 0,
+                    errors: status.status === "FAILED" ? 1 : 0,
+                    latest_logs: [],
+                });
+                if (finished) {
+                    clearInterval(activePollInterval);
+                    await finishProvisionalRetry(sessionId, attemptId, status);
+                }
+            } catch (error) {
+                logToConsole("Error", `Retry status failed: ${error.message || error}`);
+            }
+        };
+        poll();
+        activePollInterval = setInterval(poll, 700);
+    }
+
+    async function retrySinglePo(button) {
+        if (!currentDetails || !hasApi("retry_po_with_edit")) return;
+        openRetryEditModal(button.dataset.po || "");
+    }
+
+    $("#btn-close-retry-edit").addEventListener("click", closeRetryEditModal);
+    $("#btn-cancel-retry-edit").addEventListener("click", closeRetryEditModal);
+    $("#btn-confirm-retry-edit").addEventListener("click", beginRetryAttempt);
+    $("#retry-po-input").addEventListener("keydown", (event) => {
+        if (event.key === "Enter") beginRetryAttempt();
+        if (event.key === "Escape") closeRetryEditModal();
+    });
 
     $("#status-filter").addEventListener("change", (event) => {
         if (event.target.matches("input[data-status-all]")) {

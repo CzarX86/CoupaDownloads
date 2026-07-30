@@ -74,6 +74,28 @@ def test_pythonw_gui_uses_console_python_for_cli_worker(monkeypatch, tmp_path):
     assert command[1].endswith("process_all_pos.py")
 
 
+def test_retry_file_update_replaces_po_and_adds_remark(tmp_path):
+    from openpyxl import Workbook, load_workbook
+
+    path = tmp_path / "input.xlsx"
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Input"
+    sheet.append(["PO_NUMBER", "SUPPLIER"])
+    sheet.append(["12345678", "ACME"])
+    workbook.save(path)
+
+    CliProcessSupervisor._replace_po_in_file(
+        path,
+        "12345678",
+        "1234567",
+        "Corrected from 12345678 to 1234567; retry succeeded.",
+    )
+
+    row = list(load_workbook(path, read_only=True).active.iter_rows(values_only=True))[1]
+    assert row == ("1234567", "ACME", "Corrected from 12345678 to 1234567; retry succeeded.")
+
+
 def test_history_status_translation_preserves_filter_inputs():
     web_root = Path(__file__).parents[1] / "src" / "gui" / "web"
     html = (web_root / "index.html").read_text(encoding="utf-8")
@@ -91,3 +113,6 @@ def test_history_status_translation_preserves_filter_inputs():
     assert 'Action required' in javascript
     assert 'checkForUpdates(true)' in javascript
     assert '$("#modal-pos-tbody").addEventListener("click"' in javascript
+    assert 'retry_po_with_edit' in javascript
+    assert 'save_retry_attempt' in javascript
+    assert 'discard_retry_attempt' in javascript

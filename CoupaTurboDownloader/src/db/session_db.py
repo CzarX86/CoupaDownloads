@@ -65,9 +65,25 @@ class SessionDB:
                 download_folder TEXT,
                 attachment_count INTEGER DEFAULT 0,
                 error_message TEXT,
+                remarks TEXT,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (session_id) REFERENCES sessions (id),
                 UNIQUE(session_id, po_number)
+            )
+        ''')
+
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS retry_attempts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id INTEGER NOT NULL,
+                original_po_number TEXT NOT NULL,
+                edited_po_number TEXT NOT NULL,
+                staging_dir TEXT NOT NULL,
+                status TEXT DEFAULT 'RUNNING',
+                error_message TEXT,
+                requested_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                completed_at TIMESTAMP,
+                FOREIGN KEY (session_id) REFERENCES sessions (id)
             )
         ''')
 
@@ -96,6 +112,8 @@ class SessionDB:
 
         existing = {row[1] for row in cursor.execute("PRAGMA table_info(po_downloads)")}
 
+        if "remarks" not in existing:
+            cursor.execute("ALTER TABLE po_downloads ADD COLUMN remarks TEXT")
         if "attachment_count" not in existing:
             cursor.execute(
                 "ALTER TABLE po_downloads ADD COLUMN attachment_count INTEGER DEFAULT 0"
