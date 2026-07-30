@@ -9,7 +9,7 @@ from pathlib import Path, PurePosixPath
 import pandas as pd
 from src.db.session_db import SessionDB
 from src.engine.crawler import CoupaCrawler
-from src.engine.authenticator import load_cached_cookies, validate_cookies, get_coupa_cookies
+from src.engine.authenticator import load_cached_cookies, validate_cookies_detailed, get_coupa_cookies
 from src.engine.msg_converter import find_msg_files, MsgToPdfConverter
 
 # CSV alongside this script (or override via INPUT_CSV env var)
@@ -139,10 +139,41 @@ def build_run_download_dir(download_root: str, mode: str, run_dir: str | None = 
     return resolved
 
 
+def _detect_csv_encoding(filepath: str) -> str:
+    raw = Path(filepath).read_bytes()
+    for encoding in ("utf-8-sig", "utf-8", "cp1252", "latin-1"):
+        try:
+            raw.decode(encoding)
+            return encoding
+        except UnicodeDecodeError:
+            continue
+    return "latin-1"
+
+
+def _read_csv_text(filepath: str) -> str:
+    path = Path(filepath)
+    return path.read_bytes().decode(_detect_csv_encoding(filepath), errors="replace")
+
+
 def detect_separator(filepath: str) -> str:
-    with open(filepath, encoding="utf-8") as f:
-        sample = f.read(4096)
+    sample = _read_csv_text(filepath)[:4096]
     return ";" if sample.count(";") > sample.count(",") else ","
+
+
+def read_input_dataframe(filepath: str) -> pd.DataFrame:
+    """Read the same CSV/XLSX input in the CLI and GUI workflows."""
+    path = Path(filepath)
+    suffix = path.suffix.lower()
+    if suffix in {".xlsx", ".xlsm", ".xltx", ".xltm"}:
+        return pd.read_excel(path, dtype=str).fillna("")
+    if suffix == ".xls":
+        return pd.read_excel(path, dtype=str).fillna("")
+    return pd.read_csv(
+        path,
+        sep=detect_separator(str(path)),
+        dtype=str,
+        encoding=_detect_csv_encoding(str(path)),
+    ).fillna("")
 
 
 def _clean_folder_part(value: str) -> str:
@@ -196,8 +227,7 @@ def build_output_subdir_map_from_csv(input_csv: str) -> dict[str, str]:
     if not input_csv or not os.path.exists(input_csv):
         return {}
 
-    sep = detect_separator(input_csv)
-    df = pd.read_csv(input_csv, sep=sep, dtype=str)
+    df = read_input_dataframe(input_csv)
     hierarchy_cols, has_hierarchy_data = _extract_hierarchy_columns(df)
     po_to_subdir: dict[str, str] = {}
 
@@ -285,8 +315,7 @@ def export_original_like_excel_report(
     mapped = db_df[list(report_cols.keys())].rename(columns=report_cols)
 
     if input_csv and os.path.exists(input_csv):
-        sep = detect_separator(input_csv)
-        source_df = pd.read_csv(input_csv, sep=sep, dtype=str).fillna("")
+        source_df = read_input_dataframe(input_csv)
         if "PO_NUMBER" in source_df.columns:
             source_df["PO_NUMBER"] = source_df["PO_NUMBER"].astype(str).str.strip()
 
@@ -336,8 +365,7 @@ def create_session_from_csv(
     hierarchy_order: list[str] | None = None,
 ) -> tuple[int, int]:
     cursor = db.conn.cursor()
-    sep = detect_separator(input_csv)
-    df = pd.read_csv(input_csv, sep=sep, dtype=str)
+    df = read_input_dataframe(input_csv)
     hierarchy_cols, has_hierarchy_data = _extract_hierarchy_columns(df, hierarchy_order)
     session_id = db.create_session(os.path.basename(input_csv), execution_type=execution_type)
 
@@ -543,8 +571,11 @@ async def main():
     cookies = load_cached_cookies()
     if cookies:
         print("[AUTH] Cached cookies loaded. Validating session...")
-        if await validate_cookies(cookies):
+        valid, reason = await validate_cookies_detailed(cookies)
+        if valid:
             print("[AUTH] Coupa session is valid.\n")
+        elif reason == "unavailable":
+            print("[AUTH][WARNING] Coupa session could not be verified; keeping cached cookies and continuing.")
         else:
             print("[AUTH] Cached session expired. Sign-in is required.")
             cookies = None

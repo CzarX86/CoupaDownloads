@@ -6,6 +6,7 @@ import subprocess
 import sys
 import threading
 import time
+import shutil
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -13,6 +14,8 @@ import httpx
 from selenium import webdriver
 from selenium.common.exceptions import WebDriverException
 from selenium.webdriver.edge.options import Options
+
+from src.engine.tls import system_ssl_context
 
 COUPA_URL = "https://unilever.coupahost.com"
 WORK_PROFILE_TOKENS = ("work", "trabalho", "business", "empresa", "corporate", "profissional")
@@ -87,6 +90,48 @@ def load_cached_cookies_db() -> Optional[Dict[str, str]]:
         conn.close()
 
 
+def clear_cached_authentication(*, remove_app_profile: bool = False) -> Dict[str, Any]:
+    """Clear Coupa cookies and optionally the app-owned Edge profile.
+
+    The user's normal Edge Work profile is never removed. Removing the
+    dedicated app profile is refused while Edge is running to avoid corrupting
+    Chromium's locked files.
+    """
+    if remove_app_profile and _edge_is_running():
+        return {
+            "success": False,
+            "error": "Close all Microsoft Edge windows before resetting the Coupa sign-in state.",
+        }
+
+    removed = []
+    try:
+        Path(COOKIE_FILE).unlink(missing_ok=True)
+        removed.append("cookies")
+    except OSError as exc:
+        return {"success": False, "error": f"Could not clear cached cookies: {exc}"}
+
+    try:
+        if Path(AUTH_DB).exists():
+            conn = sqlite3.connect(AUTH_DB)
+            try:
+                conn.execute("DELETE FROM auth_cache WHERE key = 'coupa'")
+                conn.commit()
+            finally:
+                conn.close()
+            removed.append("auth_cache")
+    except sqlite3.Error as exc:
+        return {"success": False, "error": f"Could not clear authentication database: {exc}"}
+
+    if remove_app_profile and EDGE_AUTH_PROFILE_DIR.exists():
+        try:
+            shutil.rmtree(EDGE_AUTH_PROFILE_DIR)
+            removed.append("app_edge_profile")
+        except OSError as exc:
+            return {"success": False, "error": f"Could not reset the app Edge profile: {exc}"}
+
+    return {"success": True, "removed": removed}
+
+
 def load_cached_cookies() -> Optional[Dict[str, str]]:
     cached_db = load_cached_cookies_db()
     cached_file: Optional[Dict[str, str]] = None
@@ -123,7 +168,11 @@ async def validate_cookies_detailed(cookies: Dict[str, str]) -> tuple[bool, str]
     }
     try:
         async with httpx.AsyncClient(
-            cookies=cookies, headers=headers, follow_redirects=True, timeout=10.0
+            cookies=cookies,
+            headers=headers,
+            follow_redirects=True,
+            timeout=10.0,
+            verify=system_ssl_context(),
         ) as client:
             resp = await client.get(f"{COUPA_URL}/order_headers")
             final_url = str(resp.url).lower()
@@ -288,7 +337,11 @@ def _close_auth_driver(driver: Any) -> None:
     driver.quit()
 
 
-async def get_coupa_cookies(headless: bool = False, load_from_file: bool = True) -> Dict[str, str]:
+async def get_coupa_cookies(
+    headless: bool = False,
+    load_from_file: bool = True,
+    fresh: bool = False,
+) -> Dict[str, str]:
     """
     Obtain Coupa session cookies via Selenium Edge.
 
@@ -296,6 +349,12 @@ async def get_coupa_cookies(headless: bool = False, load_from_file: bool = True)
     login including SSO/OAuth flow. System validates cookies by navigating to
     a PO page, then extracts and caches them.
     """
+    if fresh:
+        cleared = clear_cached_authentication(remove_app_profile=True)
+        if not cleared.get("success"):
+            raise RuntimeError(str(cleared.get("error") or "Could not reset authentication state."))
+        load_from_file = False
+
     if load_from_file:
         cached = load_cached_cookies()
         if cached and await validate_cookies(cached):
@@ -308,7 +367,7 @@ async def get_coupa_cookies(headless: bool = False, load_from_file: bool = True)
     print("  Pressione ENTER para forcar verificacao imediata.")
     print("=" * 60 + "\n")
 
-    driver = _start_edge_with_profile(headless)
+    driver = _start_edge_with_profile(headless, prefer_existing=not fresh)
 
     def _safe_current_url_lower() -> str:
         try:

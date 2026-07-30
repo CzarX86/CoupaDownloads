@@ -34,6 +34,40 @@ def test_edge_profile_detection_prefers_entra_work_profile_without_email(tmp_pat
     assert authenticator._edge_profile_directory(tmp_path) == "Profile 1"
 
 
+def test_clear_cached_authentication_removes_cookies_and_app_profile(tmp_path, monkeypatch):
+    cookie_file = tmp_path / "cookies.json"
+    auth_db = tmp_path / "auth_cache.db"
+    profile = tmp_path / "edge_auth_profile"
+    cookie_file.write_text(json.dumps({"_coupa_session": "secret"}), encoding="utf-8")
+    profile.mkdir()
+    monkeypatch.setattr(authenticator, "COOKIE_FILE", str(cookie_file))
+    monkeypatch.setattr(authenticator, "AUTH_DB", str(auth_db))
+    monkeypatch.setattr(authenticator, "EDGE_AUTH_PROFILE_DIR", profile)
+    monkeypatch.setattr(authenticator, "_edge_is_running", lambda: False)
+    authenticator.save_cached_cookies_db({"_coupa_session": "secret"})
+
+    result = authenticator.clear_cached_authentication(remove_app_profile=True)
+
+    assert result["success"] is True
+    assert not cookie_file.exists()
+    assert not profile.exists()
+    assert authenticator.load_cached_cookies() is None
+
+
+def test_clear_cached_authentication_refuses_to_remove_profile_while_edge_runs(tmp_path, monkeypatch):
+    profile = tmp_path / "edge_auth_profile"
+    profile.mkdir()
+    monkeypatch.setattr(authenticator, "COOKIE_FILE", str(tmp_path / "cookies.json"))
+    monkeypatch.setattr(authenticator, "AUTH_DB", str(tmp_path / "auth_cache.db"))
+    monkeypatch.setattr(authenticator, "EDGE_AUTH_PROFILE_DIR", profile)
+    monkeypatch.setattr(authenticator, "_edge_is_running", lambda: True)
+
+    result = authenticator.clear_cached_authentication(remove_app_profile=True)
+
+    assert result["success"] is False
+    assert profile.exists()
+
+
 def test_cookie_json_fallback_keeps_underscore_session_cookie(tmp_path, monkeypatch):
     cookie_file = tmp_path / "cookies.json"
     cookie_file.write_text(

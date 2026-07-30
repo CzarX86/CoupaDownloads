@@ -16,7 +16,8 @@ import pandas as pd
 
 from src.db.session_db import SessionDB, PODownload
 from src.engine.crawler import CoupaCrawler
-from src.engine.authenticator import load_cached_cookies, validate_cookies_detailed
+from src.engine.tls import system_ssl_context
+from src.engine.authenticator import clear_cached_authentication, load_cached_cookies, validate_cookies_detailed
 
 
 class AppAPI:
@@ -685,7 +686,11 @@ class AppAPI:
                 "GitHub connectivity": "https://api.github.com",
             }.items():
                 try:
-                    async with httpx.AsyncClient(timeout=5, follow_redirects=True) as client:
+                    async with httpx.AsyncClient(
+                        timeout=5,
+                        follow_redirects=True,
+                        verify=system_ssl_context(),
+                    ) as client:
                         response = await client.get(url)
                     check(label, "PASS" if response.status_code < 500 else "WARN", f"HTTP {response.status_code}")
                 except Exception as exc:
@@ -745,6 +750,13 @@ class AppAPI:
         """Store authenticated cookies for use by the crawler."""
         self._cookies = cookies
 
+    def reset_authentication(self) -> Dict[str, Any]:
+        """Clear cached Coupa state and the app-owned Edge profile."""
+        result = clear_cached_authentication(remove_app_profile=True)
+        if result.get("success"):
+            self._cookies = None
+        return result
+
     def check_auth(self) -> Dict[str, Any]:
         """Check whether the cached Coupa session is still usable."""
         try:
@@ -758,9 +770,14 @@ class AppAPI:
                 return {"authenticated": True, "state": "cached", "message": "Cached session is valid."}
             if reason == "unavailable":
                 # Do not label a valid-looking cache as expired because of a
-                # timeout or temporary Coupa/network failure.
+                # timeout, proxy, or temporary Coupa/network failure.
                 self._cookies = cookies
-                return {"authenticated": False, "state": "unavailable", "message": "Could not verify cached session right now."}
+                return {
+                    "authenticated": False,
+                    "state": "unavailable",
+                    "has_cached_session": True,
+                    "message": "Could not verify cached session right now; the cached session will be tried during the run.",
+                }
             self._cookies = None
             return {"authenticated": False, "state": "expired", "message": "Cached session expired."}
         except Exception as e:

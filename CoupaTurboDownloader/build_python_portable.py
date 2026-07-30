@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -159,17 +160,20 @@ def _write_manifest() -> None:
 
 def _smoke_test() -> None:
     python = RUNTIME_DIR / "python.exe"
+    smoke_environment = dict(os.environ)
+    smoke_environment["PYTHONDONTWRITEBYTECODE"] = "1"
     subprocess.check_call(
         [
             str(python),
             "-c",
             (
-                "import bs4, extract_msg, httpx, lxml, openpyxl, pandas, selenium, webview; "
+                "import bs4, extract_msg, httpx, lxml, openpyxl, pandas, selenium, truststore, webview; "
                 "import src.main, process_all_pos; "
                 "print('Portable import smoke test passed')"
             ),
         ],
         cwd=BUNDLE_DIR,
+        env=smoke_environment,
     )
 
 

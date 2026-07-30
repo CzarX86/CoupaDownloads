@@ -772,6 +772,34 @@ class CliProcessSupervisor:
                 })
             return result
 
+    def reset_local_state_preserving_files(self) -> dict[str, Any]:
+        """Forget local run records without deleting downloaded files."""
+        with self._lock:
+            if self.process and self.process.poll() is None:
+                return {"success": False, "error": "Stop the active run before starting clean."}
+        try:
+            with self._connect() as conn:
+                conn.execute("DELETE FROM retry_events")
+                conn.execute("DELETE FROM po_downloads")
+                conn.execute("DELETE FROM sessions")
+                try:
+                    conn.execute("DELETE FROM sqlite_sequence WHERE name IN ('sessions', 'po_downloads', 'retry_events')")
+                except sqlite3.OperationalError:
+                    pass
+                conn.commit()
+        except sqlite3.Error as exc:
+            return {"success": False, "error": f"Could not reset local run state: {exc}"}
+        self._session_metadata.clear()
+        try:
+            self._metadata_path.unlink(missing_ok=True)
+        except OSError as exc:
+            return {"success": False, "error": f"Could not reset local run metadata: {exc}"}
+        self.session_id = None
+        self.source_session_id = None
+        self.input_path = None
+        self.run_dir = None
+        return {"success": True, "files_preserved": True}
+
     def clear_all_sessions(self) -> dict[str, Any]:
         """Remove every completed run and reset the session auto-increment."""
         with self._lock:

@@ -76,11 +76,11 @@ document.addEventListener("DOMContentLoaded", () => {
         document.querySelectorAll(".learn-card p").forEach((element, index) => { element.innerText = learnParagraphs[index]; });
         const learnNotes = appSettings.language === "pt-BR" ? ["Colunas após <|> viram níveis de pasta. Campos obrigatórios vazios são informados antes do download.", "Etapas concluídas continuam disponíveis; etapas futuras explicam o que ainda falta.", "Downloads simultâneos são limitados a 8, com backoff adaptativo quando o Coupa aplica rate limit.", "O retry usa a mesma pasta e preserva arquivos válidos existentes.", "Excluir uma execução remove sua pasta; inputs originais fora dela são preservados.", "Telemetria não é enviada. Cookies, credenciais e documentos permanecem na máquina local."] : ["Columns after <|> become folder levels. Blank required fields are reported before downloading.", "Completed steps remain available; future steps explain what is still missing.", "Downloads simultaneous is capped at 8, with adaptive backoff when Coupa rate-limits requests.", "A retry uses the same folder and preserves valid existing files.", "Deleting a run removes its folder; original inputs outside it are preserved.", "No telemetry is sent. Cookies, credentials, and documents remain on the local machine."];
         document.querySelectorAll(".learn-note").forEach((element, index) => { element.innerText = learnNotes[index]; });
-        const settingsHeadings = appSettings.language === "pt-BR" ? ["Idioma", "Tamanho do texto", "Downloads", "Downloads simultâneos", "Política de retry", "Arquivos de e-mail (.msg)", "Arquivos duplicados", "Atualizações", "Retenção do histórico"] : ["Language", "Text size", "Downloads", "Downloads simultaneous", "Retry policy", "Email files (.msg)", "Duplicate files", "Updates", "History retention"];
+        const settingsHeadings = appSettings.language === "pt-BR" ? ["Idioma", "Tamanho do texto", "Downloads", "Downloads simultâneos", "Política de retry", "Arquivos de e-mail (.msg)", "Arquivos duplicados", "Atualizações", "Login do Coupa", "Começar limpo", "Retenção do histórico"] : ["Language", "Text size", "Downloads", "Downloads simultaneous", "Retry policy", "Email files (.msg)", "Duplicate files", "Updates", "Coupa sign-in", "Start clean", "History retention"];
         document.querySelectorAll(".settings-section h3").forEach((element, index) => { element.innerText = settingsHeadings[index]; });
         const panelHeadings = appSettings.language === "pt-BR" ? ["Escolha o input", "Valide o input", "Organize a hierarquia de pastas", "Escolha o local de salvamento", "Revise e inicie"] : ["Choose your input", "Validate your input", "Arrange folder hierarchy", "Choose the save location", "Review and start"];
         document.querySelectorAll("[data-journey-panel] .card-heading h3").forEach((element, index) => { element.innerText = panelHeadings[index]; });
-        const settingsDescriptions = appSettings.language === "pt-BR" ? ["Altera o idioma da interface. A saída do CLI e os logs permanecem em inglês.", "Ajusta a escala da interface para facilitar a leitura. A prévia é aplicada imediatamente e salva neste computador.", "Escolha a pasta base. Cada execução recebe uma subpasta com timestamp.", "Quantos POs o app processa ao mesmo tempo. Valores maiores podem aumentar a carga no servidor.", "Tentativas automáticas para um PO antes de marcá-lo como erro. O retry manual continua disponível no histórico.", "Escolha se arquivos de e-mail baixados são convertidos para PDF e se seus anexos são extraídos.", "Compara arquivos com SHA-256. Arquivos idênticos usam hard link quando possível ou um arquivo de referência.", "A verificação ao iniciar é opcional. Você sempre pode verificar, baixar, validar e instalar uma atualização manualmente.", "A limpeza automática só se aplica a execuções concluídas e nunca remove uma execução ativa."] : ["Changes the application interface language. CLI output and logs remain in English.", "Adjusts the interface scale for readability. The preview is applied immediately and saved on this computer.", "Choose the base folder. Each run receives its own timestamped subfolder.", "How many POs the app processes at the same time. Higher values may increase server load.", "Automatic attempts for a PO before marking it as failed. Manual retry remains available from History.", "Choose whether downloaded email files are converted to PDF and whether their attachments are extracted.", "Compare files with SHA-256. Identical files use a hard link when possible or a reference sidecar.", "Startup checks are optional. You can always check, download, verify, and install an update manually.", "Automatic cleanup only applies to completed runs and never removes an active run."];
+        const settingsDescriptions = appSettings.language === "pt-BR" ? ["Altera o idioma da interface. A saída do CLI e os logs permanecem em inglês.", "Ajusta a escala da interface para facilitar a leitura. A prévia é aplicada imediatamente e salva neste computador.", "Escolha a pasta base. Cada execução recebe uma subpasta com timestamp.", "Quantos POs o app processa ao mesmo tempo. Valores maiores podem aumentar a carga no servidor.", "Tentativas automáticas para um PO antes de marcá-lo como erro. O retry manual continua disponível no histórico.", "Escolha se arquivos de e-mail baixados são convertidos para PDF e se seus anexos são extraídos.", "Compara arquivos com SHA-256. Arquivos idênticos usam hard link quando possível ou um arquivo de referência.", "A verificação ao iniciar é opcional. Você sempre pode verificar, baixar, validar e instalar uma atualização manualmente.", "Limpa cookies do Coupa e o perfil Edge criado pelo app, sem apagar seu perfil Work, inputs, downloads ou relatórios.", "Esquece o histórico local e o login, preservando arquivos baixados, relatórios e inputs.", "A limpeza automática só se aplica a execuções concluídas e nunca remove uma execução ativa."] : ["Changes the application interface language. CLI output and logs remain in English.", "Adjusts the interface scale for readability. The preview is applied immediately and saved on this computer.", "Choose the base folder. Each run receives its own timestamped subfolder.", "How many POs the app processes at the same time. Higher values may increase server load.", "Automatic attempts for a PO before marking it as failed. Manual retry remains available from History.", "Choose whether downloaded email files are converted to PDF and whether their attachments are extracted.", "Compare files with SHA-256. Identical files use a hard link when possible or a reference sidecar.", "Startup checks are optional. You can always check, download, verify, and install an update manually.", "Clear Coupa cookies and the app-owned Edge profile without deleting your Work profile, inputs, downloads, or reports.", "Forget local run history and sign-in state while preserving downloaded files, reports, and original inputs.", "Automatic cleanup only applies to completed runs and never removes an active run."];
         document.querySelectorAll(".settings-section > div:first-child p").forEach((element, index) => { element.innerText = settingsDescriptions[index]; });
         const setMany = (selector, values) => document.querySelectorAll(selector).forEach((element, index) => { if (values[index] !== undefined) element.innerText = values[index]; });
         const pt = appSettings.language === "pt-BR";
@@ -110,6 +110,8 @@ document.addEventListener("DOMContentLoaded", () => {
         setMany("#screen-settings .intro-block .eyebrow", [pt ? "CONFIGURAÇÕES" : "SETTINGS"]);
         setMany("#screen-settings .intro-block p:not(.eyebrow)", [pt ? "Controle downloads, retries, atualizações e o tempo de permanência no histórico." : "Control downloads, retries, updates, and how long runs remain in history."]);
         setMany("#btn-check-updates", [pt ? "Verificar agora" : "Check now"]);
+        setMany("#btn-reset-auth", [pt ? "Zerar estado do login" : "Reset sign-in state"]);
+        setMany("#btn-reset-application", [pt ? "Zerar estado local" : "Reset local state"]);
         setMany("#settings-language option", pt ? ["English (padrão)", "Português (Brasil)"] : ["English (default)", "Português (Brasil)"]);
         setMany("#settings-font-scale option", pt ? ["Padrão — 100%", "Confortável — 110%", "Grande — 120%", "Extra grande — 130%"] : ["Standard — 100%", "Comfortable — 110%", "Large — 120%", "Extra large — 130%"]);
         setMany("#settings-concurrency option",  pt ? ["Conservador — 2 downloads", "Balanceado — 4 downloads", "Rápido — 6 downloads", "Máximo — 8 downloads"] : ["Conservative — 2 downloads", "Balanced — 4 downloads", "Fast — 6 downloads", "Custom maximum — 8 downloads"]);
@@ -688,13 +690,16 @@ document.addEventListener("DOMContentLoaded", () => {
         logToConsole("System", "Checking Coupa session…");
         let authCheck = { authenticated: true };
         if (hasApi("check_auth")) authCheck = await api().check_auth();
-        if (!authCheck.authenticated && authCheck.state === "unavailable") {
+        if (!authCheck.authenticated && authCheck.state === "unavailable" && !authCheck.has_cached_session) {
             updateAuthUI("unavailable", authCheck.message);
-            logToConsole("Warning", "The cached Coupa session could not be verified. Try again or authenticate manually.");
+            logToConsole("Warning", "Coupa could not be reached to verify the session. Check connectivity and try again.");
             $("#btn-start-run").disabled = false;
             return;
         }
-        if (!authCheck.authenticated) {
+        if (!authCheck.authenticated && authCheck.state === "unavailable") {
+            updateAuthUI("unavailable", authCheck.message);
+            logToConsole("Warning", "Session verification is unavailable; the CLI will try the cached Coupa session.");
+        } else if (!authCheck.authenticated) {
             updateAuthUI("authenticating");
             logToConsole("System", "Login required. Complete the Coupa login in Edge.");
             const authResult = hasApi("authenticate") ? await api().authenticate() : { success: false, error: "Authentication API unavailable." };
@@ -930,6 +935,25 @@ document.addEventListener("DOMContentLoaded", () => {
     $("#settings-font-scale").addEventListener("change", () => applyFontScale($("#settings-font-scale").value));
     $("#btn-save-settings").addEventListener("click", saveSettings);
     $("#btn-check-updates").addEventListener("click", () => checkForUpdates(true));
+    $("#btn-reset-auth").addEventListener("click", async () => {
+        if (!hasApi("reset_authentication")) return;
+        const pt = appSettings.language === "pt-BR";
+        const confirmed = confirm(pt
+            ? "Zerar o login do Coupa? Cookies e o perfil Edge criado pelo app serão removidos. Seu perfil Work, downloads, inputs e relatórios serão preservados. Feche todas as janelas do Edge antes de continuar."
+            : "Reset Coupa sign-in? Cached cookies and the app-owned Edge profile will be removed. Your Work profile, downloads, inputs, and reports will be preserved. Close all Edge windows first.");
+        if (!confirmed) return;
+        const button = $("#btn-reset-auth");
+        button.disabled = true;
+        const result = await api().reset_authentication();
+        button.disabled = false;
+        if (!result.success) {
+            $("#settings-status").innerText = result.error || (pt ? "Não foi possível zerar o login." : "Could not reset sign-in state.");
+            return;
+        }
+        updateAuthUI("unauthenticated");
+        $("#settings-status").innerText = pt ? "Estado do login zerado. Clique em Sign in para autenticar novamente." : "Sign-in state reset. Click Sign in to authenticate again.";
+        logToConsole("System", pt ? "Coupa sign-in state reset." : "Coupa sign-in state reset.");
+    });
     $("#btn-reset-settings").addEventListener("click", async () => {
         $("#settings-download-root").value = "";
         $("#settings-concurrency").value = "4";
@@ -943,6 +967,28 @@ document.addEventListener("DOMContentLoaded", () => {
         await ensureDefaultDestination();
         $("#settings-download-root").value = $("#download-dir").value.replace(/[\\/]run_[^\\/]+$/, "");
         await saveSettings();
+    });
+    $("#btn-reset-application").addEventListener("click", async () => {
+        if (!hasApi("reset_application_state")) return;
+        const pt = appSettings.language === "pt-BR";
+        const confirmed = confirm(pt
+            ? "Começar limpo? O histórico local, sessões e login serão apagados. Downloads, relatórios e inputs serão preservados. Feche o Edge e pare qualquer execução antes de continuar."
+            : "Start clean? Local history, sessions, and sign-in state will be cleared. Downloads, reports, and inputs will be preserved. Close Edge and stop any active run before continuing.");
+        if (!confirmed) return;
+        const button = $("#btn-reset-application");
+        button.disabled = true;
+        const result = await api().reset_application_state();
+        button.disabled = false;
+        if (!result.success) {
+            $("#settings-status").innerText = result.error || (pt ? "Não foi possível zerar o estado local." : "Could not reset local state.");
+            return;
+        }
+        updateAuthUI("unauthenticated");
+        pendingUpdate = null;
+        syncUpdateButton();
+        $("#settings-status").innerText = pt ? "Estado local zerado. Arquivos do usuário foram preservados." : "Local state reset. User files were preserved.";
+        logToConsole("System", pt ? "Local application state reset." : "Local application state reset.");
+        await loadHistory();
     });
     $("#btn-settings-choose-dir").addEventListener("click", async () => {
         if (!hasApi("select_directory")) return;

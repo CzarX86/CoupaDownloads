@@ -1,7 +1,7 @@
 import pytest
 from openpyxl import load_workbook
 
-from process_all_pos import export_original_like_excel_report
+from process_all_pos import export_original_like_excel_report, read_input_dataframe
 from src.db.session_db import PODownload, SessionDB
 
 
@@ -10,6 +10,18 @@ def temp_db(tmp_path):
     db = SessionDB(str(tmp_path / "sessions.db"))
     yield db
     db.close()
+
+
+def test_read_input_dataframe_supports_excel_and_cp1252_csv(tmp_path):
+    excel_path = tmp_path / "input.xlsx"
+    import pandas as pd
+    pd.DataFrame({"PO_NUMBER": ["PO-1"], "SUPPLIER": ["Companhia São Paulo"]}).to_excel(excel_path, index=False)
+    assert list(read_input_dataframe(str(excel_path))["PO_NUMBER"]) == ["PO-1"]
+
+    csv_path = tmp_path / "input.csv"
+    csv_path.write_bytes("PO_NUMBER;SUPPLIER\nPO-2;Companhia São Paulo\n".encode("cp1252"))
+    frame = read_input_dataframe(str(csv_path))
+    assert frame.iloc[0]["SUPPLIER"] == "Companhia São Paulo"
 
 
 def test_report_preserves_input_columns_and_updates_retry_result(temp_db, tmp_path):
