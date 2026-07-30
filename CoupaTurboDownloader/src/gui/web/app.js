@@ -4,6 +4,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const navButtons = { new: $("#btn-new"), progress: $("#btn-progress"), history: $("#btn-history"), learn: $("#btn-learn"), settings: $("#btn-settings") };
 
     let selectedFilePath = null;
+    let generatedTemplatePath = null;
     let importedSessionId = null;
     let activePollInterval = null;
     let fileMonitorInterval = null;
@@ -65,7 +66,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     function applyLanguage() {
-        const selectors = { "#btn-new": "newRun", "#btn-progress": "activeRun", "#btn-history": "history", "#btn-learn": "learn", "#btn-settings": "settings", "#btn-download-template": "createTemplate", "#btn-browse": "chooseFile", "#btn-open-selected-input": "openInput",  "#btn-next-input": "continueValidation", "#btn-next-hierarchy": "continueFolders", "#btn-next-destination": "continueDestination", "#btn-next-review": "reviewRun", "#btn-start-run": "start", "#btn-validate-file": "validate", "#btn-choose-dir": "chooseFolder", "#btn-save-settings": "saveSettings", "#btn-reset-settings": "resetDefaults" };
+        const selectors = { "#btn-new": "newRun", "#btn-progress": "activeRun", "#btn-history": "history", "#btn-learn": "learn", "#btn-settings": "settings", "#btn-download-template": "createTemplate", "#btn-browse": "chooseFile", "#btn-open-selected-input": "openInput",  "#btn-next-input": "continueValidation", "#btn-next-hierarchy": "continueFolders", "#btn-next-destination": "continueDestination", "#btn-next-review": "reviewRun", "#btn-start-run": "start", "#btn-start-over": "startOver", "#btn-validate-file": "validate", "#btn-choose-dir": "chooseFolder", "#btn-save-settings": "saveSettings", "#btn-reset-settings": "resetDefaults" };
         Object.entries(selectors).forEach(([selector, key]) => { const element = $(selector); if (element) element.innerText = t(key); });
         const content = journeyContent[appSettings.language] || journeyContent.en;
         $("#journey-title").innerText = content[journeyStep][0];
@@ -80,7 +81,7 @@ document.addEventListener("DOMContentLoaded", () => {
         document.querySelectorAll(".settings-section h3").forEach((element, index) => { element.innerText = settingsHeadings[index]; });
         const panelHeadings = appSettings.language === "pt-BR" ? ["Escolha o input", "Valide o input", "Organize a hierarquia de pastas", "Escolha o local de salvamento", "Revise e inicie"] : ["Choose your input", "Validate your input", "Arrange folder hierarchy", "Choose the save location", "Review and start"];
         document.querySelectorAll("[data-journey-panel] .card-heading h3").forEach((element, index) => { element.innerText = panelHeadings[index]; });
-        const settingsDescriptions = appSettings.language === "pt-BR" ? ["Altera o idioma da interface. A saída do CLI e os logs permanecem em inglês.", "Ajusta a escala da interface para facilitar a leitura. A prévia é aplicada imediatamente e salva neste computador.", "Escolha a pasta base. Cada execução recebe uma subpasta com timestamp.", "Quantos POs o app processa ao mesmo tempo. Valores maiores podem aumentar a carga no servidor.", "Tentativas automáticas para um PO antes de marcá-lo como erro. O retry manual continua disponível no histórico.", "Escolha se arquivos de e-mail baixados são convertidos para PDF e se seus anexos são extraídos.", "Compara arquivos com SHA-256. Arquivos idênticos usam hard link quando possível ou um arquivo de referência.", "A verificação ao iniciar é opcional. Você sempre pode verificar, baixar, validar e instalar uma atualização manualmente.", "Limpa cookies do Coupa e o perfil Edge criado pelo app, sem apagar seu perfil Work, inputs, downloads ou relatórios.", "Esquece o histórico local e o login, preservando arquivos baixados, relatórios e inputs.", "A limpeza automática só se aplica a execuções concluídas e nunca remove uma execução ativa."] : ["Changes the application interface language. CLI output and logs remain in English.", "Adjusts the interface scale for readability. The preview is applied immediately and saved on this computer.", "Choose the base folder. Each run receives its own timestamped subfolder.", "How many POs the app processes at the same time. Higher values may increase server load.", "Automatic attempts for a PO before marking it as failed. Manual retry remains available from History.", "Choose whether downloaded email files are converted to PDF and whether their attachments are extracted.", "Compare files with SHA-256. Identical files use a hard link when possible or a reference sidecar.", "Startup checks are optional. You can always check, download, verify, and install an update manually.", "Clear Coupa cookies and the app-owned Edge profile without deleting your Work profile, inputs, downloads, or reports.", "Forget local run history and sign-in state while preserving downloaded files, reports, and original inputs.", "Automatic cleanup only applies to completed runs and never removes an active run."];
+        const settingsDescriptions = appSettings.language === "pt-BR" ? ["Altera o idioma da interface. A saída do CLI e os logs permanecem em inglês.", "Ajusta a escala da interface para facilitar a leitura. A prévia é aplicada imediatamente e salva neste computador.", "Escolha a pasta base. Cada execução recebe uma subpasta com timestamp.", "Quantos POs o app processa ao mesmo tempo. Valores maiores podem aumentar a carga no servidor.", "Tentativas automáticas para um PO antes de marcá-lo como erro. O retry manual continua disponível no histórico.", "Escolha se arquivos de e-mail baixados são convertidos para PDF e se seus anexos são extraídos.", "Compara arquivos com SHA-256. Arquivos idênticos usam hard link quando possível ou um arquivo de referência.", "A verificação ao iniciar é opcional. Você sempre pode verificar, baixar, validar e instalar uma atualização manualmente.", "Usa o perfil existente do Edge. Feche todas as janelas do Edge antes do login; nenhum perfil novo é criado por padrão.", "Esquece o histórico local e o login, preservando arquivos baixados, relatórios e inputs.", "A limpeza automática só se aplica a execuções concluídas e nunca remove uma execução ativa."] : ["Changes the application interface language. CLI output and logs remain in English.", "Adjusts the interface scale for readability. The preview is applied immediately and saved on this computer.", "Choose the base folder. Each run receives its own timestamped subfolder.", "How many POs the app processes at the same time. Higher values may increase server load.", "Automatic attempts for a PO before marking it as failed. Manual retry remains available from History.", "Choose whether downloaded email files are converted to PDF and whether their attachments are extracted.", "Compare files with SHA-256. Identical files use a hard link when possible or a reference sidecar.", "Startup checks are optional. You can always check, download, verify, and install an update manually.", "Use the existing Edge profile. Close all Edge windows before sign-in; no new profile is created by default.", "Forget local run history and sign-in state while preserving downloaded files, reports, and original inputs.", "Automatic cleanup only applies to completed runs and never removes an active run."];
         document.querySelectorAll(".settings-section > div:first-child p").forEach((element, index) => { element.innerText = settingsDescriptions[index]; });
         const setMany = (selector, values) => document.querySelectorAll(selector).forEach((element, index) => { if (values[index] !== undefined) element.innerText = values[index]; });
         const pt = appSettings.language === "pt-BR";
@@ -91,6 +92,7 @@ document.addEventListener("DOMContentLoaded", () => {
         setMany("#screen-new .dropzone h3", [pt ? "Arraste o arquivo preenchido aqui" : "Drop your completed file here"]);
         setMany("#screen-new .dropzone p", [pt ? "Excel ou CSV · o arquivo original será preservado" : "Excel or CSV · the original file is preserved"]);
         setMany("#screen-new .journey-hint", [pt ? "O próximo passo verifica se todas as colunas obrigatórias existem." : "The next step checks that all required columns are present."]);
+        setMany("#btn-start-over", [pt ? "Começar de novo" : "Start over"]);
         setMany("[data-journey-panel] .card-heading p", pt ? ["Revise o arquivo antes de qualquer execução. Corrija o mesmo arquivo se necessário.", "Arraste os níveis para ordenar as pastas dos arquivos baixados.", "Selecione a pasta pai onde esta execução salvará seus anexos.", "Tudo está pronto. Confirme estas configurações para iniciar o download."] : ["Review the file before any run is created. Correct it in the same file if needed.", "Drag the levels into the order used for downloaded files.", "Select the parent folder where this run should store its attachments.", "Everything is ready. Confirm these settings to begin the download."]);
         setMany("[data-journey-panel] .journey-folder-guide small", [pt ? "Colunas após <|> viram pastas. Valores vazios viram Unknown." : "Columns after <|> become folders. Empty values become Unknown."]);
         setMany("[data-journey-panel='4'] .field-label", [pt ? "Pasta de download" : "Download folder"]);
@@ -397,6 +399,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     function setFile(filePath, fileName, fileSize) {
+        if (generatedTemplatePath && String(filePath || "") !== String(generatedTemplatePath)) generatedTemplatePath = null;
         selectedFilePath = filePath || null;
         selectedFileValidated = false;
         validatedFingerprint = null;
@@ -469,6 +472,34 @@ document.addEventListener("DOMContentLoaded", () => {
     });
     $("#btn-clear-file").addEventListener("click", clearFile);
 
+    async function startOver() {
+        const pt = appSettings.language === "pt-BR";
+        const hasJourneyState = Boolean(selectedFilePath || generatedTemplatePath || journeyMaxStep > 1);
+        if (!hasJourneyState) {
+            clearFile();
+            return;
+        }
+        const confirmed = confirm(pt
+            ? "Começar de novo? O template criado pelo aplicativo será excluído. Arquivos de input escolhidos por você serão preservados."
+            : "Start over? A template created by the application will be deleted. Input files chosen by you will be preserved.");
+        if (!confirmed) return;
+        if (hasApi("reset_new_run")) {
+            const result = await api().reset_new_run(generatedTemplatePath || selectedFilePath || "");
+            if (!result.success) {
+                logToConsole("Error", result.error || "Could not reset the new-run journey.");
+                return;
+            }
+        }
+        generatedTemplatePath = null;
+        hierarchyOrder = [];
+        clearFile();
+        $("#download-dir").value = "";
+        await ensureDefaultDestination();
+        logToConsole("System", pt ? "Nova jornada iniciada do zero." : "New journey started from zero.");
+    }
+
+    $("#btn-start-over").addEventListener("click", startOver);
+
     async function ensureDefaultDestination() {
         if ($("#download-dir").value) {
             $("#btn-next-review").disabled = false;
@@ -510,6 +541,7 @@ document.addEventListener("DOMContentLoaded", () => {
         const result = await api().generate_input_template();
         if (result.success) {
             setFile(result.path, result.path.split(/[\\/]/).pop());
+            generatedTemplatePath = result.path;
             // The generated template already defines these levels, even before
             // the user adds the first PO row and validates the workbook.
             setHierarchyColumns(["Company", "Year", "Quarter", "Business Unit"]);
@@ -939,8 +971,8 @@ document.addEventListener("DOMContentLoaded", () => {
         if (!hasApi("reset_authentication")) return;
         const pt = appSettings.language === "pt-BR";
         const confirmed = confirm(pt
-            ? "Zerar o login do Coupa? Cookies e o perfil Edge criado pelo app serão removidos. Seu perfil Work, downloads, inputs e relatórios serão preservados. Feche todas as janelas do Edge antes de continuar."
-            : "Reset Coupa sign-in? Cached cookies and the app-owned Edge profile will be removed. Your Work profile, downloads, inputs, and reports will be preserved. Close all Edge windows first.");
+            ? "Zerar o login do Coupa? O cache será removido. Seu perfil Edge existente, downloads, inputs e relatórios serão preservados. Feche todas as janelas do Edge antes de continuar."
+            : "Reset Coupa sign-in? The cache will be removed. Your existing Edge profile, downloads, inputs, and reports will be preserved. Close all Edge windows first.");
         if (!confirmed) return;
         const button = $("#btn-reset-auth");
         button.disabled = true;

@@ -134,6 +134,25 @@ def test_font_scale_setting_is_validated_and_persisted(temp_db, monkeypatch, tmp
     assert clamped["settings"]["font_scale"] == 1.3
 
 
+def test_reset_new_run_deletes_only_app_generated_template(temp_db, monkeypatch, tmp_path):
+    monkeypatch.setattr("src.gui.api.Path.home", lambda: tmp_path)
+    template_dir = tmp_path / "Documents" / "CoupaTurboDownloader" / "templates"
+    template_dir.mkdir(parents=True)
+    generated = template_dir / "input_template_20260729-213140.xlsx"
+    generated.write_bytes(b"template")
+    external = tmp_path / "input.xlsx"
+    external.write_bytes(b"original")
+    api = AppAPI(temp_db, "Downloads/CoupaAttachments")
+
+    deleted = api.reset_new_run(str(generated))
+    preserved = api.reset_new_run(str(external))
+
+    assert deleted == {"success": True, "deleted": True, "path": str(generated)}
+    assert not generated.exists()
+    assert preserved == {"success": True, "deleted": False, "preserved": True}
+    assert external.exists()
+
+
 def test_python_portable_disables_startup_update_checks_by_default(temp_db, monkeypatch, tmp_path):
     monkeypatch.setenv("COUPA_PYTHON_PORTABLE", "1")
     monkeypatch.setattr("src.gui.api.Path.home", lambda: tmp_path)

@@ -116,6 +116,12 @@ class TurboAPI(AppAPI):
         except Exception as e:
             return {"success": False, "error": str(e)}
 
+    def reset_new_run(self, filepath: str = "") -> dict:
+        result = super().reset_new_run(filepath)
+        if result.get("success"):
+            self._pending_input_path = None
+        return result
+
     def import_file(self, filepath: str) -> dict:
         """Validate and stage the input; the CLI creates the real session."""
         validation = self.validate_input_file(filepath)

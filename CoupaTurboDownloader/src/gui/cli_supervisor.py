@@ -142,10 +142,10 @@ class CliProcessSupervisor:
             return {"type": "Success", "message": "Coupa session validated."}
         if "Cookies expirados" in line or "Cached session expired" in line:
             return {"type": "Warning", "message": "The cached Coupa session expired; sign-in is required."}
-        if "perfil Work do Edge" in line:
-            return {"type": "System", "message": "Opening Edge with the corporate Work profile."}
+        if "perfil Work do Edge" in line or "perfil existente do Edge" in line:
+            return {"type": "System", "message": "Opening Edge with the existing user profile."}
         if "perfil persistente do app" in line or "perfil persistente do aplicativo" in line:
-            return {"type": "System", "message": "Opening Edge with the app's persistent sign-in profile."}
+            return {"type": "System", "message": "Opening Edge with the existing user profile."}
         if "Aguardando login" in line:
             return {"type": "System", "message": "Waiting for Coupa sign-in in Edge…"}
         if "Login detectado" in line:

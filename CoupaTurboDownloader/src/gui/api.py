@@ -751,7 +751,7 @@ class AppAPI:
         self._cookies = cookies
 
     def reset_authentication(self) -> Dict[str, Any]:
-        """Clear cached Coupa state and the app-owned Edge profile."""
+        """Clear cached Coupa state and any legacy app-owned Edge profile."""
         result = clear_cached_authentication(remove_app_profile=True)
         if result.get("success"):
             self._cookies = None
@@ -783,6 +783,27 @@ class AppAPI:
         except Exception as e:
             self._cookies = None
             return {"authenticated": False, "state": "unavailable", "message": str(e)}
+
+    def reset_new_run(self, filepath: str = "") -> Dict[str, Any]:
+        """Reset the wizard and remove only a template created by the app."""
+        import re
+
+        value = str(filepath or "").strip()
+        if not value:
+            return {"success": True, "deleted": False, "preserved": False}
+        path = Path(value).expanduser().resolve()
+        template_dir = (Path.home() / "Documents" / "CoupaTurboDownloader" / "templates").resolve()
+        is_generated_template = (
+            path.parent == template_dir
+            and re.fullmatch(r"input_template_\d{8}-\d{6}\.xlsx", path.name) is not None
+        )
+        if not is_generated_template:
+            return {"success": True, "deleted": False, "preserved": True}
+        try:
+            path.unlink(missing_ok=True)
+            return {"success": True, "deleted": True, "path": str(path)}
+        except OSError as exc:
+            return {"success": False, "error": f"Could not delete the generated template: {exc}"}
 
     def generate_input_template(self) -> Dict[str, Any]:
         """Generate a template CSV file ready for the user to populate with PO data.
