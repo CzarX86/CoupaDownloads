@@ -101,12 +101,56 @@ def _copy_application() -> None:
 
 
 def _write_launchers() -> None:
+    (APP_DIR / "launcher.py").write_text(
+        '''from __future__ import annotations
+
+import ctypes
+import runpy
+import traceback
+from datetime import datetime
+from pathlib import Path
+
+BUNDLE_DIR = Path(__file__).resolve().parent.parent
+MAIN = BUNDLE_DIR / "app" / "src" / "main.py"
+LOG = BUNDLE_DIR / "startup.log"
+
+
+def write_log(message: str) -> None:
+    try:
+        with LOG.open("a", encoding="utf-8") as stream:
+            stream.write(f"[{datetime.now().isoformat(timespec='seconds')}] {message}\\n")
+    except OSError:
+        pass
+
+
+write_log("Starting Coupa Turbo Downloader")
+try:
+    runpy.run_path(str(MAIN), run_name="__main__")
+except Exception:
+    details = traceback.format_exc()
+    write_log(details)
+    try:
+        ctypes.windll.user32.MessageBoxW(
+            0,
+            "Coupa Turbo Downloader could not start.\\n\\nSee startup.log in the application folder.",
+            "Coupa Turbo Downloader",
+            0x10,
+        )
+    except Exception:
+        pass
+    raise
+''',
+        encoding="utf-8",
+    )
     (BUNDLE_DIR / "Start-CoupaTurbo.cmd").write_text(
         "@echo off\r\n"
         "setlocal\r\n"
         "set \"COUPA_PYTHON_PORTABLE=1\"\r\n"
         "cd /d \"%~dp0\"\r\n"
-        "start \"Coupa Turbo Downloader\" \"%~dp0runtime\\pythonw.exe\" \"%~dp0app\\src\\main.py\"\r\n",
+        "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \"try { $root = [IO.Path]::GetFullPath($args[0]); Get-ChildItem -LiteralPath $root -Recurse -File | Unblock-File; exit 0 } catch { $_ | Out-File -FilePath ([IO.Path]::Combine($root, 'startup.log')) -Append; exit 1 }\" \"%~dp0\"\r\n"
+        "if not exist \"%~dp0runtime\\pythonw.exe\" (echo Portable Python runtime was not found. & pause & exit /b 1)\r\n"
+        "start \"Coupa Turbo Downloader\" \"%~dp0runtime\\pythonw.exe\" \"%~dp0app\\launcher.py\"\r\n"
+        "exit /b 0\r\n",
         encoding="ascii",
     )
     (BUNDLE_DIR / "Run-Diagnostics.cmd").write_text(
@@ -143,7 +187,8 @@ def _write_launchers() -> None:
         "official Python Software Foundation embedded distribution.\n\n"
         "Automatic update checks are disabled by default in this edition.\n"
         "Use Settings > Updates > Check now for a manual verified update.\n"
-        "Application data and downloads remain outside this folder.\n",
+        "Application data and downloads remain outside this folder.\n"
+        "If the GUI does not open, check startup.log in this folder.\n",
         encoding="utf-8",
     )
 
