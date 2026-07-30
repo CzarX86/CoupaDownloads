@@ -495,6 +495,13 @@ def run_probe(
             page.locator("#file-input").set_input_files(str(sample_csv))
             steps.append("selected-input-file")
             page.screenshot(path=str(run_dir / "02_file_selected.png"), full_page=True)
+
+            # Guardrail: Start over must reset the journey and re-enable input.
+            page.click("#btn-start-over")
+            steps.append("start-over-clicked")
+            page.locator("#file-input").set_input_files(str(sample_csv))
+            steps.append("re-selected-after-start-over")
+
             page.click("#btn-next-input")
             page.wait_for_selector("#validation-feedback:not([hidden])")
             page.click("#btn-next-hierarchy")
@@ -508,7 +515,7 @@ def run_probe(
                 steps.append("confirmed-folder-structure")
 
             page.wait_for_selector("#screen-progress.active")
-            page.wait_for_timeout(1000)
+            page.wait_for_timeout(1500)
             steps.append("progress-visible")
             pause_button = page.locator("#btn-pause-resume")
             if pause_button.is_enabled():
