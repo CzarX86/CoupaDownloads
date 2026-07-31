@@ -24,7 +24,7 @@ env:
 
 defaults:
   run:
-    working-directory: CoupaTurboDownloader
+    working-directory: ContractDownloader
 
 jobs:
   build-windows:
@@ -44,16 +44,16 @@ jobs:
         run: uv python install ${{ env.PYTHON_VERSION }}
 
       - name: Install project and build dependencies
-        run: uv sync --package coupaturbodownloader --group dev --group build --locked
+        run: uv sync --package contractdownloader --group dev --group build --locked
 
       - name: Install Playwright Chromium
-        run: uv run --package coupaturbodownloader playwright install chromium
+        run: uv run --package contractdownloader playwright install chromium
 
       - name: Run tests
-        run: uv run --package coupaturbodownloader pytest -q -m "not integration"
+        run: uv run --package contractdownloader pytest -q -m "not integration"
 
       - name: Build Windows executable
-        run: uv run --package coupaturbodownloader --group build python build.py --windows
+        run: uv run --package contractdownloader --group build python build.py --windows
 
       - name: Verify Windows executable
         shell: pwsh
@@ -71,12 +71,12 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: contract-downloader-windows
-          path: CoupaTurboDownloader/dist/ContractDownloader-windows-x64.zip
+          path: ContractDownloader/dist/ContractDownloader-windows-x64.zip
           if-no-files-found: error
           retention-days: 14
 
       - name: Build Python portable bundle
-        run: uv run --package coupaturbodownloader python build_python_portable.py
+        run: uv run --package contractdownloader python build_python_portable.py
 
       - name: Verify official Python signatures
         shell: pwsh
@@ -99,7 +99,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: contract-downloader-windows-portable
-          path: CoupaTurboDownloader/dist/ContractDownloader-windows-python-portable-x64.zip
+          path: ContractDownloader/dist/ContractDownloader-windows-python-portable-x64.zip
           if-no-files-found: error
           retention-days: 14
 
@@ -120,16 +120,16 @@ jobs:
         run: uv python install ${{ env.PYTHON_VERSION }}
 
       - name: Install project and build dependencies
-        run: uv sync --package coupaturbodownloader --group dev --group build --locked
+        run: uv sync --package contractdownloader --group dev --group build --locked
 
       - name: Install Playwright Chromium
-        run: uv run --package coupaturbodownloader playwright install chromium
+        run: uv run --package contractdownloader playwright install chromium
 
       - name: Run tests
-        run: uv run --package coupaturbodownloader pytest -q -m "not integration"
+        run: uv run --package contractdownloader pytest -q -m "not integration"
 
       - name: Build macOS application
-        run: uv run --package coupaturbodownloader --group build python build.py --macos
+        run: uv run --package contractdownloader --group build python build.py --macos
 
       - name: Verify macOS application
         run: test -d dist/ContractDownloader.app
@@ -141,7 +141,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: contract-downloader-macos
-          path: CoupaTurboDownloader/dist/ContractDownloader-macos.zip
+          path: ContractDownloader/dist/ContractDownloader-macos.zip
           if-no-files-found: error
           retention-days: 14
 
