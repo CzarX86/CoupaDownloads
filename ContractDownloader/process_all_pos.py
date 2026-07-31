@@ -211,31 +211,51 @@ def _extract_hierarchy_columns(
         if str(c).strip() == "<|>":
             sep_col = c
             break
-    if sep_col is None:
+
+    cols = [str(c) for c in df.columns]
+    if requested_order is not None and not requested_order:
+        # The GUI explicitly disabled every optional level: only Supplier is used.
+        return [], False
+    if sep_col is not None:
+        sep_idx = cols.index(str(sep_col))
+        hierarchy_cols = cols[sep_idx + 1 :]
+    elif requested_order is not None:
+        # Non-standard inputs without the <|> separator: every column is a
+        # hierarchy candidate; the GUI decides which ones to enable.
+        hierarchy_cols = cols
+    else:
+        # Plain CLI input without <|> and without an explicit order keeps the
+        # classic behavior: only the supplier folder level is created.
         return [], False
 
-    cols = list(df.columns)
-    sep_idx = cols.index(sep_col)
-    hierarchy_cols = cols[sep_idx + 1 :]
     if requested_order:
-        requested = [str(column) for column in requested_order if str(column) in hierarchy_cols]
-        hierarchy_cols = requested + [column for column in hierarchy_cols if column not in requested]
+        # Explicit user order wins: these are exactly the columns the GUI
+        # enabled, in the chosen order (Supplier and PO are handled outside).
+        requested = [str(column) for column in requested_order if str(column) in cols]
+        if requested:
+            hierarchy_cols = requested
     if not hierarchy_cols:
         return [], False
 
+    # A column that is 100% empty in the input cannot drive folder creation.
+    # The GUI still reports it as a warning; the pipeline simply ignores it.
+    populated = []
     for col in hierarchy_cols:
         series = df[col].fillna("").astype(str).str.strip()
         series = series[(series != "") & (series.str.lower() != "nan")]
         if not series.empty:
-            return hierarchy_cols, True
-    return hierarchy_cols, False
+            populated.append(col)
+    if not populated:
+        return hierarchy_cols, False
+    return populated, True
 
 
 def _build_output_subdir(row: pd.Series, supplier: str, hierarchy_cols: list[str], has_hierarchy_data: bool) -> str:
+    # Supplier is always the first folder level; optional hierarchy columns
+    # come next. The PO itself is never a subdir part (it is the file level).
+    parts = [_clean_folder_part(supplier)]
     if has_hierarchy_data and hierarchy_cols:
-        parts = [_clean_folder_part(row.get(col, "")) for col in hierarchy_cols]
-    else:
-        parts = [str(supplier).strip() or "Unknown"]
+        parts.extend(_clean_folder_part(row.get(col, "")) for col in hierarchy_cols)
     return PurePosixPath(*parts).as_posix()
 
 
@@ -243,13 +263,18 @@ def build_output_subdir_map_from_csv(input_csv: str) -> dict[str, str]:
     if not input_csv or not os.path.exists(input_csv):
         return {}
 
+    from src.engine.input_schema import parse_mapping_env
+
     df = read_input_dataframe(input_csv)
+    mapping = parse_mapping_env() or {}
+    po_name = mapping.get("po") or "PO_NUMBER"
+    supplier_name = mapping.get("supplier") or "SUPPLIER"
     hierarchy_cols, has_hierarchy_data = _extract_hierarchy_columns(df)
     po_to_subdir: dict[str, str] = {}
 
     for _, row in df.iterrows():
-        po = str(row.get("PO_NUMBER", "")).strip()
-        supplier = str(row.get("SUPPLIER", "")).strip()
+        po = str(row.get(po_name, "")).strip()
+        supplier = str(row.get(supplier_name, "")).strip()
         if po and po.lower() != "nan" and supplier and supplier.lower() != "nan":
             po_to_subdir[po] = _build_output_subdir(row, supplier, hierarchy_cols, has_hierarchy_data)
     return po_to_subdir
@@ -383,16 +408,25 @@ def create_session_from_csv(
     input_csv: str,
     execution_type: str = "PROD",
     hierarchy_order: list[str] | None = None,
+    po_column: str | None = None,
+    supplier_column: str | None = None,
+    description: str | None = None,
 ) -> tuple[int, int]:
     cursor = db.conn.cursor()
     df = read_input_dataframe(input_csv)
     hierarchy_cols, has_hierarchy_data = _extract_hierarchy_columns(df, hierarchy_order)
-    session_id = db.create_session(os.path.basename(input_csv), execution_type=execution_type)
+    session_id = db.create_session(
+        os.path.basename(input_csv),
+        execution_type=execution_type,
+        description=description or None,
+    )
 
+    po_name = po_column or "PO_NUMBER"
+    supplier_name = supplier_column or "SUPPLIER"
     count = 0
     for _, row in df.iterrows():
-        po = str(row.get("PO_NUMBER", "")).strip()
-        company = str(row.get("SUPPLIER", "")).strip()
+        po = str(row.get(po_name, "")).strip()
+        company = str(row.get(supplier_name, "")).strip()
         if po and po.lower() != "nan" and company and company.lower() != "nan":
             output_subdir = _build_output_subdir(row, company, hierarchy_cols, has_hierarchy_data)
             cursor.execute(
@@ -741,11 +775,17 @@ async def main():
                 hierarchy_order = json.loads(os.environ["COUPA_HIERARCHY_ORDER"])
             except json.JSONDecodeError:
                 hierarchy_order = None
+        from src.engine.input_schema import parse_mapping_env
+        column_mapping = parse_mapping_env() or {}
+        run_description = os.environ.get("COUPA_RUN_DESCRIPTION") or None
         session_id, count = create_session_from_csv(
             db,
             INPUT_CSV,
             execution_type=run_type,
             hierarchy_order=hierarchy_order,
+            po_column=column_mapping.get("po"),
+            supplier_column=column_mapping.get("supplier"),
+            description=run_description,
         )
         print(f"[INFO] {count} POs imported and queued for processing.")
         print(f"[INFO] Session type: {run_type}")

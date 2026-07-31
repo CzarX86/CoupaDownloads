@@ -107,7 +107,7 @@ def test_output_subdir_uses_posix_separators_regardless_of_platform() -> None:
     row = pd.Series({"Year": "2026", "Quarter": "Q1", "BU": "Americas"})
     subdir = _build_output_subdir(row, "Supplier", ["Year", "Quarter", "BU"], has_hierarchy_data=True)
     assert "\\" not in subdir
-    assert subdir == "2026/Q1/Americas"
+    assert subdir == "Supplier/2026/Q1/Americas"
 
 
 # ── Settings JSON survives round-trip on both platforms ─────────────────

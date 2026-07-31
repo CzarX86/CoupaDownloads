@@ -109,6 +109,80 @@ class AppAPI:
         self.default_download_dir = root
         return root
 
+    # ------------------------------------------------------------------
+    # Column mapping persistence (per input file)
+    # ------------------------------------------------------------------
+    def _column_mappings_path(self):
+        return self._settings_path.parent / "column_mappings.json"
+
+    def _load_column_mappings(self) -> Dict[str, Dict[str, str]]:
+        try:
+            data = json.loads(self._column_mappings_path().read_text(encoding="utf-8"))
+            return data if isinstance(data, dict) else {}
+        except (OSError, ValueError):
+            return {}
+
+    def _save_column_mappings(self, mappings: Dict[str, Dict[str, str]]) -> None:
+        try:
+            self._column_mappings_path().parent.mkdir(parents=True, exist_ok=True)
+            self._column_mappings_path().write_text(json.dumps(mappings, indent=2), encoding="utf-8")
+        except OSError:
+            pass
+
+    def _mapping_for(self, filepath: str) -> Dict[str, str]:
+        key = str(Path(filepath).expanduser().resolve())
+        stored = self._load_column_mappings().get(key, {})
+        return {k: v for k, v in stored.items() if v}
+
+    def get_input_columns(self, filepath: str) -> Dict[str, Any]:
+        """Return the input headers plus auto-detected PO/Supplier columns."""
+        from src.engine.input_schema import columns_of_dataframe, detect_required_columns
+
+        path = Path(filepath)
+        if not path.exists():
+            return {"success": False, "error": f"File not found: {filepath}"}
+        try:
+            if path.suffix.lower() in {".xlsx", ".xls"}:
+                frame = pd.read_excel(path, dtype=str, nrows=5)
+            else:
+                with open(path, encoding="utf-8-sig") as handle:
+                    sample = handle.read(4096)
+                sep = ";" if sample.count(";") > sample.count(",") else ","
+                frame = pd.read_csv(path, sep=sep, dtype=str, encoding="utf-8-sig", nrows=5)
+        except Exception as exc:
+            return {"success": False, "error": f"Could not read the input file: {exc}"}
+        columns = columns_of_dataframe(frame)
+        return {
+            "success": True,
+            "columns": columns,
+            "detected": detect_required_columns(columns),
+            "mapping": self._mapping_for(str(path)),
+        }
+
+    def map_input_columns(self, filepath: str, mapping: Dict[str, Any]) -> Dict[str, Any]:
+        """Store an explicit PO/Supplier column mapping and re-validate."""
+        from src.engine.input_schema import REQUIRED_FIELDS, resolve_mapping
+
+        path = Path(filepath)
+        if not path.exists():
+            return {"success": False, "error": f"File not found: {filepath}"}
+        columns = self.get_input_columns(str(path)).get("columns", [])
+        requested = {str(key).lower(): str(value or "").strip() for key, value in (mapping or {}).items()}
+        resolved = resolve_mapping(columns, requested)
+        missing = [field for field in REQUIRED_FIELDS if not resolved.get(field)]
+        if missing:
+            return {
+                "success": False,
+                "error": f"Mapping is incomplete. Required fields: {', '.join(REQUIRED_FIELDS)}.",
+                "missing": missing,
+            }
+        stored = self._load_column_mappings()
+        key = str(path.expanduser().resolve())
+        stored[key] = {"po": resolved["po"], "supplier": resolved["supplier"]}
+        self._save_column_mappings(stored)
+        validation = self.validate_input_file(str(path))
+        return {"success": True, "mapping": stored[key], **validation}
+
     def get_app_settings(self) -> Dict[str, Any]:
         settings = self._read_settings()
         settings["download_root"] = self.default_download_dir
@@ -944,19 +1018,20 @@ class AppAPI:
         }
 
     def validate_input_file(self, filepath: str) -> Dict[str, Any]:
-        """Validate a populated CSV file before importing.
+        """Validate a populated CSV/XLSX file before importing.
 
-        Checks:
-          - File exists and is readable
-          - Required columns present (PO_NUMBER or equivalent)
-          - Supplier/company column present
-          - No empty PO numbers
-          - No duplicate PO numbers
-
-        Returns a list of errors/warnings so the user can fix them in-place.
+        Errors are grouped by cause so the UI can offer a targeted fix per
+        group (remove blank rows, remove duplicate POs, clean invalid
+        characters) or open the file for assisted editing when no safe
+        automatic repair exists.
         """
         import re
         from pathlib import Path
+        from src.engine.input_schema import (
+            columns_of_dataframe,
+            normalize_column_name,
+            resolve_mapping,
+        )
 
         path = Path(filepath)
         if not path.exists():
@@ -987,47 +1062,63 @@ class AppAPI:
         except Exception as e:
             return {"valid": False, "errors": [f"Failed to parse input file: {e}"], "warnings": []}
 
+        mapping = resolve_mapping(columns_of_dataframe(df), self._mapping_for(str(path)))
+
         hierarchy_columns = []
+        empty_hierarchy_columns = []
         sep_column = next((column for column in df.columns if str(column).strip() == "<|>"), None)
         if sep_column is not None:
             hierarchy_columns = [str(column) for column in list(df.columns)[list(df.columns).index(sep_column) + 1:]]
+        else:
+            # Non-standard inputs without the <|> separator: every column
+            # except the mapped PO/Supplier is a hierarchy candidate.
+            excluded = {mapping.get("po"), mapping.get("supplier")}
+            hierarchy_columns = [str(column) for column in df.columns if str(column) not in excluded]
+        for column in hierarchy_columns:
+            series = df[column].fillna("").astype(str).str.strip()
+            series = series[(series != "") & (series.str.lower() != "nan")]
+            if series.empty:
+                empty_hierarchy_columns.append(str(column))
+
+        mapping = resolve_mapping(columns_of_dataframe(df), self._mapping_for(str(path)))
 
         errors: list[str] = []
         warnings: list[str] = []
         fixes: list[Dict[str, Any]] = []
+        groups: list[Dict[str, Any]] = []
         valid_count = 0
 
-        # Normalize column names for matching
-        def norm(col):
-            return re.sub(r"[^a-z0-9]+", "", str(col).lower().strip())
-
-        norm_cols = {norm(c): c for c in df.columns}
-
         # Required: PO column
-        po_keys = ["ponumber", "po", "pedido"]
-        po_col = None
-        for key in po_keys:
-            if key in norm_cols:
-                po_col = norm_cols[key]
-                break
+        po_col = mapping.get("po")
         if not po_col:
             errors.append(
                 f"Missing PO Number column. Expected one of: PO_NUMBER, PO, Pedido. "
                 f"Found: {list(df.columns)}"
             )
+            groups.append({
+                "id": "missing_po_column",
+                "severity": "error",
+                "title": "Missing PO Number column",
+                "count": 1,
+                "fixable": False,
+                "mapping": True,
+            })
 
         # Required: company/supplier column
-        company_keys = ["legalentity", "companycode", "empresa", "supplier"]
-        company_col = None
-        for key in company_keys:
-            if key in norm_cols:
-                company_col = norm_cols[key]
-                break
+        company_col = mapping.get("supplier")
         if not company_col:
             errors.append(
                 f"Missing Supplier/Company column. Expected one of: SUPPLIER, LegalEntity, CompanyCode, Empresa. "
                 f"Found: {list(df.columns)}"
             )
+            groups.append({
+                "id": "missing_supplier_column",
+                "severity": "error",
+                "title": "Missing Supplier/Company column",
+                "count": 1,
+                "fixable": False,
+                "mapping": True,
+            })
 
         if not errors:
             # Validate rows. Empty required values are errors because the user
@@ -1050,8 +1141,27 @@ class AppAPI:
                     "count": len(blank_rows),
                     "description": f"Remove {len(blank_rows)} completely blank row(s)",
                 })
+                groups.append({
+                    "id": "blank_rows",
+                    "severity": "error",
+                    "title": "Blank rows",
+                    "count": len(blank_rows),
+                    "rows": blank_rows[:10],
+                    "fix_action": "remove_blank_rows",
+                    "fixable": True,
+                    "message": f"Row(s) completely empty: {blank_rows[:10]}",
+                })
             if partial_rows:
                 errors.append(f"Missing PO Number or Supplier on row(s): {partial_rows[:10]}")
+                groups.append({
+                    "id": "partial_rows",
+                    "severity": "error",
+                    "title": "Rows with missing PO or Supplier",
+                    "count": len(partial_rows),
+                    "rows": partial_rows[:10],
+                    "fixable": False,
+                    "message": f"Row(s) without PO Number or Supplier: {partial_rows[:10]}",
+                })
 
             clean = df.loc[~empty_mask].copy()
             duplicates = clean[clean.duplicated(subset=[po_col], keep=False)]
@@ -1063,6 +1173,41 @@ class AppAPI:
                     "count": int(duplicates[po_col].nunique()),
                     "description": "Keep the first row for each duplicated PO Number",
                 })
+                groups.append({
+                    "id": "duplicate_pos",
+                    "severity": "error",
+                    "title": "Duplicate PO numbers",
+                    "count": int(duplicates[po_col].nunique()),
+                    "rows": dup_pos,
+                    "fix_action": "remove_duplicate_pos",
+                    "fixable": True,
+                    "message": f"PO(s) repeated in the file: {dup_pos}",
+                })
+
+            # Invalid characters in the PO column (safe automatic cleanup).
+            char_pattern = re.compile(r"[^A-Za-z0-9_\-]")
+            dirty_pos = []
+            for value in clean[po_col].astype(str):
+                stripped = value.strip()
+                if stripped and char_pattern.search(stripped):
+                    dirty_pos.append(value)
+            if dirty_pos:
+                errors.append(f"PO Number(s) with unusual characters: {dirty_pos[:5]}")
+                fixes.append({
+                    "action": "clean_invalid_chars",
+                    "count": len(dirty_pos),
+                    "description": f"Remove unusual characters from {len(dirty_pos)} PO Number(s)",
+                })
+                groups.append({
+                    "id": "invalid_chars",
+                    "severity": "error",
+                    "title": "PO numbers with unusual characters",
+                    "count": len(dirty_pos),
+                    "rows": dirty_pos[:10],
+                    "fix_action": "clean_invalid_chars",
+                    "fixable": True,
+                    "message": "PO values contain characters outside letters, digits, '-' and '_'.",
+                })
 
             invalid_pos: list[str] = []
             for value in clean[po_col].astype(str):
@@ -1073,6 +1218,15 @@ class AppAPI:
                     f"{len(invalid_pos)} PO(s) have an unusual format (expected PO/PM prefix or digits): "
                     f"{invalid_pos[:5]}"
                 )
+                groups.append({
+                    "id": "unusual_format",
+                    "severity": "warning",
+                    "title": "PO numbers with an unusual format",
+                    "count": len(invalid_pos),
+                    "rows": invalid_pos[:10],
+                    "fixable": False,
+                    "message": "Expected values starting with PO/PM or only digits. Review these values in the file.",
+                })
 
             valid_count = len(clean.drop_duplicates(subset=[po_col]))
             if valid_count == 0:
@@ -1082,9 +1236,12 @@ class AppAPI:
             "valid": len(errors) == 0,
             "errors": errors,
             "warnings": warnings,
+            "groups": groups,
             "total_rows": len(df),
             "valid_po_count": valid_count if not errors else 0,
             "hierarchy_columns": hierarchy_columns,
+            "empty_hierarchy_columns": empty_hierarchy_columns,
+            "mapping": mapping,
             "fixes": fixes,
             "file_state": file_state,
         }
@@ -1099,7 +1256,7 @@ class AppAPI:
             return {"success": False, "error": "Save and close the input file before applying repairs."}
 
         actions = set(actions or [])
-        if not actions.intersection({"remove_blank_rows", "remove_duplicate_pos"}):
+        if not actions.intersection({"remove_blank_rows", "remove_duplicate_pos", "clean_invalid_chars"}):
             return {"success": False, "error": "No supported repair was selected."}
 
         if path.suffix.lower() == ".xls":
@@ -1110,10 +1267,17 @@ class AppAPI:
         shutil.copy2(path, backup)
         removed_blank = 0
         removed_duplicates = 0
+        cleaned_chars = 0
 
         def norm(column: Any) -> str:
             import re
             return re.sub(r"[^a-z0-9]+", "", str(column).lower().strip())
+
+        import re
+        char_pattern = re.compile(r"[^A-Za-z0-9_\-]")
+
+        def clean_value(value: str) -> str:
+            return char_pattern.sub("", value) if char_pattern.search(value) else value
 
         if path.suffix.lower() in {".xlsx", ".xlsm"}:
             from openpyxl import load_workbook
@@ -1135,7 +1299,13 @@ class AppAPI:
                     removed_blank += 1
                     continue
                 po_value = str(sheet.cell(row_number, po_column).value or "").strip()
-                if po_value and "remove_duplicate_pos" in actions:
+                if not po_value:
+                    continue
+                if "clean_invalid_chars" in actions and char_pattern.search(po_value):
+                    sheet.cell(row_number, po_column).value = clean_value(po_value)
+                    cleaned_chars += 1
+                    po_value = clean_value(po_value)
+                if "remove_duplicate_pos" in actions:
                     if po_value in seen_pos:
                         rows_to_remove.add(row_number)
                         removed_duplicates += 1
@@ -1160,6 +1330,10 @@ class AppAPI:
             if "remove_blank_rows" in actions:
                 removed_blank = int(blank_mask.sum())
                 frame = frame.loc[~blank_mask]
+            if "clean_invalid_chars" in actions:
+                mask = frame[po_column].fillna("").astype(str).str.strip().str.contains(char_pattern, regex=True)
+                frame.loc[mask, po_column] = frame.loc[mask, po_column].astype(str).map(clean_value)
+                cleaned_chars = int(mask.sum())
             if "remove_duplicate_pos" in actions:
                 duplicate_mask = frame.duplicated(subset=[po_column], keep="first")
                 removed_duplicates = int(duplicate_mask.sum())
@@ -1171,11 +1345,13 @@ class AppAPI:
             "backup_path": str(backup),
             "removed_blank_rows": removed_blank,
             "removed_duplicate_rows": removed_duplicates,
+            "cleaned_invalid_chars": cleaned_chars,
             "message": "Safe repairs applied. The original file was backed up.",
         }
 
     def import_file(self, filepath: str) -> Dict[str, Any]:
         import re
+        from src.engine.input_schema import columns_of_dataframe, resolve_mapping
         try:
             if not os.path.exists(filepath):
                 return {'success': False, 'error': f"File not found: {filepath}"}
@@ -1203,47 +1379,34 @@ class AppAPI:
                 text = text.strip('._')
                 return text or 'Unknown'
 
-            def extract_hierarchy_columns(frame: pd.DataFrame) -> tuple[list[str], bool]:
+            def extract_hierarchy_columns(frame: pd.DataFrame, exclude: set[str]) -> tuple[list[str], bool]:
                 sep_col = None
                 for c in frame.columns:
                     if str(c).strip() == '<|>':
                         sep_col = c
                         break
-                if sep_col is None:
-                    return [], False
 
-                cols = list(frame.columns)
-                hierarchy_cols = cols[cols.index(sep_col) + 1:]
+                cols = [str(c) for c in frame.columns]
+                if sep_col is not None:
+                    hierarchy_cols = cols[cols.index(str(sep_col)) + 1:]
+                else:
+                    # Non-standard inputs: all columns except PO/Supplier.
+                    hierarchy_cols = [c for c in cols if c not in exclude]
                 if not hierarchy_cols:
                     return [], False
 
+                populated = []
                 for col in hierarchy_cols:
                     series = frame[col].fillna('').astype(str).str.strip()
                     series = series[(series != '') & (series.str.lower() != 'nan')]
                     if not series.empty:
-                        return hierarchy_cols, True
-                return hierarchy_cols, False
+                        populated.append(col)
+                return hierarchy_cols, bool(populated)
 
-            hierarchy_cols, has_hierarchy_data = extract_hierarchy_columns(df)
-
-            def norm(col):
-                return re.sub(r'[^a-z0-9]+', '', str(col).lower().strip())
-            norm_cols = {norm(col): col for col in df.columns}
-
-            po_keys = ['ponumber', 'po', 'pedido']
-            company_keys = ['legalentity', 'companycode', 'empresa', 'supplier']
-
-            po_col = None
-            for key in po_keys:
-                if key in norm_cols:
-                    po_col = norm_cols[key]
-                    break
-
-            company_col = None
-            for key in company_keys:
-                if key in norm_cols:
-                    company_col = norm_cols[key]
-                    break
+            mapping = resolve_mapping(columns_of_dataframe(df), self._mapping_for(filepath))
+            po_col = mapping.get('po')
+            company_col = mapping.get('supplier')
+            hierarchy_cols, has_hierarchy_data = extract_hierarchy_columns(df, {po_col, company_col})
 
             if not po_col:
                 return {'success': False, 'error': f"Could not find PO Number column. Found columns: {list(df.columns)}"}
@@ -1261,11 +1424,12 @@ class AppAPI:
                 po_val = str(row[po_col]).strip()
                 company_val = str(row[company_col]).strip()
                 if po_val and po_val.lower() != 'nan' and company_val and company_val.lower() != 'nan':
+                    # Supplier is always the first folder level; optional
+                    # hierarchy columns come next (PO stays at the file level).
+                    parts = [clean_folder_part(company_val)]
                     if has_hierarchy_data and hierarchy_cols:
-                        parts = [clean_folder_part(row.get(col, '')) for col in hierarchy_cols]
-                        output_subdir = PurePosixPath(*parts).as_posix()
-                    else:
-                        output_subdir = company_val
+                        parts.extend(clean_folder_part(row.get(col, '')) for col in hierarchy_cols)
+                    output_subdir = PurePosixPath(*parts).as_posix()
 
                     self.db.add_po(PODownload(
                         session_id=session_id,

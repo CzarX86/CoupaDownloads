@@ -32,11 +32,13 @@ Quando solicitado:
 
 1. Escolha o arquivo Excel ou CSV de input.
 2. Valide o arquivo.
-3. Escolha a estrutura de pastas.
-4. Escolha a pasta de destino.
+   - Se as colunas obrigatórias (PO e Fornecedor) não forem encontradas, o aplicativo mostra **Map the file columns**: selecione qual coluna contém o número da PO e qual contém o fornecedor.
+   - Erros são agrupados por tipo (linhas vazias, POs duplicadas, caracteres estranhos). Use o botão **Fix** de cada grupo para corrigir automaticamente, ou **Open file to fix** para editar manualmente.
+3. Escolha a estrutura de pastas — **Fornecedor** é sempre o primeiro nível e a **PO** o último. Use os botões ×/+ para ativar ou desativar níveis intermediários.
+4. Revise a árvore de pastas e escolha a pasta de destino.
 5. Revise as informações e clique em **Start download**.
 
-O arquivo original de input é preservado durante a execução.
+O arquivo original de input é preservado durante a execução. Inputs de execuções anteriores são protegidos (somente leitura) e, se reutilizados, uma cópia de trabalho é criada para a nova execução.
 
 ## 5. Corrigir uma PO com erro
 

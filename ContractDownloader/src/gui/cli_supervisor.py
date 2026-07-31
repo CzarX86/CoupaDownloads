@@ -76,6 +76,7 @@ class CliProcessSupervisor:
                 "input_file_blob": "BLOB",
                 "input_file_sha256": "TEXT",
                 "input_file_size": "INTEGER",
+                "description": "TEXT",
             }.items():
                 try:
                     conn.execute(f"ALTER TABLE sessions ADD COLUMN {column} {definition}")
@@ -241,6 +242,43 @@ class CliProcessSupervisor:
             "type": "Success" if return_code == 0 else "Error",
             "message": "Download pipeline finished." if return_code == 0 else f"Download pipeline exited with code {return_code}.",
         })
+        self._protect_archived_inputs()
+
+    @staticmethod
+    def _set_file_readonly(path: Path, readonly: bool = True) -> None:
+        """Toggle the OS read-only attribute on a file (best effort)."""
+        try:
+            if readonly:
+                os.chmod(path, 0o444)
+            else:
+                os.chmod(path, 0o644)
+        except OSError:
+            pass
+
+    def _protect_archived_inputs(self) -> None:
+        """Make archived inputs read-only after a run finishes so they stay an
+        immutable audit snapshot. Explicit retries remove the protection
+        temporarily and re-apply it afterwards."""
+        session_id = self.session_id
+        if not session_id:
+            return
+        context = self._session_context(session_id)
+        input_path = context.get("input_path") or ""
+        if input_path and Path(input_path).name.startswith(("input_source_", "input_restored_")):
+            self._set_file_readonly(Path(input_path), True)
+
+    def set_run_description(self, session_id: int, description: str) -> dict[str, Any]:
+        """Store the free-form run title/description used as audit context."""
+        try:
+            with self._connect() as conn:
+                conn.execute(
+                    "UPDATE sessions SET description = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                    (str(description or "").strip() or None, int(session_id)),
+                )
+                conn.commit()
+            return {"success": True, "session_id": int(session_id)}
+        except (sqlite3.Error, ValueError) as exc:
+            return {"success": False, "error": str(exc)}
 
     def _command(
         self,
@@ -320,6 +358,8 @@ class CliProcessSupervisor:
         retry_attempts: Optional[int] = None,
         msg_processing: str = "convert_extract",
         deduplicate_files: bool = True,
+        description: Optional[str] = None,
+        column_mapping: Optional[dict[str, str]] = None,
     ) -> dict[str, Any]:
         with self._lock:
             if self.process and self.process.poll() is None:
@@ -346,8 +386,12 @@ class CliProcessSupervisor:
 
             env = os.environ.copy()
             env["INPUT_CSV"] = self.input_path
-            if hierarchy_order:
+            if hierarchy_order is not None:
                 env["COUPA_HIERARCHY_ORDER"] = json.dumps(hierarchy_order)
+            if description:
+                env["COUPA_RUN_DESCRIPTION"] = str(description).strip()
+            if column_mapping:
+                env["COUPA_COLUMN_MAPPING"] = json.dumps(column_mapping)
             env["COUPA_RETRY_ATTEMPTS"] = str(max(1, min(3, int(retry_attempts or 1))))
             env["COUPA_MSG_PROCESSING"] = msg_processing if msg_processing in {"disabled", "convert", "convert_extract"} else "convert_extract"
             env["COUPA_DEDUPLICATE_FILES"] = "1" if deduplicate_files else "0"
@@ -846,6 +890,11 @@ class CliProcessSupervisor:
                 backup = path.with_name(f"{path.stem}.before_retry_{time.strftime('%Y%m%d-%H%M%S')}{path.suffix}")
                 shutil.copy2(path, backup)
                 backups.append((path, backup))
+            # The archived input is read-only between runs; an explicit retry
+            # is the only flow allowed to update it, so lift the protection
+            # for the duration of the edit and re-apply it afterwards.
+            for path in paths:
+                self._set_file_readonly(path, False)
             for path in paths:
                 self._replace_po_in_file(path, str(attempt["original_po_number"]), str(attempt["edited_po_number"]), note)
             if archive.exists():
@@ -856,6 +905,7 @@ class CliProcessSupervisor:
                         (str(archive), data, hashlib.sha256(data).hexdigest(), len(data), int(attempt["session_id"])),
                     )
                     conn.commit()
+                self._set_file_readonly(archive, True)
             return {"success": True, "paths": [str(path) for path in paths], "note": note}
         except (OSError, ValueError, sqlite3.Error) as exc:
             for path, backup in locals().get("backups", []):
