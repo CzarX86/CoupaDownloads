@@ -117,12 +117,20 @@ def test_edge_driver_version_components_can_be_compared():
     assert AppAPI._version_components("MSEdgeDriver 140.0.3485.54")[:3] == (140, 0, 3485)
 
 
-def test_window_uses_85_percent_width_and_is_centered():
+def test_window_uses_88_percent_width_and_is_centered():
     from src.main import calculate_window_geometry
 
     geometry = calculate_window_geometry(1512, 982)
 
-    assert geometry == {"width": 1285, "height": 820, "x": 114, "y": 81}
+    assert geometry == {"width": 1331, "height": 840, "x": 90, "y": 71}
+
+
+def test_window_minimum_width_gives_title_and_controls_room():
+    from src.main import calculate_window_geometry
+
+    small = calculate_window_geometry(900, 700)
+    assert small["width"] >= 1080
+    assert small["height"] >= 700
 
 
 def test_macos_coupa_url_uses_configured_default_handler(temp_db, monkeypatch):
@@ -222,4 +230,180 @@ def test_import_file_csv_hierarchy_output_subdir(temp_db, tmp_path):
         (session_id, "PO9001"),
     ).fetchone()
     assert row is not None
-    assert row["output_subdir"] == "2026/Q12026/Yellow_Wood"
+    assert row["output_subdir"] == "Manpowergroup_Inc/2026/Q12026/Yellow_Wood"
+
+
+# ── Column mapping and grouped validation ────────────────────────────────
+
+
+def test_validate_input_file_groups_errors_by_category(temp_db, tmp_path):
+    csv_path = tmp_path / "dirty.csv"
+    csv_path.write_text(
+        "PO_NUMBER;SUPPLIER\n"
+        "PO1;CompA\n"
+        "PO1;CompA\n"
+        "PO@2;CompB\n"
+        ";CompC\n",
+        encoding="utf-8",
+    )
+    api = AppAPI(temp_db, "/tmp/downloads")
+    result = api.validate_input_file(str(csv_path))
+
+    groups = {group["id"]: group for group in result["groups"]}
+    assert groups["duplicate_pos"]["fix_action"] == "remove_duplicate_pos"
+    assert groups["invalid_chars"]["fix_action"] == "clean_invalid_chars"
+    assert "partial_rows" in groups
+
+
+def test_validate_input_file_detects_blank_rows_in_xlsx(temp_db, tmp_path):
+    xlsx_path = tmp_path / "blank_rows.xlsx"
+    frame = pd.DataFrame({
+        "PO_NUMBER": ["PO1", None, "PO2"],
+        "SUPPLIER": ["CompA", None, "CompB"],
+    })
+    frame.to_excel(xlsx_path, index=False)
+    api = AppAPI(temp_db, "/tmp/downloads")
+    result = api.validate_input_file(str(xlsx_path))
+
+    groups = {group["id"]: group for group in result["groups"]}
+    assert groups["blank_rows"]["fix_action"] == "remove_blank_rows"
+    assert result["valid"] is False
+
+
+def test_repair_input_file_cleans_invalid_chars(temp_db, tmp_path):
+    csv_path = tmp_path / "dirty.csv"
+    csv_path.write_text(
+        "PO_NUMBER;SUPPLIER\n"
+        "PO@2;CompB\n"
+        "PO3;CompA\n",
+        encoding="utf-8",
+    )
+    api = AppAPI(temp_db, "/tmp/downloads")
+    result = api.repair_input_file(str(csv_path), ["clean_invalid_chars"])
+
+    assert result["success"] is True
+    assert result["cleaned_invalid_chars"] == 1
+    content = csv_path.read_text(encoding="utf-8-sig")
+    assert "PO2" in content
+    assert "PO@2" not in content
+
+
+def test_map_input_columns_enables_nonstandard_file(temp_db, tmp_path):
+    csv_path = tmp_path / "master_data.csv"
+    csv_path.write_text(
+        "Document;Vendor Name\n"
+        "PO1234;Acme Corp\n"
+        "PO5678;Globex\n",
+        encoding="utf-8",
+    )
+    api = AppAPI(temp_db, "/tmp/downloads")
+    info = api.get_input_columns(str(csv_path))
+    assert info["success"] is True
+    assert info["detected"]["po"] is None
+
+    mapped = api.map_input_columns(str(csv_path), {"po": "Document", "supplier": "Vendor Name"})
+    assert mapped["success"] is True
+    assert mapped["mapping"]["po"] == "Document"
+
+    validation = api.validate_input_file(str(csv_path))
+    assert validation["valid"] is True
+    assert validation["valid_po_count"] == 2
+
+    imported = api.import_file(str(csv_path))
+    assert imported["success"] is True
+    assert imported["total_pos"] == 2
+
+
+def test_import_file_supplier_is_always_first_level(temp_db, tmp_path):
+    csv_path = tmp_path / "hierarchy.csv"
+    csv_path.write_text(
+        "PO_NUMBER;SUPPLIER;<|>;Year\n"
+        "PO9001;Manpowergroup Inc.;;2026\n",
+        encoding="utf-8",
+    )
+    api = AppAPI(temp_db, "/tmp/downloads")
+    result = api.import_file(str(csv_path))
+    assert result["success"] is True
+    row = temp_db.conn.execute(
+        "SELECT output_subdir FROM po_downloads WHERE session_id = ? AND po_number = 'PO9001'",
+        (result["session_id"],),
+    ).fetchone()
+    assert row["output_subdir"] == "Manpowergroup_Inc/2026"
+
+
+def test_validate_input_file_reports_empty_hierarchy_columns(temp_db, tmp_path):
+    csv_path = tmp_path / "empty_col.csv"
+    csv_path.write_text(
+        "PO_NUMBER;SUPPLIER;<|>;Year;Country\n"
+        "PO1;CompA;;2026;\n",
+        encoding="utf-8",
+    )
+    api = AppAPI(temp_db, "/tmp/downloads")
+    result = api.validate_input_file(str(csv_path))
+    assert "Country" in result["empty_hierarchy_columns"]
+    assert "Year" not in result["empty_hierarchy_columns"]
+
+
+# ── Run description (audit context) ──────────────────────────────────────
+
+
+def test_session_description_persisted(temp_db):
+    db = SessionDB(temp_db.db_path)
+    session_id = db.create_session("file.xlsx", description="Análise para a Prianca — POs 2026")
+    session = db.get_session(session_id)
+    assert session["description"] == "Análise para a Prianca — POs 2026"
+
+    db.update_session_description(session_id, "Requerido por auditoria Q3")
+    assert db.get_session(session_id)["description"] == "Requerido por auditoria Q3"
+
+
+# ── Working copy for archived inputs (TurboAPI GUI bridge) ───────────────
+
+
+def test_archived_input_gets_working_copy_instead_of_in_place_edit(temp_db, monkeypatch, tmp_path):
+    """Reusing a previous run's archived input must copy it, never edit it."""
+    from src.main import TurboAPI
+    import sqlite3
+    from pathlib import Path
+
+    monkeypatch.setattr("src.gui.api.Path.home", lambda: tmp_path)
+    archive = tmp_path / "run_1" / "input_source_1.csv"
+    archive.parent.mkdir(parents=True)
+    original_content = "PO_NUMBER;SUPPLIER\nPO1;CompA\n"
+    archive.write_text(original_content, encoding="utf-8")
+
+    supervisor_db = tmp_path / ".contract_downloader" / "cli_sessions.db"
+    supervisor_db.parent.mkdir(parents=True)
+    conn = sqlite3.connect(str(supervisor_db))
+    conn.execute("CREATE TABLE sessions (id INTEGER PRIMARY KEY AUTOINCREMENT, input_file TEXT, input_file_path TEXT, status TEXT)")
+    conn.execute(
+        "INSERT INTO sessions (input_file, input_file_path, status) VALUES ('input_source_1.csv', ?, 'SUCCESS')",
+        (str(archive),),
+    )
+    conn.commit()
+    conn.close()
+
+    api = TurboAPI(temp_db, "/tmp/downloads")
+    api.cli_backend.db_path = supervisor_db
+
+    working, copied = api._working_copy_for(str(archive))
+
+    assert copied is True
+    assert working != str(archive)
+    assert Path(working).exists()
+    assert archive.read_text(encoding="utf-8") == original_content
+    assert Path(working).read_text(encoding="utf-8") == original_content
+
+
+def test_regular_input_is_not_copied(temp_db, monkeypatch, tmp_path):
+    from src.main import TurboAPI
+
+    monkeypatch.setattr("src.gui.api.Path.home", lambda: tmp_path)
+    source = tmp_path / "my_input.csv"
+    source.write_text("PO_NUMBER;SUPPLIER\nPO1;CompA\n", encoding="utf-8")
+    api = TurboAPI(temp_db, "/tmp/downloads")
+
+    working, copied = api._working_copy_for(str(source))
+
+    assert copied is False
+    assert working == str(source)

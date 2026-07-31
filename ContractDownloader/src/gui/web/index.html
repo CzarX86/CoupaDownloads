@@ -45,7 +45,7 @@
 
             <section class="screen active" id="screen-new">
                 <div class="intro-block new-run-intro">
-                    <div><p class="eyebrow">NEW RUN JOURNEY</p><h2 id="journey-title">Choose your input</h2><p id="journey-subtitle">Start with a completed CSV or Excel file, or create a new template.</p><button class="btn btn-secondary btn-small" id="btn-start-over" type="button">Start over</button></div>
+                    <div><p class="eyebrow">NEW RUN JOURNEY</p><h2 id="journey-title">Choose your input</h2><p id="journey-subtitle">Start with a completed CSV or Excel file, or create a new template.</p></div>
                     <div class="step-indicator journey-steps" aria-label="Run preparation steps">
                         <button class="step active" data-journey-step="1" type="button"><b>1</b><span>Input</span></button><i></i>
                         <button class="step" data-journey-step="2" type="button" disabled><b>2</b><span>Validate</span></button><i></i>
@@ -71,6 +71,11 @@
                     <article class="workflow-card journey-card narrow-card">
                         <div class="card-heading"><span class="card-index">02</span><div><h3>Validate your input</h3><p>Review the file before any run is created. Correct it in the same file if needed.</p></div></div>
                         <div class="validation-file-summary"><span class="file-type">FILE</span><strong id="validation-filename">No file selected</strong></div>
+                        <div class="column-mapping-card" id="column-mapping-card" hidden>
+                            <div class="mapping-heading"><strong id="mapping-title">Map the file columns</strong><p id="mapping-subtitle">The required columns were not found automatically. Tell the app which columns hold the PO number and the supplier.</p></div>
+                            <div class="mapping-fields"><label>PO number column<select id="mapping-po-select"></select></label><label>Supplier column<select id="mapping-supplier-select"></select></label></div>
+                            <button class="btn btn-secondary" id="btn-apply-mapping" type="button">Apply mapping and validate</button>
+                        </div>
                         <div class="validation-feedback" id="validation-feedback" hidden></div>
                         <button class="btn btn-secondary btn-block" id="btn-validate-file" type="button">Validate input</button>
                         <div class="journey-footer"><button class="btn btn-quiet" data-journey-back="1" type="button">Back</button><button class="btn btn-primary btn-large" id="btn-next-hierarchy" type="button" disabled>Continue to folders</button></div>
@@ -79,15 +84,22 @@
 
                 <div class="journey-panel" data-journey-panel="3" hidden>
                     <article class="workflow-card journey-card narrow-card">
-                        <div class="card-heading"><span class="card-index">03</span><div><h3>Arrange folder hierarchy</h3><p>Drag the levels into the order that should be used for downloaded files.</p></div></div>
-                        <div class="folder-guide journey-folder-guide"><ol class="folder-hierarchy" id="folder-hierarchy"><li class="hierarchy-empty">Validate the input to load its folder levels.</li></ol><small>Columns after <code>&lt;|&gt;</code> become folders. Empty values become <code>Unknown</code>.</small></div>
+                        <div class="card-heading"><span class="card-index">03</span><div><h3>Arrange folder hierarchy</h3><p>Supplier is always the first level and the PO is the last. Drag the levels in between to reorder them.</p></div></div>
+                        <div class="folder-guide journey-folder-guide">
+                            <ol class="folder-hierarchy" id="folder-hierarchy"><li class="hierarchy-empty">Validate the input to load its folder levels.</li></ol>
+                            <div class="hierarchy-disabled" id="hierarchy-disabled" hidden><h4>Disabled columns</h4><p>These columns stay in the input and in the final report, but do not create folders.</p><ul id="hierarchy-disabled-list"></ul></div>
+                            <div class="hierarchy-warnings" id="hierarchy-warnings" hidden></div>
+                            <small>Columns after <code>&lt;|&gt;</code> become folders. Empty values become <code>Unknown</code>. Columns without any value are ignored.</small>
+                        </div>
                         <div class="journey-footer"><button class="btn btn-quiet" data-journey-back="2" type="button">Back</button><button class="btn btn-primary btn-large" id="btn-next-destination" type="button">Continue to destination</button></div>
                     </article>
                 </div>
 
                 <div class="journey-panel" data-journey-panel="4" hidden>
                     <article class="workflow-card journey-card narrow-card">
-                        <div class="card-heading"><span class="card-index">04</span><div><h3>Choose the save location</h3><p>Select the parent folder where this run should store its attachments.</p></div></div>
+                        <div class="card-heading"><span class="card-index">04</span><div><h3>Confirm the folder structure</h3><p>This is how downloaded files will be organized. Confirm it, then choose the save location.</p></div></div>
+                        <div class="folder-preview-block"><pre class="folder-preview" id="destination-preview"></pre></div>
+                        <div class="card-heading destination-heading"><span class="card-index">04b</span><div><h3>Choose the save location</h3><p>Select the parent folder where this run should store its attachments.</p></div></div>
                         <label class="field-label" for="download-dir">Download folder</label><div class="input-with-action"><input id="download-dir" type="text" placeholder="Choose a folder" autocomplete="off"><button class="btn btn-secondary" id="btn-choose-dir" type="button">Choose folder</button></div>
                         <div class="destination-note"><span>i</span><span>Existing valid files are preserved during retries.</span></div>
                         <div class="journey-footer"><button class="btn btn-quiet" data-journey-back="3" type="button">Back</button><button class="btn btn-primary btn-large" id="btn-next-review" type="button" disabled>Review run</button></div>
@@ -99,7 +111,7 @@
                         <div class="card-heading"><span class="card-index">05</span><div><h3>Review and start</h3><p>Everything is ready. Confirm these settings to begin the download.</p></div></div>
                         <div class="review-list"><div><span>Input file</span><strong id="review-file">—</strong></div><div><span>Folder hierarchy</span><strong id="review-hierarchy">—</strong></div><div><span>Save location</span><strong id="review-destination">—</strong><small class="review-destination-hierarchy" id="review-destination-hierarchy"></small></div></div>
                         <div class="ready-panel"><span class="status-dot unauthenticated" id="ready-indicator"></span><div><strong id="ready-title">Ready to start</strong><small id="ready-detail">The run will be created after confirmation.</small></div></div>
-                        <div class="journey-footer"><button class="btn btn-quiet" data-journey-back="4" type="button">Back</button><button class="btn btn-primary btn-large" id="btn-start-run" type="button">Start download</button></div>
+                        <div class="journey-footer"><button class="btn btn-quiet" data-journey-back="4" type="button">Back</button><button class="btn btn-danger-ghost" id="btn-start-over" type="button">Start over</button><button class="btn btn-primary btn-large" id="btn-start-run" type="button">Start download</button></div>
                     </article>
                 </div>
                 <div class="active-run-banner" id="active-run-banner" hidden><div><strong>A download is already running.</strong><span>Return to Active run to monitor it.</span></div><button class="btn btn-secondary" id="btn-go-active-run" type="button">View active run</button></div>
@@ -119,7 +131,7 @@
 
             <section class="screen" id="screen-history" hidden>
                 <div class="intro-block"><div><p class="eyebrow">AUDIT TRAIL</p><h2>Run history</h2><p>Review GUI results, inspect PO-level errors, and export a report. CLI pipeline runs remain separate.</p></div><div class="history-toolbar"><button class="btn btn-secondary" id="btn-refresh-history" type="button">Refresh</button><button class="btn btn-danger" id="btn-clear-history" type="button">Delete all history</button></div></div>
-                <article class="history-card"><div class="table-wrap"><table class="history-table"><thead><tr><th>Run</th><th>Input</th><th>Started</th><th>POs</th><th>Result</th><th>Actions</th></tr></thead><tbody id="history-list"><tr><td colspan="6" class="empty-state">No runs yet.</td></tr></tbody></table></div></article>
+                <article class="history-card"><div class="table-wrap"><table class="history-table"><thead><tr><th>Run</th><th>Input</th><th>Description</th><th>Started</th><th>POs</th><th>Result</th><th>Actions</th></tr></thead><tbody id="history-list"><tr><td colspan="7" class="empty-state">No runs yet.</td></tr></tbody></table></div></article>
             </section>
 
             <section class="screen" id="screen-learn" hidden>
@@ -154,10 +166,6 @@
         </main>
     </div>
 
-    <div class="modal" id="folder-confirm-modal" hidden>
-        <div class="modal-card folder-confirm-card"><div class="modal-header"><div><p class="eyebrow">CONFIRM DESTINATION</p><h3>Review folder structure</h3><p class="modal-description">Attachments will be saved using this structure:</p></div><button class="icon-btn" id="btn-cancel-folder-confirm" type="button">×</button></div><pre class="folder-preview" id="folder-preview"></pre><div class="modal-footer"><button class="btn btn-secondary" id="btn-cancel-folder-run" type="button">Cancel</button><button class="btn btn-primary" id="btn-confirm-folder-run" type="button">Confirm and start</button></div></div>
-    </div>
-
     <div class="modal" id="retry-edit-modal" hidden>
         <div class="modal-card narrow-modal"><div class="modal-header"><div><p class="eyebrow">EDIT BEFORE RETRY</p><h3>Confirm PO number</h3></div><button class="icon-btn" id="btn-close-retry-edit" type="button">×</button></div><p class="modal-description">Edit the PO number only if the original value was incorrect. The corrected PO will be tested before anything is saved.</p><label class="field-label" for="retry-po-input">PO number</label><input id="retry-po-input" class="modal-input" type="text" autocomplete="off"><div class="modal-footer"><button class="btn btn-quiet" id="btn-cancel-retry-edit" type="button">Cancel</button><button class="btn btn-primary" id="btn-confirm-retry-edit" type="button">Confirm and retry</button></div></div>
     </div>
@@ -167,7 +175,7 @@
     </div>
 
     <div class="modal" id="details-modal" hidden>
-        <div class="modal-card"><div class="modal-header"><div><p class="eyebrow">RUN DETAILS</p><h3 id="modal-title">Session details</h3></div><button class="icon-btn" id="btn-close-modal" type="button">×</button></div><div class="modal-summary"><span>Input <strong id="modal-file">—</strong></span><span>Status <strong id="modal-status">—</strong></span><button class="btn btn-secondary btn-small" id="btn-open-input" type="button">Open input file</button></div><div class="retry-history-list" id="retry-history-list" hidden><h4>Retry history</h4><ul id="retry-history-items"></ul></div><div class="company-status-list"><h4>Supplier checks</h4><ul id="company-status-items"></ul></div><div class="po-details-list"><div class="details-toolbar"><h4>Purchase orders</h4><fieldset class="status-filter-group" id="status-filter"><legend>Show statuses</legend><label class="status-filter-option"><input type="checkbox" data-status-all checked><span>All</span></label><label class="status-filter-option"><input type="checkbox" data-status="SUCCESS" checked><span>Success</span></label><label class="status-filter-option"><input type="checkbox" data-status="ERROR" checked><span>Error</span></label><label class="status-filter-option"><input type="checkbox" data-status="PENDING" checked><span>Pending</span></label><label class="status-filter-option"><input type="checkbox" data-status="SKIPPED_VERIFICATION_REQUIRED" checked><span>Skipped</span></label></fieldset></div><div class="table-wrap"><table class="modal-pos-table"><thead><tr><th>PO</th><th>Supplier</th><th>Status</th><th class="retry-column">Retry</th><th class="message-column">Message</th></tr></thead><tbody id="modal-pos-tbody"></tbody></table></div></div><div class="modal-footer"><button class="btn btn-danger" id="btn-retry-errors" type="button">Retry failed POs</button><button class="btn btn-secondary" id="btn-export-modal-report" type="button">Export report</button></div></div>
+        <div class="modal-card"><div class="modal-header"><div><p class="eyebrow">RUN DETAILS</p><h3 id="modal-title">Session details</h3></div><button class="icon-btn" id="btn-close-modal" type="button">×</button></div><div class="run-description-row"><label class="field-label" for="run-description-input">Run description</label><div class="input-with-action"><input id="run-description-input" type="text" maxlength="200" placeholder="Why was this run made? For whom?" autocomplete="off"><button class="btn btn-secondary" id="btn-save-run-description" type="button">Save</button></div><small class="description-hint">Free text that appears in history to explain the purpose of this run (request, analysis, requester).</small></div><div class="modal-summary"><span>Input <strong id="modal-file">—</strong></span><span>Status <strong id="modal-status">—</strong></span><button class="btn btn-secondary btn-small" id="btn-open-input" type="button">Open input file</button></div><div class="retry-history-list" id="retry-history-list" hidden><h4>Retry history</h4><ul id="retry-history-items"></ul></div><div class="company-status-list"><h4>Supplier checks</h4><ul id="company-status-items"></ul></div><div class="po-details-list"><div class="details-toolbar"><h4>Purchase orders</h4><fieldset class="status-filter-group" id="status-filter"><legend>Show statuses</legend><label class="status-filter-option"><input type="checkbox" data-status-all checked><span>All</span></label><label class="status-filter-option"><input type="checkbox" data-status="SUCCESS" checked><span>Success</span></label><label class="status-filter-option"><input type="checkbox" data-status="ERROR" checked><span>Error</span></label><label class="status-filter-option"><input type="checkbox" data-status="PENDING" checked><span>Pending</span></label><label class="status-filter-option"><input type="checkbox" data-status="SKIPPED_VERIFICATION_REQUIRED" checked><span>Skipped</span></label></fieldset></div><div class="table-wrap"><table class="modal-pos-table"><thead><tr><th>PO</th><th>Supplier</th><th>Status</th><th class="retry-column">Retry</th><th class="message-column">Message</th></tr></thead><tbody id="modal-pos-tbody"></tbody></table></div></div><div class="modal-footer"><button class="btn btn-danger" id="btn-retry-errors" type="button">Retry failed POs</button><button class="btn btn-secondary" id="btn-export-modal-report" type="button">Export report</button></div></div>
     </div>
     <div class="modal" id="diagnostics-modal" hidden>
         <div class="modal-card diagnostics-card"><div class="modal-header"><div><p class="eyebrow">SUPPORT TOOL</p><h3>Host diagnostics</h3><p class="modal-description">This report checks compatibility, connectivity and local permissions. It excludes passwords, cookies and PO contents.</p></div><button class="icon-btn" id="btn-close-diagnostics" type="button">×</button></div><pre class="diagnostics-report" id="diagnostics-report">Running diagnostics…</pre><div class="modal-footer"><button class="btn btn-secondary" id="btn-save-diagnostics" type="button" disabled>Save report</button><button class="btn btn-primary" id="btn-copy-diagnostics" type="button" disabled>Copy report</button></div></div>

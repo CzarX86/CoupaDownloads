@@ -124,3 +124,52 @@ def test_history_status_translation_preserves_filter_inputs():
     assert 'id="btn-save-retry-result"' in html
     assert 'id="btn-discard-retry-result"' in html
     assert '#retry-edit-modal, #retry-result-modal' in (web_root / "style.css").read_text(encoding="utf-8")
+
+
+# ── Run description and archived-input protection ────────────────────────
+
+
+def test_set_run_description_updates_session(tmp_path):
+    from src.gui.cli_supervisor import CliProcessSupervisor
+    from src.db.session_db import SessionDB
+    SessionDB(str(tmp_path / "sessions.db")).close()
+    supervisor = CliProcessSupervisor()
+    supervisor.db_path = tmp_path / "sessions.db"
+    with supervisor._connect() as conn:
+        conn.execute("INSERT INTO sessions (input_file, status) VALUES ('input.csv', 'SUCCESS')")
+        session_id = conn.execute("SELECT id FROM sessions ORDER BY id DESC LIMIT 1").fetchone()["id"]
+
+    result = supervisor.set_run_description(session_id, "Análise para auditoria")
+    assert result["success"] is True
+    with supervisor._connect() as conn:
+        row = conn.execute("SELECT description FROM sessions WHERE id = ?", (session_id,)).fetchone()
+    assert row["description"] == "Análise para auditoria"
+
+
+def test_archived_input_becomes_read_only_after_run(tmp_path):
+    from src.gui.cli_supervisor import CliProcessSupervisor
+    from src.db.session_db import SessionDB
+    SessionDB(str(tmp_path / "sessions.db")).close()
+    supervisor = CliProcessSupervisor()
+    supervisor.db_path = tmp_path / "sessions.db"
+    archive = tmp_path / "run_1" / "input_source_1.csv"
+    archive.parent.mkdir()
+    archive.write_text("PO_NUMBER;SUPPLIER\nPO1;CompA\n", encoding="utf-8")
+    with supervisor._connect() as conn:
+        conn.execute(
+            "INSERT INTO sessions (id, input_file, input_file_path, status) VALUES (1, 'input.csv', ?, 'SUCCESS')",
+            (str(archive),),
+        )
+    supervisor.session_id = 1
+
+    supervisor._protect_archived_inputs()
+
+    import stat
+    mode = stat.S_IMODE(archive.stat().st_mode)
+    assert mode == 0o444
+
+    # An explicit retry temporarily lifts the protection and re-applies it.
+    supervisor._set_file_readonly(archive, False)
+    archive.write_text("PO_NUMBER;SUPPLIER\nPO1;CompA\nPO2;CompB\n", encoding="utf-8")
+    supervisor._set_file_readonly(archive, True)
+    assert stat.S_IMODE(archive.stat().st_mode) == 0o444

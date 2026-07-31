@@ -1,8 +1,10 @@
 import os
 import sys
+import time
 import asyncio
 import subprocess
 import threading
+import shutil
 from pathlib import Path
 from urllib.parse import quote, urlparse
 
@@ -157,21 +159,54 @@ class TurboAPI(AppAPI):
             self._pending_input_path = None
         return result
 
+    def get_input_columns(self, filepath: str) -> dict:
+        return super().get_input_columns(filepath)
+
+    def map_input_columns(self, filepath: str, mapping: dict) -> dict:
+        return super().map_input_columns(filepath, mapping)
+
+    def _working_copy_for(self, filepath: str) -> tuple[str, bool]:
+        """Return (path, copied) for a selected input.
+
+        When the user picks an input that is the archived snapshot of another
+        run, that snapshot must stay immutable (audit evidence). The new run
+        works on a private copy instead.
+        """
+        selected = str(Path(filepath).expanduser().resolve())
+        try:
+            with self.cli_backend._connect() as conn:
+                row = conn.execute(
+                    "SELECT id FROM sessions WHERE input_file_path = ? ORDER BY id DESC LIMIT 1",
+                    (selected,),
+                ).fetchone()
+        except Exception:
+            row = None
+        if not row:
+            return selected, False
+        work_dir = Path.home() / ".contract_downloader" / "working"
+        work_dir.mkdir(parents=True, exist_ok=True)
+        source = Path(selected)
+        target = work_dir / f"run_{time.strftime('%Y%m%d_%H%M%S')}_{source.name}"
+        shutil.copy2(source, target)
+        return str(target), True
+
     def import_file(self, filepath: str) -> dict:
         """Validate and stage the input; the CLI creates the real session."""
-        validation = self.validate_input_file(filepath)
+        working_path, copied = self._working_copy_for(filepath)
+        validation = self.validate_input_file(working_path)
         if not validation.get("valid"):
             return {
                 "success": False,
                 "error": "Input validation failed.",
                 "validation": validation,
             }
-        self._pending_input_path = str(Path(filepath).expanduser().resolve())
+        self._pending_input_path = working_path
         return {
             "success": True,
             "session_id": 0,
             "total_pos": validation.get("valid_po_count", 0),
             "backend": "cli",
+            "working_copy": copied,
         }
 
     def start_download(
@@ -181,6 +216,7 @@ class TurboAPI(AppAPI):
         concurrency: int = 4,
         hierarchy_order: list[str] | None = None,
         retry_attempts: int | None = None,
+        description: str | None = None,
     ) -> dict:
         if not self._pending_input_path:
             return {"success": False, "error": "No validated input file is staged."}
@@ -193,6 +229,7 @@ class TurboAPI(AppAPI):
         selected_path = Path(self._absolute_user_path(selected_dir))
         persistent_root = selected_path.parent if selected_path.name.startswith("run_") else selected_path
         self._persist_download_root(str(persistent_root))
+        mapping = self._mapping_for(self._pending_input_path) or None
         return self.cli_backend.start(
             self._pending_input_path,
             str(selected_path),
@@ -202,7 +239,12 @@ class TurboAPI(AppAPI):
             retry_attempts=effective_retry_attempts,
             msg_processing=msg_processing,
             deduplicate_files=deduplicate_files,
+            description=description,
+            column_mapping=mapping,
         )
+
+    def set_run_description(self, session_id: int, description: str) -> dict:
+        return self.cli_backend.set_run_description(int(session_id), description)
 
     def get_active_session_status(self, session_id: int) -> dict:
         return self.cli_backend.get_status(session_id)
@@ -335,9 +377,13 @@ def _activate_macos_window() -> None:
 
 
 def calculate_window_geometry(screen_width: int, screen_height: int, screen_x: int = 0, screen_y: int = 0) -> dict[str, int]:
-    """Size the window to 85% of the screen width and center it."""
-    width = max(980, round(screen_width * 0.85))
-    height = min(820, max(700, round(screen_height * 0.85)))
+    """Size the window to 88% of the screen width and center it.
+
+    The larger default (minimum 1080px) gives the title, the authentication
+    card, and the translated strings enough room so nothing is compressed.
+    """
+    width = max(1080, round(screen_width * 0.88))
+    height = min(840, max(720, round(screen_height * 0.88)))
     return {
         "width": width,
         "height": height,
@@ -379,7 +425,7 @@ def main():
         x=geometry["x"],
         y=geometry["y"],
         screen=primary_screen,
-        min_size=(980, 700),
+        min_size=(1000, 680),
         resizable=True,
     )
     if sys.platform == "darwin":

@@ -106,6 +106,7 @@ class SessionDB:
             "input_file_blob": "BLOB",
             "input_file_sha256": "TEXT",
             "input_file_size": "INTEGER",
+            "description": "TEXT",
         }.items():
             if column not in sessions_existing:
                 cursor.execute(f"ALTER TABLE sessions ADD COLUMN {column} {definition}")
@@ -123,18 +124,28 @@ class SessionDB:
                 "ALTER TABLE po_downloads ADD COLUMN output_subdir TEXT"
             )
 
-    def create_session(self, input_file: str, execution_type: str = "PROD") -> int:
+    def create_session(self, input_file: str, execution_type: str = "PROD", description: Optional[str] = None) -> int:
         normalized_type = (execution_type or "PROD").strip().upper()
         if normalized_type not in {"PROD", "TEST"}:
             normalized_type = "PROD"
 
         cursor = self.conn.cursor()
         cursor.execute('''
-            INSERT INTO sessions (input_file, execution_type, status)
-            VALUES (?, ?, 'PENDING')
-        ''', (input_file, normalized_type))
+            INSERT INTO sessions (input_file, execution_type, status, description)
+            VALUES (?, ?, 'PENDING', ?)
+        ''', (input_file, normalized_type, description or None))
         self.conn.commit()
         return cursor.lastrowid
+
+    def update_session_description(self, session_id: int, description: Optional[str] = None) -> bool:
+        """Set the free-form run title/description used for audit context."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "UPDATE sessions SET description = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (description or None, session_id),
+        )
+        self.conn.commit()
+        return cursor.rowcount > 0
 
     def archive_session_input(self, session_id: int, source_path: str, archive_path: str) -> str:
         source = Path(source_path).expanduser().resolve()

@@ -492,27 +492,30 @@ def run_probe(
             # Guardrail: the first journey step must remain visible and block progression without a file.
             steps.append("checked-next-without-file")
 
+            def complete_journey_to_review():
+                """Walk the New Run journey up to the review step (step 5)."""
+                page.click("#btn-next-input")
+                page.wait_for_selector("#validation-feedback:not([hidden])")
+                page.click("#btn-next-hierarchy")
+                page.click("#btn-next-destination")
+                page.click("#btn-choose-dir")
+                page.click("#btn-next-review")
+
             page.locator("#file-input").set_input_files(str(sample_csv))
             steps.append("selected-input-file")
             page.screenshot(path=str(run_dir / "02_file_selected.png"), full_page=True)
 
-            # Guardrail: Start over must reset the journey and re-enable input.
+            # Guardrail: Start over only exists at the final step and must
+            # reset the journey, re-enabling the input step.
+            complete_journey_to_review()
             page.click("#btn-start-over")
+            page.wait_for_selector("#dropzone", state="visible")
             steps.append("start-over-clicked")
             page.locator("#file-input").set_input_files(str(sample_csv))
             steps.append("re-selected-after-start-over")
-
-            page.click("#btn-next-input")
-            page.wait_for_selector("#validation-feedback:not([hidden])")
-            page.click("#btn-next-hierarchy")
-            page.click("#btn-next-destination")
-            page.click("#btn-choose-dir")
-            page.click("#btn-next-review")
+            complete_journey_to_review()
             page.click("#btn-start-run")
             steps.append("clicked-start")
-            if page.locator("#folder-confirm-modal").is_visible():
-                page.click("#btn-confirm-folder-run")
-                steps.append("confirmed-folder-structure")
 
             page.wait_for_selector("#screen-progress.active")
             page.wait_for_timeout(1500)

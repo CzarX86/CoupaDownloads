@@ -11,6 +11,8 @@ document.addEventListener("DOMContentLoaded", () => {
     let validatedFingerprint = null;
     let selectedFileValidated = false;
     let hierarchyOrder = [];
+    let disabledHierarchyColumns = [];
+    let mappingColumns = [];
     let draggedHierarchyItem = null;
     let runInProgress = false;
     let pendingUpdate = null;
@@ -22,14 +24,14 @@ document.addEventListener("DOMContentLoaded", () => {
             1: ["Choose your input", "Start with a completed CSV or Excel file, or create a new template."],
             2: ["Validate your input", "Check the file before configuring the download."],
             3: ["Arrange folder hierarchy", "Choose the order used to create destination folders."],
-            4: ["Choose the save location", "Select where this run should store its attachments."],
+            4: ["Confirm structure and destination", "Review the folder tree, then choose where the run saves files."],
             5: ["Review and start", "Confirm the settings, then start the download."],
         },
         "pt-BR": {
             1: ["Escolha o input", "Comece com um arquivo CSV ou Excel preenchido, ou crie um novo template."],
             2: ["Valide o input", "Verifique o arquivo antes de configurar o download."],
             3: ["Organize a hierarquia", "Escolha a ordem usada para criar as pastas de destino."],
-            4: ["Escolha o local de salvamento", "Selecione onde esta execução deve salvar os anexos."],
+            4: ["Confirme a estrutura e o destino", "Revise a árvore de pastas e escolha onde a execução salvará os arquivos."],
             5: ["Revise e inicie", "Confirme as configurações e inicie o download."],
         },
     };
@@ -103,6 +105,17 @@ document.addEventListener("DOMContentLoaded", () => {
         setMany("#speed-note, #eta-note", pt ? ["POs concluídas recentemente", "Atualizado pela velocidade recente"] : ["Recent completed POs", "Updates with recent speed"]);
         setMany("#btn-back-new, #btn-pause-resume, #btn-stop-session, #btn-clear-log", pt ? ["Nova execução", "Pausar", "Parar execução", "Limpar"] : ["New run", "Pause", "Stop run", "Clear"]);
         setMany("#screen-history .intro-block .eyebrow, #screen-history .intro-block h2", pt ? ["TRILHA DE AUDITORIA", "Histórico de execuções"] : ["AUDIT TRAIL", "Run history"]);
+        setMany("#active-run-banner strong", [pt ? "Uma baixa já está em andamento." : "A download is already running."]);
+        setMany("#active-run-banner span", [pt ? "Volte para Execução ativa para acompanhar." : "Return to Active run to monitor it."]);
+        setMany("#btn-go-active-run", [pt ? "Ver execução ativa" : "View active run"]);
+        setMany("#mapping-title, #mapping-subtitle", pt ? ["Mapeie as colunas do arquivo", "As colunas obrigatórias não foram encontradas automaticamente. Informe quais colunas contêm o número da PO e o fornecedor."] : ["Map the file columns", "The required columns were not found automatically. Tell the app which columns hold the PO number and the supplier."]);
+        setMany("#btn-apply-mapping", [pt ? "Aplicar mapeamento e validar" : "Apply mapping and validate"]);
+        setMany("#column-mapping-card .mapping-fields label", pt ? ["Coluna de número da PO", "Coluna de fornecedor"] : ["PO number column", "Supplier column"]);
+        setMany("#hierarchy-disabled h4", [pt ? "Colunas desativadas" : "Disabled columns"]);
+        setMany("#hierarchy-disabled p", [pt ? "Estas colunas permanecem no input e no relatório final, mas não criam pastas." : "These columns stay in the input and in the final report, but do not create folders."]);
+        setMany("#run-description-input", [pt ? "Por que esta execução foi feita? Para quem?" : "Why was this run made? For whom?"]);
+        setMany("#btn-save-run-description", [pt ? "Salvar" : "Save"]);
+        setMany(".description-hint", [pt ? "Texto livre que aparece no histórico para explicar o objetivo da execução (solicitação, análise, solicitante)." : "Free text shown in history to explain this run's purpose (request, analysis, requester)."]);
         setMany("#screen-history .intro-block p:not(.eyebrow)", [pt ? "Revise resultados, erros por PO e relatórios." : "Review results, inspect PO-level errors, and export reports."]);
         setMany("#btn-refresh-history, #btn-clear-history", pt ? ["Atualizar", "Excluir todo o histórico"] : ["Refresh", "Delete all history"]);
         setMany("#history-list ~ *", []);
@@ -201,7 +214,7 @@ document.addEventListener("DOMContentLoaded", () => {
         lockMessage.hidden = true;
         lockMessage.innerText = "";
         if (target === 2 && selectedFilePath) $("#validation-filename").innerText = $("#selected-filename").innerText;
-        if (target === 4 && !locked) ensureDefaultDestination();
+        if (target === 4 && !locked) { renderDestinationPreview(); ensureDefaultDestination(); }
         if (target === 5 && !locked) renderJourneyReview();
     }
 
@@ -225,6 +238,12 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     function showScreen(screenKey) {
+        // While a download is running the New Run journey must stay locked:
+        // the user can only watch Active run or browse history/settings.
+        if (screenKey === "new" && runInProgress) {
+            logToConsole("Warning", appSettings.language === "pt-BR" ? "A Nova Execução fica bloqueada enquanto uma baixa está ativa." : "New Run stays locked while a download is running.");
+            screenKey = "progress";
+        }
         Object.entries(screens).forEach(([key, screen]) => {
             const active = key === screenKey;
             screen.classList.toggle("active", active);
@@ -233,6 +252,8 @@ document.addEventListener("DOMContentLoaded", () => {
         });
         const titles = { new: t("prepare"), progress: t("activeRun"), history: t("history"), learn: t("learn"), settings: t("settings") };
         if ($("#page-title")) $("#page-title").innerText = titles[screenKey] || titles.new;
+        navButtons.new.disabled = runInProgress;
+        navButtons.new.title = runInProgress ? (appSettings.language === "pt-BR" ? "Bloqueado durante a execução" : "Locked while a run is active") : "";
         $("#active-run-banner").hidden = !(screenKey === "new" && runInProgress);
         if (screenKey === "new" && runInProgress) $("#btn-start-run").disabled = true;
         syncUpdateButton();
@@ -246,10 +267,10 @@ document.addEventListener("DOMContentLoaded", () => {
     $("#btn-refresh-history").addEventListener("click", loadHistory);
     document.addEventListener("keydown", (event) => {
         if (event.key !== "Escape") return;
-        const folderModal = $("#folder-confirm-modal");
         const detailsModal = $("#details-modal");
-        if (folderModal && !folderModal.hidden) {
-            $("#btn-cancel-folder-confirm").click();
+        const retryEditModalEl = $("#retry-edit-modal");
+        if (retryEditModalEl && !retryEditModalEl.hidden) {
+            closeRetryEditModal();
         } else if (detailsModal && !detailsModal.hidden) {
             detailsModal.hidden = true;
         }
@@ -329,7 +350,12 @@ document.addEventListener("DOMContentLoaded", () => {
         }
         $("#btn-authenticate").classList.toggle("is-authenticated", state === "authenticated");
         const action = $("#btn-authenticate .auth-action");
-        if (action) action.innerText = state === "authenticated" ? (pt ? "Autenticado" : "Ready") : (state.startsWith("auth_") || state === "authenticating" ? (pt ? "Aguarde…" : "Please wait…") : (pt ? "Entrar" : "Sign in"));
+        if (action) {
+            // One state at a time: when already authenticated the status text
+            // is enough, so the redundant "Sign in/Entrar" action disappears.
+            action.style.display = state === "authenticated" ? "none" : "";
+            action.innerText = state === "authenticated" ? (pt ? "Autenticado" : "Ready") : (state.startsWith("auth_") || state === "authenticating" ? (pt ? "Aguarde…" : "Please wait…") : (pt ? "Entrar" : "Sign in"));
+        }
         $("#btn-authenticate").disabled = state.startsWith("auth_") || state === "authenticating";
     }
 
@@ -372,21 +398,54 @@ document.addEventListener("DOMContentLoaded", () => {
 
     function syncHierarchyLevels(list) {
         list.querySelectorAll("li[data-column]").forEach((item, index) => {
-            item.dataset.level = String(index + 1);
-            item.style.setProperty("--hierarchy-level", String(index));
+            item.dataset.level = String(index + 2);
+            item.style.setProperty("--hierarchy-level", String(index + 1));
             const level = item.querySelector(".hierarchy-level");
-            if (level) level.innerText = `${appSettings.language === "pt-BR" ? "Nível" : "Level"} ${index + 1}`;
+            if (level) level.innerText = `${appSettings.language === "pt-BR" ? "Nível" : "Level"} ${index + 2}`;
         });
     }
 
     function renderHierarchy() {
         const list = $("#folder-hierarchy");
-        if (!hierarchyOrder.length) {
-            list.innerHTML = '<li class="hierarchy-empty">No hierarchy columns detected.</li>';
+        const levelLabel = appSettings.language === "pt-BR" ? "Nível" : "Level";
+        const supplierLabel = appSettings.language === "pt-BR" ? "Fornecedor (sempre primeiro)" : "Supplier (always first)";
+        const poLabel = appSettings.language === "pt-BR" ? "PO (sempre último)" : "PO (always last)";
+        const disableLabel = appSettings.language === "pt-BR" ? "Desativar" : "Disable";
+        const enableLabel = appSettings.language === "pt-BR" ? "Ativar" : "Enable";
+        if (!hierarchyOrder.length && !disabledHierarchyColumns.length) {
+            list.innerHTML = '<li class="hierarchy-empty">Validate the input to load its folder levels.</li>';
+            $("#hierarchy-disabled").hidden = true;
             return;
         }
-        const levelLabel = appSettings.language === "pt-BR" ? "Nível" : "Level";
-        list.innerHTML = hierarchyOrder.map((column, index) => `<li draggable="false" data-column="${escapeHtml(column)}" data-level="${index + 1}" style="--hierarchy-level:${index}"><span class="hierarchy-branch" aria-hidden="true">└</span><span class="hierarchy-level">${levelLabel} ${index + 1}</span><span class="drag-handle" aria-hidden="true">☷</span><span>${escapeHtml(column)}</span></li>`).join("");
+        const items = [
+            `<li class="hierarchy-fixed" data-fixed="supplier"><span class="hierarchy-branch" aria-hidden="true">└</span><span class="hierarchy-level">${levelLabel} 1</span><span class="hierarchy-lock" aria-hidden="true">🔒</span><strong>${supplierLabel}</strong></li>`,
+            ...hierarchyOrder.map((column, index) => `<li draggable="true" data-column="${escapeHtml(column)}" data-level="${index + 2}" style="--hierarchy-level:${index + 1}"><span class="hierarchy-branch" aria-hidden="true">└</span><span class="hierarchy-level">${levelLabel} ${index + 2}</span><span class="drag-handle" aria-hidden="true">☷</span><span>${escapeHtml(column)}</span><button class="hierarchy-toggle" data-toggle-column="${escapeHtml(column)}" title="${disableLabel}" type="button">×</button></li>`),
+            `<li class="hierarchy-fixed" data-fixed="po"><span class="hierarchy-branch" aria-hidden="true">└</span><span class="hierarchy-level">${levelLabel} ${hierarchyOrder.length + 2}</span><span class="hierarchy-lock" aria-hidden="true">🔒</span><strong>${poLabel}</strong></li>`,
+        ];
+        list.innerHTML = items.join("");
+        list.querySelectorAll(".hierarchy-toggle[data-toggle-column]").forEach((button) => {
+            button.addEventListener("click", () => {
+                const column = button.dataset.toggleColumn;
+                hierarchyOrder = hierarchyOrder.filter((value) => value !== column);
+                disabledHierarchyColumns.push(column);
+                renderHierarchy();
+            });
+        });
+
+        // Disabled columns list (kept in the report, not used as folders).
+        const disabledBox = $("#hierarchy-disabled");
+        const disabledList = $("#hierarchy-disabled-list");
+        disabledBox.hidden = disabledHierarchyColumns.length === 0;
+        disabledList.innerHTML = disabledHierarchyColumns.map((column) => `<li><span>${escapeHtml(column)}</span><button class="hierarchy-toggle" data-reenable-column="${escapeHtml(column)}" title="${enableLabel}" type="button">+</button></li>`).join("");
+        disabledList.querySelectorAll(".hierarchy-toggle[data-reenable-column]").forEach((button) => {
+            button.addEventListener("click", () => {
+                const column = button.dataset.reenableColumn;
+                disabledHierarchyColumns = disabledHierarchyColumns.filter((value) => value !== column);
+                hierarchyOrder.push(column);
+                renderHierarchy();
+            });
+        });
+
         let pointerDrag = null;
         const finishHierarchyDrag = () => {
             const item = draggedHierarchyItem;
@@ -400,6 +459,7 @@ document.addEventListener("DOMContentLoaded", () => {
             hierarchyOrder = [...list.querySelectorAll("li[data-column]")].map((node) => node.dataset.column);
             syncHierarchyLevels(list);
             list.classList.remove("drag-active");
+            renderDestinationPreview();
         };
 
         const placeHierarchyPlaceholder = (clientY) => {
@@ -421,7 +481,7 @@ document.addEventListener("DOMContentLoaded", () => {
         // stuck or fail altogether.
         list.querySelectorAll("li[data-column]").forEach((item) => {
             item.addEventListener("pointerdown", (event) => {
-                if (event.button !== 0) return;
+                if (event.button !== 0 || event.target.closest(".hierarchy-toggle")) return;
                 pointerDrag = { item, pointerId: event.pointerId, startY: event.clientY, active: false };
                 try { item.setPointerCapture(event.pointerId); } catch (_) { /* best effort */ }
             });
@@ -452,11 +512,34 @@ document.addEventListener("DOMContentLoaded", () => {
         });
     }
 
+    function renderDestinationPreview() {
+        const preview = $("#destination-preview");
+        if (!preview) return;
+        const directory = $("#download-dir").value || "Downloads/CoupaAttachments";
+        const parts = hierarchyOrder.length ? hierarchyOrder : [];
+        const lines = [`${directory}/`, "└── {Supplier}"];
+        parts.forEach((part) => { lines.push(`    └── {${escapeHtml(part)}}`); });
+        lines.push("        └── {PO}/");
+        preview.innerText = lines.join("\n");
+    }
+
+    function renderHierarchyWarnings(emptyColumns) {
+        const box = $("#hierarchy-warnings");
+        const columns = Array.isArray(emptyColumns) ? emptyColumns : [];
+        if (!columns.length) { box.hidden = true; box.innerHTML = ""; return; }
+        box.hidden = false;
+        box.innerHTML = columns.map((column) => `<div class="validation-warning">${appSettings.language === "pt-BR"
+            ? `A coluna “${escapeHtml(column)}” está 100% vazia no input e não será usada para criar pastas.`
+            : `The column “${escapeHtml(column)}” is completely empty in the input and will not be used to create folders.`}</div>`).join("");
+    }
+
     function setHierarchyColumns(columns) {
         const available = (columns || []).map(String);
         const kept = hierarchyOrder.filter((column) => available.includes(column));
         hierarchyOrder = kept.concat(available.filter((column) => !kept.includes(column)));
+        disabledHierarchyColumns = disabledHierarchyColumns.filter((column) => available.includes(column));
         renderHierarchy();
+        renderDestinationPreview();
     }
 
     function setFile(filePath, fileName, fileSize) {
@@ -535,14 +618,15 @@ document.addEventListener("DOMContentLoaded", () => {
 
     async function startOver() {
         const pt = appSettings.language === "pt-BR";
+        if (runInProgress) return;
         const hasJourneyState = Boolean(selectedFilePath || generatedTemplatePath || journeyMaxStep > 1);
         if (!hasJourneyState) {
             clearFile();
             return;
         }
         const confirmed = confirm(pt
-            ? "Começar de novo? O template criado pelo aplicativo será excluído. Arquivos de input escolhidos por você serão preservados."
-            : "Start over? A template created by the application will be deleted. Input files chosen by you will be preserved.");
+            ? "Começar de novo? O estado desta preparação será apagado e uma nova execução será iniciada do zero. O histórico e os resultados de execuções concluídas serão preservados. Um template criado pelo aplicativo será excluído; arquivos de input escolhidos por você serão preservados."
+            : "Start over? This preparation state will be cleared and a new run will begin from scratch. History and results of completed runs are preserved. A template created by the app will be deleted; input files you chose are preserved.");
         if (!confirmed) return;
         if (hasApi("reset_new_run")) {
             const result = await api().reset_new_run(generatedTemplatePath || selectedFilePath || "");
@@ -553,6 +637,7 @@ document.addEventListener("DOMContentLoaded", () => {
         }
         generatedTemplatePath = null;
         hierarchyOrder = [];
+        disabledHierarchyColumns = [];
         clearFile();
         $("#download-dir").value = "";
         await ensureDefaultDestination();
@@ -659,46 +744,130 @@ document.addEventListener("DOMContentLoaded", () => {
         fileMonitorInterval = setInterval(pollFileState, 800);
     }
 
-    function renderValidation(result) {
+    function renderMappingCard(columns, detected) {
+        const card = $("#column-mapping-card");
+        if (!card || !Array.isArray(columns) || !columns.length) { card.hidden = true; return; }
+        const poSelect = $("#mapping-po-select");
+        const supplierSelect = $("#mapping-supplier-select");
+        const options = (placeholder) => `<option value="">${placeholder}</option>` + columns.map((column) => `<option value="${escapeHtml(column)}">${escapeHtml(column)}</option>`).join("");
+        poSelect.innerHTML = options(appSettings.language === "pt-BR" ? "— selecione a coluna de PO —" : "— select the PO column —");
+        supplierSelect.innerHTML = options(appSettings.language === "pt-BR" ? "— selecione a coluna de fornecedor —" : "— select the supplier column —");
+        if (detected && detected.po) poSelect.value = detected.po;
+        if (detected && detected.supplier) supplierSelect.value = detected.supplier;
+        mappingColumns = columns;
+        card.hidden = false;
+    }
+
+    function hideMappingCard() {
+        const card = $("#column-mapping-card");
+        if (card) card.hidden = true;
+    }
+
+    async function applyColumnMapping() {
+        if (!selectedFilePath || !hasApi("map_input_columns")) return;
+        const mapping = {
+            po: $("#mapping-po-select").value,
+            supplier: $("#mapping-supplier-select").value,
+        };
+        if (!mapping.po || !mapping.supplier) {
+            logToConsole("Error", appSettings.language === "pt-BR" ? "Selecione as colunas de PO e fornecedor." : "Select the PO and supplier columns first.");
+            return;
+        }
+        const button = $("#btn-apply-mapping");
+        button.disabled = true;
+        const result = await api().map_input_columns(selectedFilePath, mapping);
+        button.disabled = false;
+        if (!result.success) {
+            logToConsole("Error", result.error || "Could not apply the column mapping.");
+            return;
+        }
+        logToConsole("Success", appSettings.language === "pt-BR" ? `Mapeamento aplicado: PO → ${result.mapping.po}, Fornecedor → ${result.mapping.supplier}.` : `Mapping applied: PO → ${result.mapping.po}, Supplier → ${result.mapping.supplier}.`);
+        renderValidation(result);
+    }
+
+    async function renderValidation(result) {
         const feedback = $("#validation-feedback");
         const errors = Array.isArray(result.errors) ? result.errors : [];
         const warnings = Array.isArray(result.warnings) ? result.warnings : [];
         const fixes = Array.isArray(result.fixes) ? result.fixes : [];
+        const groups = Array.isArray(result.groups) ? result.groups : [];
+        const mapping = result.mapping || {};
+        const pt = appSettings.language === "pt-BR";
         let html = "";
         setHierarchyColumns(result.hierarchy_columns || []);
-        if (result.valid) html += `<div class="validation-success">File is valid — ${result.valid_po_count || 0} PO(s) ready.</div>`;
-        else html += `<div class="validation-error-header">File needs correction (${errors.length} error${errors.length === 1 ? "" : "s"})</div>`;
+        renderHierarchyWarnings(result.empty_hierarchy_columns || []);
+        const needsMapping = groups.some((group) => group.mapping);
+        if (needsMapping) {
+            renderMappingCard(mappingColumns.length ? mappingColumns : (await getInputColumnsForMapping()));
+        } else {
+            hideMappingCard();
+        }
+        if (result.valid) html += `<div class="validation-success">${pt ? `Arquivo válido — ${result.valid_po_count || 0} PO(s) prontos.` : `File is valid — ${result.valid_po_count || 0} PO(s) ready.`}</div>`;
+        else html += `<div class="validation-error-header">${pt ? `O arquivo precisa de correção (${groups.length} grupo(s) de problema)` : `File needs correction (${groups.length} issue group(s))`}</div>`;
+        if (groups.length) {
+            html += `<div class="validation-dashboard">`;
+            groups.forEach((group) => {
+                const severityClass = group.severity === "warning" ? "validation-warning" : "validation-error";
+                html += `<div class="validation-group"><div class="validation-group-head ${severityClass}"><strong>${escapeHtml(group.title || group.id)}</strong><span>${group.count || 0}</span></div><p>${escapeHtml(group.message || "")}</p>`;
+                if (group.fixable && hasApi("repair_input_file")) {
+                    html += `<button class="btn btn-secondary btn-small btn-fix-group" data-fix="${escapeHtml(group.fix_action)}" type="button">${pt ? "Corrigir" : "Fix"}</button>`;
+                } else if (group.fixable === false && group.id !== "missing_po_column" && group.id !== "missing_supplier_column") {
+                    html += `<button class="btn btn-secondary btn-small btn-open-fix" type="button">${pt ? "Abrir arquivo para corrigir" : "Open file to fix"}</button>`;
+                }
+                html += `</div>`;
+            });
+            html += `</div>`;
+        }
         errors.forEach((error) => { html += `<div class="validation-error">${escapeHtml(error)}</div>`; });
         warnings.forEach((warning) => { html += `<div class="validation-warning">${escapeHtml(warning)}</div>`; });
-        fixes.forEach((fix) => { html += `<div class="validation-info">Suggested fix: ${escapeHtml(fix.description || fix.action)}</div>`; });
-        if (fixes.length && hasApi("repair_input_file")) {
-            html += `<button class="btn btn-secondary btn-small" id="btn-repair-file" type="button">Apply safe fixes and create backup</button>`;
-        }
+        fixes.forEach((fix) => { html += `<div class="validation-info">${pt ? "Correção sugerida:" : "Suggested fix:"} ${escapeHtml(fix.description || fix.action)}</div>`; });
         feedback.innerHTML = html;
-        const repairButton = $("#btn-repair-file");
-        if (repairButton) repairButton.addEventListener("click", async () => {
-            repairButton.disabled = true;
-            repairButton.innerText = "Applying fixes…";
-            const repaired = await api().repair_input_file(selectedFilePath, fixes.map((fix) => fix.action));
-            if (!repaired.success) {
-                logToConsole("Error", repaired.error || "Could not repair the file.");
-                repairButton.disabled = false;
-                repairButton.innerText = "Apply safe fixes and create backup";
-                return;
-            }
-            selectedFileValidated = false;
-            validatedFingerprint = null;
-            logToConsole("Success", `${repaired.message} Backup: ${repaired.backup_path}`);
-            feedback.innerHTML = `<div class="validation-success">${escapeHtml(repaired.message)} Revalidating…</div>`;
-            setTimeout(validateCurrentFile, 1000);
+        feedback.querySelectorAll(".btn-fix-group").forEach((button) => {
+            button.addEventListener("click", async () => {
+                button.disabled = true;
+                button.innerText = pt ? "Corrigindo…" : "Applying…";
+                const repaired = await api().repair_input_file(selectedFilePath, [button.dataset.fix]);
+                if (!repaired.success) {
+                    logToConsole("Error", repaired.error || "Could not repair the file.");
+                    button.disabled = false;
+                    button.innerText = pt ? "Corrigir" : "Fix";
+                    return;
+                }
+                selectedFileValidated = false;
+                validatedFingerprint = null;
+                logToConsole("Success", `${repaired.message} Backup: ${repaired.backup_path}`);
+                feedback.innerHTML = `<div class="validation-success">${escapeHtml(repaired.message)} ${pt ? "Revalidando…" : "Revalidating…"}</div>`;
+                setTimeout(validateCurrentFile, 1000);
+            });
+        });
+        feedback.querySelectorAll(".btn-open-fix").forEach((button) => {
+            button.addEventListener("click", async () => {
+                if (hasApi("open_input_path")) {
+                    const opened = await api().open_input_path(selectedFilePath);
+                    if (!opened.success) logToConsole("Error", opened.error || "Could not open the input file.");
+                }
+            });
         });
         feedback.hidden = false;
         selectedFileValidated = Boolean(result.valid);
         const state = result.file_state || {};
         validatedFingerprint = state.mtime_ns && state.size ? `${state.mtime_ns}:${state.size}` : null;
         $("#btn-next-hierarchy").disabled = !selectedFileValidated;
-        updateReadyState(result.valid ? "authenticated" : "unauthenticated", result.valid ? "Input validated" : "Input needs correction", result.valid ? "Ready to configure the download." : "Edit the same file and validate again.");
+        updateReadyState(result.valid ? "authenticated" : "unauthenticated", result.valid ? (pt ? "Input validado" : "Input validated") : (pt ? "Input precisa de correção" : "Input needs correction"), result.valid ? (pt ? "Pronto para configurar o download." : "Ready to configure the download.") : (pt ? "Corrija o arquivo e valide novamente." : "Edit the same file and validate again."));
         return result;
+    }
+
+    async function getInputColumnsForMapping() {
+        if (!selectedFilePath || !hasApi("get_input_columns")) return [];
+        try {
+            const info = await api().get_input_columns(selectedFilePath);
+            if (info && info.success) {
+                mappingColumns = info.columns || [];
+                renderMappingCard(mappingColumns, info.detected);
+                return mappingColumns;
+            }
+        } catch (_) { /* best effort */ }
+        return [];
     }
 
     async function validateCurrentFile() {
@@ -721,13 +890,17 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     $("#btn-validate-file").addEventListener("click", validateCurrentFile);
+    $("#btn-apply-mapping").addEventListener("click", applyColumnMapping);
     $("#btn-next-input").addEventListener("click", () => {
         if (!selectedFilePath || $("#btn-next-input").disabled) return;
         completeJourneyStep(2);
         validateCurrentFile();
     });
     $("#btn-next-hierarchy").addEventListener("click", () => completeJourneyStep(3));
-    $("#btn-next-destination").addEventListener("click", () => completeJourneyStep(4));
+    $("#btn-next-destination").addEventListener("click", () => {
+        renderDestinationPreview();
+        completeJourneyStep(4);
+    });
     $("#btn-next-review").addEventListener("click", () => {
         if (!$("#download-dir").value) {
             logToConsole("Error", "Choose a destination folder before continuing.");
@@ -740,20 +913,8 @@ document.addEventListener("DOMContentLoaded", () => {
     showJourneyStep(1);
     ensureDefaultDestination();
 
-    function requestFolderConfirmation() {
-        const modal = $("#folder-confirm-modal");
-        const directory = $("#download-dir").value || "Downloads/CoupaAttachments";
-        const parts = hierarchyOrder.length ? hierarchyOrder : ["Company"];
-        $("#folder-preview").innerText = `${directory}/\n└── ${parts.join("/\n    └── ")}\n        └── <PO>\n\nEach PO will be saved only after its Coupa attachments are found.`;
-        modal.hidden = false;
-        return new Promise((resolve) => {
-            const finish = (value) => { modal.hidden = true; resolve(value); };
-            $("#btn-confirm-folder-run").onclick = () => finish(true);
-            $("#btn-cancel-folder-run").onclick = () => finish(false);
-            $("#btn-cancel-folder-confirm").onclick = () => finish(false);
-        });
-    }
-
+    // The folder structure is confirmed between steps 3 and 4 (preview in the
+    // destination panel). The old modal no longer interrupts the start action.
     $("#btn-start-run").addEventListener("click", async () => {
         if (!selectedFilePath) {
             logToConsole("Error", "Please select an input file before starting.");
@@ -763,11 +924,6 @@ document.addEventListener("DOMContentLoaded", () => {
         const validation = await validateCurrentFile();
         if (!validation.valid) {
             logToConsole("Error", "Fix the validation errors and validate the file again.");
-            return;
-        }
-
-        if (!(await requestFolderConfirmation())) {
-            $("#btn-start-run").disabled = false;
             return;
         }
 
@@ -1112,21 +1268,34 @@ document.addEventListener("DOMContentLoaded", () => {
 
     async function loadHistory() {
         const body = $("#history-list");
-        body.innerHTML = '<tr><td colspan="6" class="empty-state">Loading runs…</td></tr>';
+        body.innerHTML = '<tr><td colspan="7" class="empty-state">Loading runs…</td></tr>';
         if (!hasApi("get_session_history")) {
-            body.innerHTML = '<tr><td colspan="6" class="empty-state">History is available in the desktop app.</td></tr>';
+            body.innerHTML = '<tr><td colspan="7" class="empty-state">History is available in the desktop app.</td></tr>';
             return;
         }
         try {
             const history = await api().get_session_history();
-            if (!history.length) { body.innerHTML = '<tr><td colspan="6" class="empty-state">No runs yet.</td></tr>'; return; }
+            if (!history.length) { body.innerHTML = '<tr><td colspan="7" class="empty-state">No runs yet.</td></tr>'; return; }
+            const pt = appSettings.language === "pt-BR";
             body.innerHTML = history.map((session) => {
                 const status = String(session.status || "PENDING").toUpperCase();
-                return `<tr><td>#${session.id}</td><td>${escapeHtml(session.input_file)}</td><td>${escapeHtml(new Date(session.created_at).toLocaleString())}</td><td>${session.total_pos || 0}</td><td><span class="status-badge status-${status.toLowerCase()}">${status}</span></td><td class="history-actions"><button class="btn btn-secondary btn-small btn-view-details" data-id="${session.id}" type="button">Details</button><button class="btn btn-danger btn-small btn-delete-run" data-id="${session.id}" data-input="${escapeHtml(session.input_file || "")}" type="button">Delete</button></td></tr>`;
+                const description = String(session.description || "").trim();
+                const descriptionCell = description
+                    ? `<td class="run-description-cell" title="${escapeHtml(description)}">${escapeHtml(description.length > 60 ? description.slice(0, 60) + "…" : description)}</td>`
+                    : '<td class="run-description-cell empty">—</td>';
+                return `<tr><td>#${session.id}</td><td><button class="coupa-link history-input-link" data-session="${session.id}" title="${pt ? "Abrir o input preservado desta execução" : "Open this run's preserved input"}" type="button">${escapeHtml(session.input_file)}</button></td>${descriptionCell}<td>${escapeHtml(new Date(session.created_at).toLocaleString())}</td><td>${session.total_pos || 0}</td><td><span class="status-badge status-${status.toLowerCase()}">${status}</span></td><td class="history-actions"><button class="btn btn-secondary btn-small btn-view-details" data-id="${session.id}" type="button">${pt ? "Detalhes" : "Details"}</button><button class="btn btn-danger btn-small btn-delete-run" data-id="${session.id}" data-input="${escapeHtml(session.input_file || "")}" type="button">${pt ? "Excluir" : "Delete"}</button></td></tr>`;
             }).join("");
             body.querySelectorAll(".btn-view-details").forEach((button) => button.addEventListener("click", () => openDetailsModal(button.dataset.id)));
             body.querySelectorAll(".btn-delete-run").forEach((button) => button.addEventListener("click", () => deleteRun(button)));
-        } catch (error) { body.innerHTML = `<tr><td colspan="6" class="empty-state">Could not load history: ${escapeHtml(error.message || error)}</td></tr>`; }
+            body.querySelectorAll(".history-input-link").forEach((button) => button.addEventListener("click", async () => {
+                if (!hasApi("open_input_file")) {
+                    logToConsole("Warning", "Input opening is available in the desktop app.");
+                    return;
+                }
+                const result = await api().open_input_file(Number(button.dataset.session));
+                if (!result.success) logToConsole("Error", result.error || "Could not open the preserved input file.");
+            }));
+        } catch (error) { body.innerHTML = `<tr><td colspan="7" class="empty-state">Could not load history: ${escapeHtml(error.message || error)}</td></tr>`; }
     }
 
     const modal = $("#details-modal");
@@ -1349,6 +1518,28 @@ document.addEventListener("DOMContentLoaded", () => {
         $("#modal-title").innerText = `Run #${sessionId}`;
         $("#modal-file").innerText = currentDetails.session.input_file;
         $("#modal-status").innerText = currentDetails.session.status;
+        const descriptionInput = $("#run-description-input");
+        descriptionInput.value = currentDetails.session.description || "";
+        $("#btn-save-run-description").onclick = async () => {
+            if (!hasApi("set_run_description")) {
+                alert("Run description saving is available in the desktop app.");
+                return;
+            }
+            const button = $("#btn-save-run-description");
+            button.disabled = true;
+            const result = await api().set_run_description(sessionId, descriptionInput.value.trim());
+            button.disabled = false;
+            if (!result.success) {
+                logToConsole("Error", result.error || "Could not save the run description.");
+                return;
+            }
+            currentDetails.session.description = descriptionInput.value.trim();
+            logToConsole("Success", appSettings.language === "pt-BR" ? "Descrição da execução salva." : "Run description saved.");
+            loadHistory();
+        };
+        descriptionInput.addEventListener("keydown", (event) => {
+            if (event.key === "Enter") $("#btn-save-run-description").click();
+        });
         const retryEvents = currentDetails.retry_events || [];
         $("#retry-history-list").hidden = !retryEvents.length;
         $("#retry-history-items").innerHTML = retryEvents.map((event) => `<li>${escapeHtml(event.po_number || "All errors")} · ${escapeHtml(event.status_before || "—")} → ${escapeHtml(event.status_after || "PENDING")} · ${escapeHtml(event.completed_at || event.requested_at || "")}</li>`).join("");
@@ -1544,7 +1735,14 @@ document.addEventListener("DOMContentLoaded", () => {
     let startupChecksDone = false;
     async function runStartupChecks() {
         if (startupChecksDone) return;
-        startupChecksDone = true;
+        // The pywebview bridge may not be exposed yet when the fallback timer
+        // fires; retry until the API is actually available so the saved
+        // language/font settings are applied on the first render.
+        let attempts = 0;
+        while (!hasApi("get_app_settings") && attempts < 40) {
+            await new Promise((resolve) => setTimeout(resolve, 250));
+            attempts += 1;
+        }        startupChecksDone = true;
         initializeAuth();
         await loadSettings();
         checkForUpdates();
