@@ -37,6 +37,9 @@ class CoupaCrawler:
         metadata_repository: Optional[CoupaMetadataRepository] = None,
         cookie_store: Optional[CookieStore] = None,
         diagnostic_log_path: Optional[str] = None,
+        download_timeout: float = 60.0,
+        download_attempts: int = 2,
+        download_total_timeout: float = 300.0,
     ):
         self.db = db
         self.session_id = session_id
@@ -45,6 +48,9 @@ class CoupaCrawler:
         self.concurrency = concurrency
         self.request_delay = request_delay
         self.timeout = timeout
+        self.download_timeout = max(float(download_timeout), float(timeout))
+        self.download_attempts = max(1, int(download_attempts))
+        self.download_total_timeout = max(0.1, float(download_total_timeout))
         self.preserve_existing_files = preserve_existing_files
         self.cookie_store = cookie_store
         self.diagnostic_log_path = diagnostic_log_path or os.path.join(
@@ -140,56 +146,148 @@ class CoupaCrawler:
                 return False
         return True
 
-    async def _download_attachment(self, url: str, dest_path: str, *, replace_existing: bool = False) -> None:
+    @staticmethod
+    def _is_retryable_download_error(exc: Exception) -> bool:
+        if isinstance(
+            exc,
+            (
+                httpx.TimeoutException,
+                httpx.NetworkError,
+                RateLimitError,
+                AttachmentTotalTimeoutError,
+            ),
+        ):
+            return True
+        if isinstance(exc, httpx.HTTPStatusError):
+            response = getattr(exc, "response", None)
+            return bool(
+                response is not None
+                and (response.status_code == 408 or 500 <= response.status_code <= 599)
+            )
+        return False
+
+    async def _download_attachment(
+        self,
+        url: str,
+        dest_path: str,
+        *,
+        replace_existing: bool = False,
+    ) -> Dict[str, Any]:
+        attachment_name = os.path.basename(dest_path)
+        for attempt in range(1, self.download_attempts + 1):
+            try:
+                try:
+                    result = await asyncio.wait_for(
+                        self._download_attachment_once(
+                            url,
+                            dest_path,
+                            replace_existing=replace_existing,
+                        ),
+                        timeout=self.download_total_timeout,
+                    )
+                except asyncio.TimeoutError as exc:
+                    raise AttachmentTotalTimeoutError(
+                        f"Download exceeded {self.download_total_timeout:g}s"
+                    ) from exc
+                result["attempt"] = attempt
+                return result
+            except Exception as exc:
+                if attempt >= self.download_attempts or not self._is_retryable_download_error(exc):
+                    raise
+                self._write_diagnostic(
+                    "download_retry",
+                    attachment=attachment_name,
+                    attempt=attempt,
+                    next_attempt=attempt + 1,
+                    error_type=type(exc).__name__,
+                    error_message=self._safe_error_detail(exc) or type(exc).__name__,
+                )
+                await asyncio.sleep(min(5.0, float(attempt)))
+
+        raise RuntimeError("Attachment download attempts exhausted")
+
+    async def _download_attachment_once(
+        self,
+        url: str,
+        dest_path: str,
+        *,
+        replace_existing: bool = False,
+    ) -> Dict[str, Any]:
         t0 = time.monotonic()
         async with self.semaphore:
             t_sem = time.monotonic()
             await self.rate_limiter.wait()
             t_rl = time.monotonic()
-            response = await self.client.get(url)
-            t_http = time.monotonic()
-            if response.status_code == 429:
-                self.rate_limiter.report_429()
-                raise RateLimitError(f"Rate limited on download {url}")
-            self.rate_limiter.report_success()
-            response.raise_for_status()
+            async with self.client.stream(
+                "GET",
+                url,
+                timeout=httpx.Timeout(
+                    connect=self.timeout,
+                    read=self.download_timeout,
+                    write=self.download_timeout,
+                    pool=self.timeout,
+                ),
+            ) as response:
+                t_http = time.monotonic()
+                if response.status_code == 429:
+                    self.rate_limiter.report_429()
+                    raise RateLimitError(f"Rate limited on download {url}")
+                self.rate_limiter.report_success()
+                response.raise_for_status()
 
-            os.makedirs(os.path.dirname(dest_path), exist_ok=True)
-            elapsed_total = (t_http - t0) * 1000
-            if elapsed_total > 2000:
-                print(f"[TIMING] _download: total={elapsed_total:.0f}ms sem_wait={(t_sem - t0)*1000:.0f}ms rl_wait={(t_rl - t_sem)*1000:.0f}ms http={(t_http - t_rl)*1000:.0f}ms")
+                os.makedirs(os.path.dirname(dest_path) or ".", exist_ok=True)
+                final_path = dest_path
+                header_name = self._filename_from_content_disposition(
+                    response.headers.get("content-disposition", "")
+                )
+                if header_name and not replace_existing:
+                    safe_header_name = self._safe_attachment_filename(header_name, url)
+                    if safe_header_name:
+                        final_path = os.path.join(os.path.dirname(dest_path), safe_header_name)
 
-            final_path = dest_path
-            header_name = self._filename_from_content_disposition(response.headers.get("content-disposition", ""))
-            if header_name and not replace_existing:
-                safe_header_name = self._safe_attachment_filename(header_name, url)
-                if safe_header_name:
-                    final_path = os.path.join(os.path.dirname(dest_path), safe_header_name)
+                # Normal runs never overwrite. Individual retries replace only an
+                # invalid file at the expected path; valid files are skipped before
+                # reaching this method.
+                if os.path.exists(final_path) and not replace_existing:
+                    base, ext = os.path.splitext(final_path)
+                    idx = 2
+                    while os.path.exists(f"{base}_{idx}{ext}"):
+                        idx += 1
+                    final_path = f"{base}_{idx}{ext}"
 
-            # Normal runs never overwrite. Individual retries replace only an
-            # invalid file at the expected path; valid files are skipped before
-            # reaching this method.
-            if os.path.exists(final_path) and not replace_existing:
-                base, ext = os.path.splitext(final_path)
-                idx = 2
-                while os.path.exists(f"{base}_{idx}{ext}"):
-                    idx += 1
-                final_path = f"{base}_{idx}{ext}"
+                partial_path = f"{final_path}.part"
+                received_bytes = 0
+                content_length = response.headers.get("content-length")
+                try:
+                    with open(partial_path, "wb") as stream:
+                        async for chunk in response.aiter_bytes(1024 * 1024):
+                            stream.write(chunk)
+                            received_bytes += len(chunk)
+                        stream.flush()
+                        os.fsync(stream.fileno())
+                    os.replace(partial_path, final_path)
+                finally:
+                    if os.path.exists(partial_path):
+                        os.remove(partial_path)
 
-            await asyncio.to_thread(self._write_file, final_path, response.content)
-
-    @staticmethod
-    def _write_file(path: str, content: bytes) -> None:
-        partial_path = f"{path}.part"
-        try:
-            with open(partial_path, "wb") as stream:
-                stream.write(content)
-                stream.flush()
-                os.fsync(stream.fileno())
-            os.replace(partial_path, path)
-        finally:
-            if os.path.exists(partial_path):
-                os.remove(partial_path)
+                elapsed_total = (time.monotonic() - t0) * 1000
+                if elapsed_total > 2000:
+                    print(
+                        f"[TIMING] _download: total={elapsed_total:.0f}ms "
+                        f"sem_wait={(t_sem - t0)*1000:.0f}ms "
+                        f"rl_wait={(t_rl - t_sem)*1000:.0f}ms "
+                        f"http={(t_http - t_rl)*1000:.0f}ms bytes={received_bytes}",
+                        flush=True,
+                    )
+                return {
+                    "bytes": received_bytes,
+                    "content_length": (
+                        int(content_length)
+                        if content_length and content_length.isdigit()
+                        else None
+                    ),
+                    "duration_ms": int(elapsed_total),
+                }
 
     def _write_diagnostic(self, event: str, **fields: Any) -> None:
         """Persist one support-safe, structured event for the current run."""
@@ -231,8 +329,12 @@ class CoupaCrawler:
             context.append(f"attachment={attachment}")
         if elapsed_ms:
             context.append(f"elapsed_ms={elapsed_ms}")
-        if isinstance(exc, httpx.TimeoutException):
-            context.append(f"timeout_s={self.timeout:g}")
+        if isinstance(exc, (httpx.TimeoutException, AttachmentTotalTimeoutError)):
+            if isinstance(exc, AttachmentTotalTimeoutError):
+                timeout = self.download_total_timeout
+            else:
+                timeout = self.download_timeout if phase == "download_attachment" else self.timeout
+            context.append(f"timeout_s={timeout:g}")
         return f"{message} [{', '.join(context)}]"
 
     @staticmethod
@@ -400,9 +502,18 @@ class CoupaCrawler:
                 if self.preserve_existing_files and self._is_valid_existing_file(dest_path):
                     continue
                 if self.preserve_existing_files:
-                    await self._download_attachment(att["url"], dest_path, replace_existing=True)
+                    download_info = await self._download_attachment(
+                        att["url"], dest_path, replace_existing=True
+                    )
                 else:
-                    await self._download_attachment(att["url"], dest_path)
+                    download_info = await self._download_attachment(att["url"], dest_path)
+                if isinstance(download_info, dict):
+                    self._write_diagnostic(
+                        "attachment_downloaded",
+                        po=po_number,
+                        attachment=current_attachment,
+                        **download_info,
+                    )
 
             phase = "persist_success"
             self.db.update_po_status(
@@ -477,6 +588,10 @@ class CoupaCrawler:
 
 
 class RateLimitError(Exception):
+    pass
+
+
+class AttachmentTotalTimeoutError(TimeoutError):
     pass
 
 

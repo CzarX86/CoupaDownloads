@@ -5,7 +5,12 @@ import pytest
 import httpx
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from src.engine.crawler import CoupaCrawler, RateLimitError, AuthError
+from src.engine.crawler import (
+    AttachmentTotalTimeoutError,
+    AuthError,
+    CoupaCrawler,
+    RateLimitError,
+)
 from src.engine.rate_limiter import RateLimiter
 from src.auth.cookie_store import CookieStore
 
@@ -362,7 +367,7 @@ async def test_process_po_records_exception_type_when_message_is_empty(tmp_downl
 
     assert result["error"].startswith("ReadTimeout [phase=download_attachment, po=PO501")
     assert "attachment=f.pdf" in result["error"]
-    assert "timeout_s=10" in result["error"]
+    assert "timeout_s=60" in result["error"]
     assert db.updates[-1]["error_message"] == result["error"]
     assert result["diagnostic_log"].endswith("run_diagnostics.jsonl")
     with open(result["diagnostic_log"], encoding="utf-8") as stream:
@@ -386,6 +391,94 @@ async def test_process_po_records_fetch_phase_for_empty_timeout(tmp_download_dir
     assert "ReadTimeout [phase=fetch_po_html, po=PO502" in result["error"]
     assert "timeout_s=7.5" in result["error"]
     assert db.updates[-1]["error_message"] == result["error"]
+    await crawler.close()
+
+
+@pytest.mark.asyncio
+async def test_download_uses_longer_read_timeout_for_large_files(tmp_download_dir):
+    db = MockSessionDB()
+    crawler = CoupaCrawler(db=db, session_id=1, base_download_dir=tmp_download_dir)
+
+    class StreamResponse:
+        status_code = 200
+        headers = {"content-length": "6"}
+
+        def raise_for_status(self):
+            return None
+
+        async def aiter_bytes(self, chunk_size):
+            assert chunk_size == 1024 * 1024
+            yield b"abc"
+            yield b"def"
+
+    class StreamContext:
+        async def __aenter__(self):
+            return StreamResponse()
+
+        async def __aexit__(self, exc_type, exc, traceback):
+            return False
+
+    crawler.client.stream = MagicMock(return_value=StreamContext())
+    target = os.path.join(tmp_download_dir, "file.pdf")
+    result = await crawler._download_attachment("https://example.test/attachment/1", target)
+
+    timeout = crawler.client.stream.call_args.kwargs["timeout"]
+    assert timeout.connect == 10.0
+    assert timeout.read == 60.0
+    assert result["bytes"] == 6
+    assert result["content_length"] == 6
+    assert result["attempt"] == 1
+    with open(target, "rb") as stream:
+        assert stream.read() == b"abcdef"
+    await crawler.close()
+
+
+@pytest.mark.asyncio
+async def test_download_retries_transient_timeout_and_records_attempt(tmp_download_dir):
+    db = MockSessionDB()
+    crawler = CoupaCrawler(db=db, session_id=1, base_download_dir=tmp_download_dir)
+    crawler._download_attachment_once = AsyncMock(
+        side_effect=[
+            httpx.ReadTimeout(""),
+            {"bytes": 6, "content_length": 6, "duration_ms": 12},
+        ]
+    )
+
+    result = await crawler._download_attachment(
+        "https://example.test/attachment/1",
+        os.path.join(tmp_download_dir, "file.pdf"),
+    )
+
+    assert result["attempt"] == 2
+    assert crawler._download_attachment_once.await_count == 2
+    with open(crawler.diagnostic_log_path, encoding="utf-8") as stream:
+        diagnostic = [json.loads(line) for line in stream]
+    assert diagnostic[-1]["event"] == "download_retry"
+    assert diagnostic[-1]["attempt"] == 1
+    await crawler.close()
+
+
+@pytest.mark.asyncio
+async def test_download_enforces_total_timeout_separately(tmp_download_dir):
+    db = MockSessionDB()
+    crawler = CoupaCrawler(
+        db=db,
+        session_id=1,
+        base_download_dir=tmp_download_dir,
+        download_attempts=1,
+        download_total_timeout=0.01,
+    )
+
+    async def slow_download(*args, **kwargs):
+        await asyncio.sleep(0.2)
+
+    crawler._download_attachment_once = slow_download
+
+    with pytest.raises(AttachmentTotalTimeoutError, match="exceeded 0.1s"):
+        await crawler._download_attachment(
+            "https://example.test/attachment/1",
+            os.path.join(tmp_download_dir, "file.pdf"),
+        )
     await crawler.close()
 
 
