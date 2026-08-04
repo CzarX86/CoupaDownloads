@@ -157,8 +157,12 @@ except Exception:
         "@echo off\r\n"
         "setlocal\r\n"
         "set \"COUPA_PYTHON_PORTABLE=1\"\r\n"
+        "set \"COUPA_BUNDLE_DIR=%~dp0\"\r\n"
         "cd /d \"%~dp0\"\r\n"
-        "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \"$ErrorActionPreference = 'Stop'; try { Get-ChildItem -LiteralPath '%~dp0' -Recurse -File | Unblock-File; exit 0 } catch { $_ | Out-File -FilePath '%~dp0startup.log' -Append; exit 1 }\"\r\n"
+        "if not exist \"%~dp0.zone-unblocked\" (\r\n"
+        "  powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \"$ErrorActionPreference = 'Stop'; try { Get-ChildItem -LiteralPath $env:COUPA_BUNDLE_DIR -Recurse -File | Unblock-File; Set-Content -LiteralPath (Join-Path $env:COUPA_BUNDLE_DIR '.zone-unblocked') -Value 'ok' -Encoding ascii; exit 0 } catch { $_ | Out-File -FilePath (Join-Path $env:COUPA_BUNDLE_DIR 'startup.log') -Append; exit 1 }\"\r\n"
+        "  if errorlevel 1 (echo Could not prepare the portable files. See startup.log. & pause & exit /b 1)\r\n"
+        ")\r\n"
         "if not exist \"%~dp0runtime\\pythonw.exe\" (echo Portable Python runtime was not found. & pause & exit /b 1)\r\n"
         "start \"Contract Downloader\" \"%~dp0runtime\\pythonw.exe\" \"%~dp0app\\launcher.py\"\r\n"
         "exit /b 0\r\n",
@@ -169,7 +173,7 @@ except Exception:
         "setlocal\r\n"
         "set \"COUPA_PYTHON_PORTABLE=1\"\r\n"
         "cd /d \"%~dp0\"\r\n"
-        "\"%~dp0runtime\\python.exe\" -c \"import src.main, process_all_pos; print('Portable runtime OK')\"\r\n"
+        "\"%~dp0runtime\\python.exe\" -c \"import importlib.util, pathlib, sys; required=('webview','pandas','selenium','openpyxl','truststore'); missing=[name for name in required if importlib.util.find_spec(name) is None]; app=pathlib.Path(sys.argv[1]); app_missing=not (app/'src'/'main.py').is_file(); print('Portable runtime:', sys.version.split()[0]); print('Application files:', 'MISSING' if app_missing else 'OK'); print('Dependencies:', 'MISSING: '+', '.join(missing) if missing else 'OK'); raise SystemExit(1 if (missing or app_missing) else 0)\" \"%~dp0app\"\r\n"
         "pause\r\n",
         encoding="ascii",
     )

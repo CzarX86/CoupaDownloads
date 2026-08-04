@@ -458,6 +458,7 @@ def main():
     api = TurboAPI(db, default_download_dir=os.path.expanduser("~/Downloads/CoupaAttachments"))
 
     html_file = resolve_path(os.path.join("gui", "web", "index.html"))
+    icon_file = resolve_path(os.path.join("gui", "web", "favicon.ico"))
 
     primary_screen = webview.screens[0] if getattr(webview, "screens", None) else None
     geometry = calculate_window_geometry(
@@ -492,7 +493,14 @@ def main():
     try:
         # Serve bundled HTML/CSS/JS through pywebview's loopback server;
         # this avoids file:// and resource-path 404s in packaged .app bundles.
-        webview.start(debug=False, http_server=True)
+        # pywebview applies this file to the native window on Windows. This
+        # matters for the portable build, where sys.executable is the stock
+        # pythonw.exe and would otherwise show the Python icon in the taskbar.
+        webview.start(
+            debug=False,
+            http_server=True,
+            icon=icon_file if os.path.isfile(icon_file) else None,
+        )
     finally:
         db.close()
 

@@ -119,9 +119,15 @@ def build():
     # Windows-specific metadata. Do not request elevation: the portable app
     # should run with the user's normal permissions.
     if is_windows:
-        icon_path = PROJECT_ROOT / "icon.ico"
-        if icon_path.exists():
-            cmd.append(f"--icon={icon_path}")
+        icon_candidates = [
+            PROJECT_ROOT / "icon.ico",
+            PROJECT_ROOT / "src" / "gui" / "web" / "favicon.ico",
+        ]
+        for icon_path in icon_candidates:
+            if icon_path.exists():
+                cmd.append(f"--icon={icon_path}")
+                print(f"  Using icon: {icon_path}")
+                break
 
     cmd.append(ENTRY_POINT)
 
