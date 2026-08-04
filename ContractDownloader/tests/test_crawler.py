@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import pytest
 import httpx
@@ -316,6 +317,14 @@ def test_filename_from_content_disposition_filename_star():
     assert crawler._filename_from_content_disposition(header) == "Invoice_#ABC123.msg"
 
 
+def test_error_detail_redacts_url_query_strings():
+    error = RuntimeError("GET https://example.test/attachment/1?token=secret&user=abc failed")
+
+    assert CoupaCrawler._safe_error_detail(error) == (
+        "GET https://example.test/attachment/1?[redacted] failed"
+    )
+
+
 # ——— Exception Handling ———
 
 
@@ -336,6 +345,90 @@ async def test_process_po_cleans_up_on_error(tmp_download_dir):
 
     po_dir = os.path.join(tmp_download_dir, "CC5", "PO500")
     assert not os.path.exists(po_dir)
+    await crawler.close()
+
+
+@pytest.mark.asyncio
+async def test_process_po_records_exception_type_when_message_is_empty(tmp_download_dir):
+    db = MockSessionDB()
+
+    crawler = CoupaCrawler(db=db, session_id=1, base_download_dir=tmp_download_dir)
+    crawler._fetch_html = AsyncMock(
+        return_value="<html><body><a href='/attachments/1/download'>f.pdf</a></body></html>"
+    )
+    crawler._download_attachment = AsyncMock(side_effect=httpx.ReadTimeout(""))
+
+    result = await crawler.process_po(po_number="PO501", company_code="CC5")
+
+    assert result["error"].startswith("ReadTimeout [phase=download_attachment, po=PO501")
+    assert "attachment=f.pdf" in result["error"]
+    assert "timeout_s=10" in result["error"]
+    assert db.updates[-1]["error_message"] == result["error"]
+    assert result["diagnostic_log"].endswith("run_diagnostics.jsonl")
+    with open(result["diagnostic_log"], encoding="utf-8") as stream:
+        diagnostic = [json.loads(line) for line in stream]
+    assert diagnostic[-1]["event"] == "po_error"
+    assert diagnostic[-1]["phase"] == "download_attachment"
+    assert diagnostic[-1]["error_type"] == "ReadTimeout"
+    assert diagnostic[-1]["runtime"]["os"]
+    assert diagnostic[-1]["runtime"]["python"]
+    await crawler.close()
+
+
+@pytest.mark.asyncio
+async def test_process_po_records_fetch_phase_for_empty_timeout(tmp_download_dir):
+    db = MockSessionDB()
+    crawler = CoupaCrawler(db=db, session_id=1, base_download_dir=tmp_download_dir, timeout=7.5)
+    crawler._fetch_html = AsyncMock(side_effect=httpx.ReadTimeout(""))
+
+    result = await crawler.process_po(po_number="PO502", company_code="CC5")
+
+    assert "ReadTimeout [phase=fetch_po_html, po=PO502" in result["error"]
+    assert "timeout_s=7.5" in result["error"]
+    assert db.updates[-1]["error_message"] == result["error"]
+    await crawler.close()
+
+
+@pytest.mark.asyncio
+async def test_process_po_records_attachment_parser_phase(tmp_download_dir):
+    db = MockSessionDB()
+    crawler = CoupaCrawler(db=db, session_id=1, base_download_dir=tmp_download_dir)
+    crawler._fetch_html = AsyncMock(return_value="<html></html>")
+
+    with patch("src.engine.crawler.CoupaParser.extract_attachments", side_effect=ValueError("")):
+        result = await crawler.process_po(po_number="PO504", company_code="CC5")
+
+    assert "ValueError [phase=extract_po_attachments, po=PO504" in result["error"]
+    with open(crawler.diagnostic_log_path, encoding="utf-8") as stream:
+        diagnostic = [json.loads(line) for line in stream]
+    assert diagnostic[-1]["phase"] == "extract_po_attachments"
+    assert diagnostic[-1]["error_type"] == "ValueError"
+    await crawler.close()
+
+
+@pytest.mark.asyncio
+async def test_process_po_persists_pr_error_without_hiding_it(tmp_download_dir):
+    db = MockSessionDB()
+    crawler = CoupaCrawler(db=db, session_id=1, base_download_dir=tmp_download_dir)
+    calls = 0
+
+    async def fetch(url: str, label: str = ""):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return "<a href='/requisition_headers/PR123'>PR</a>"
+        raise httpx.ReadTimeout("")
+
+    crawler._fetch_html = fetch
+    result = await crawler.process_po(po_number="PO503", company_code="CC5")
+
+    assert result["success"] is True
+    with open(crawler.diagnostic_log_path, encoding="utf-8") as stream:
+        diagnostic = [json.loads(line) for line in stream]
+    assert diagnostic[-1]["event"] == "pr_error"
+    assert diagnostic[-1]["phase"] == "fetch_pr_html"
+    assert diagnostic[-1]["error_type"] == "ReadTimeout"
+    assert "timeout_s=10" in diagnostic[-1]["formatted_error"]
     await crawler.close()
 
 

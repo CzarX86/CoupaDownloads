@@ -1,6 +1,8 @@
 import asyncio
 import hashlib
+import json
 import os
+import platform
 import re
 import shutil
 import time
@@ -34,6 +36,7 @@ class CoupaCrawler:
         preserve_existing_files: bool = False,
         metadata_repository: Optional[CoupaMetadataRepository] = None,
         cookie_store: Optional[CookieStore] = None,
+        diagnostic_log_path: Optional[str] = None,
     ):
         self.db = db
         self.session_id = session_id
@@ -44,6 +47,9 @@ class CoupaCrawler:
         self.timeout = timeout
         self.preserve_existing_files = preserve_existing_files
         self.cookie_store = cookie_store
+        self.diagnostic_log_path = diagnostic_log_path or os.path.join(
+            self.base_download_dir, "run_diagnostics.jsonl"
+        )
         if metadata_repository is not None:
             self.metadata_repository = metadata_repository
         elif hasattr(db, "conn"):
@@ -185,6 +191,50 @@ class CoupaCrawler:
             if os.path.exists(partial_path):
                 os.remove(partial_path)
 
+    def _write_diagnostic(self, event: str, **fields: Any) -> None:
+        """Persist one support-safe, structured event for the current run."""
+        record = {
+            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "event": event,
+            "session_id": self.session_id,
+            **fields,
+        }
+        try:
+            parent = os.path.dirname(self.diagnostic_log_path) or "."
+            os.makedirs(parent, exist_ok=True)
+            with open(self.diagnostic_log_path, "a", encoding="utf-8") as stream:
+                stream.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
+        except OSError:
+            # Diagnostics must never turn a PO failure into a second failure.
+            pass
+
+    @staticmethod
+    def _safe_error_detail(exc: Exception) -> str:
+        """Remove query strings from URLs before writing support logs."""
+        detail = str(exc).strip()
+        return re.sub(r"(https?://[^\s'\"?]+)\?[^\s'\"]*", r"\1?[redacted]", detail)
+
+    def _format_exception(
+        self,
+        exc: Exception,
+        *,
+        phase: str,
+        po_number: str,
+        attachment: str = "",
+        elapsed_ms: int = 0,
+    ) -> str:
+        """Keep exception type and execution context when a message is empty."""
+        detail = self._safe_error_detail(exc)
+        message = f"{type(exc).__name__}: {detail}" if detail else type(exc).__name__
+        context = [f"phase={phase}", f"po={po_number}"]
+        if attachment:
+            context.append(f"attachment={attachment}")
+        if elapsed_ms:
+            context.append(f"elapsed_ms={elapsed_ms}")
+        if isinstance(exc, httpx.TimeoutException):
+            context.append(f"timeout_s={self.timeout:g}")
+        return f"{message} [{', '.join(context)}]"
+
     @staticmethod
     def _safe_attachment_filename(raw_name: str, download_url: str, max_component_len: int = 180) -> str:
         """Return a filesystem-safe filename with bounded length.
@@ -268,13 +318,18 @@ class CoupaCrawler:
         dir_created = False
         start_time = time.time()
         metadata_saved = False
+        phase = "initializing"
+        current_attachment = ""
+        po_url = ""
 
         try:
+            phase = "fetch_po_html"
             po_url = self._po_url(po_number)
             html_content = await self._fetch_html(po_url, label=f"PO {po_number}")
 
             if self.metadata_repository is not None:
                 try:
+                    phase = "extract_metadata"
                     metadata = CoupaMetadataExtractor.extract(
                         html_content,
                         po_number=po_number,
@@ -282,37 +337,66 @@ class CoupaCrawler:
                     )
                     self.metadata_repository.save(self.session_id, metadata)
                 except Exception as metadata_error:
-                    self.metadata_repository.save_error(self.session_id, po_number, str(metadata_error), po_url)
+                    metadata_error_message = self._format_exception(
+                        metadata_error,
+                        phase="extract_metadata",
+                        po_number=po_number,
+                    )
+                    self.metadata_repository.save_error(
+                        self.session_id, po_number, metadata_error_message, po_url
+                    )
                 metadata_saved = True
 
+            phase = "extract_po_attachments"
             po_attachments = CoupaParser.extract_attachments(html_content, base_url=self.base_url)
 
             all_attachments = list(po_attachments)
             pr_urls = CoupaParser.extract_pr_links(html_content)
             for pr_url in pr_urls:
                 try:
+                    phase = "fetch_pr_html"
                     full_pr_url = str(httpx.URL(self.base_url).join(httpx.URL(pr_url)))
                     pr_html = await self._fetch_html(full_pr_url, label=f"PR for {po_number}")
                     # Pass full PR page URL so relative attachment links resolve correctly
+                    phase = "extract_pr_attachments"
                     pr_attachments = CoupaParser.extract_attachments(pr_html, base_url=full_pr_url)
                     all_attachments.extend(pr_attachments)
-                except Exception:
+                except Exception as pr_error:
                     # Keep processing PO attachments even when one PR link fails.
+                    pr_error_message = self._format_exception(
+                        pr_error,
+                        phase=phase,
+                        po_number=po_number,
+                    )
+                    self._write_diagnostic(
+                        "pr_error",
+                        po=po_number,
+                        phase=phase,
+                        error_type=type(pr_error).__name__,
+                        error_message=self._safe_error_detail(pr_error) or type(pr_error).__name__,
+                        formatted_error=pr_error_message,
+                    )
                     continue
 
+            phase = "deduplicate_attachments"
             attachments = CoupaParser.deduplicate_attachments(all_attachments)
 
             if not attachments:
+                phase = "persist_empty_success"
                 self.db.update_po_status(self.session_id, po_number, "SUCCESS", None, 0, None)
                 latency = time.time() - start_time
                 return {"po": po_number, "success": True, "attachments": [], "latency": latency}
 
+            phase = "prepare_download_directory"
             os.makedirs(po_dir, exist_ok=True)
             dir_created = True
 
             for att in attachments:
-                fallback_name = self._safe_attachment_filename(att.get("filename", ""), att.get("url", ""))
-                dest_path = os.path.join(po_dir, fallback_name)
+                phase = "download_attachment"
+                current_attachment = self._safe_attachment_filename(
+                    att.get("filename", ""), att.get("url", "")
+                )
+                dest_path = os.path.join(po_dir, current_attachment)
                 if self.preserve_existing_files and self._is_valid_existing_file(dest_path):
                     continue
                 if self.preserve_existing_files:
@@ -320,6 +404,7 @@ class CoupaCrawler:
                 else:
                     await self._download_attachment(att["url"], dest_path)
 
+            phase = "persist_success"
             self.db.update_po_status(
                 self.session_id, po_number, "SUCCESS", po_dir, len(attachments), None
             )
@@ -332,16 +417,45 @@ class CoupaCrawler:
             }
 
         except Exception as e:
+            elapsed_ms = int(max(0.0, time.time() - start_time) * 1000)
+            error_msg = self._format_exception(
+                e,
+                phase=phase,
+                po_number=po_number,
+                attachment=current_attachment,
+                elapsed_ms=elapsed_ms,
+            )
+            self._write_diagnostic(
+                "po_error",
+                po=po_number,
+                phase=phase,
+                attachment=current_attachment or None,
+                error_type=type(e).__name__,
+                error_message=self._safe_error_detail(e) or type(e).__name__,
+                formatted_error=error_msg,
+                elapsed_ms=elapsed_ms,
+                runtime={"os": platform.platform(), "python": platform.python_version()},
+            )
             if self.metadata_repository is not None and not metadata_saved:
                 try:
-                    self.metadata_repository.save_error(self.session_id, po_number, str(e), locals().get("po_url", ""))
+                    self.metadata_repository.save_error(
+                        self.session_id,
+                        po_number,
+                        error_msg,
+                        locals().get("po_url", ""),
+                    )
                 except Exception:
                     pass
             if dir_created and os.path.exists(po_dir) and not self.preserve_existing_files:
                 shutil.rmtree(po_dir, ignore_errors=True)
-            error_msg = str(e)
             self.db.update_po_status(self.session_id, po_number, "ERROR", None, 0, error_msg)
-            return {"po": po_number, "success": False, "error": error_msg, "latency": time.time() - start_time}
+            return {
+                "po": po_number,
+                "success": False,
+                "error": error_msg,
+                "diagnostic_log": self.diagnostic_log_path,
+                "latency": time.time() - start_time,
+            }
 
     async def process_batch(self, pos: List[tuple]) -> List[Dict[str, Any]]:
         """Process multiple POs concurrently. Each item is (po_number, company_code)."""

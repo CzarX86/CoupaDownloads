@@ -145,6 +145,8 @@ class CliProcessSupervisor:
             return None
         if "[AUTH] Chaves:" in line:
             return None
+        if line.startswith("[ERROR][PO "):
+            return {"type": "Error", "message": f"Error: {line[len('[ERROR]'):].lstrip()}"}
 
         progress = re.search(
             r"\[\s*(\d+)/(\d+)\]\s+ok=(\d+)\s+err=(\d+)\s+files=(\d+)",

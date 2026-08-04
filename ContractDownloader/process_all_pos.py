@@ -943,6 +943,12 @@ async def main():
             if result.get("success") or attempt == args.retry_attempts - 1:
                 break
             await asyncio.sleep(min(5.0, 1.0 * (attempt + 1)))
+        if not result.get("success"):
+            print(
+                f"[ERROR][PO {po_number}] {result.get('error') or 'Unknown error'} "
+                f"[diagnostic_log={result.get('diagnostic_log') or crawler.diagnostic_log_path}]",
+                flush=True,
+            )
         previous_status = initial_status.get(str(po_number), "PENDING")
         if resume_in_place and previous_status == "ERROR":
             # An ERROR row was already counted before the pause. Retrying it

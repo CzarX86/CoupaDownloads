@@ -46,6 +46,16 @@ def test_actionable_logs_keep_progress_and_drop_timing_noise():
         "message": "Progress: 25/100 POs · 23 succeeded · 2 failed · 41 attachments",
     }
 
+    error = CliProcessSupervisor._actionable_log_entry(
+        "[ERROR][PO PO17907374] ReadTimeout [phase=download_attachment, po=PO17907374] "
+        "[diagnostic_log=C:\\Users\\A\\Downloads\\run_diagnostics.jsonl]"
+    )
+    assert error == {
+        "type": "Error",
+        "message": "Error: [PO PO17907374] ReadTimeout [phase=download_attachment, po=PO17907374] "
+        "[diagnostic_log=C:\\Users\\A\\Downloads\\run_diagnostics.jsonl]",
+    }
+
 
 def test_supervisor_reports_resumable_pause_as_safe_completion():
     class FinishedProcess:

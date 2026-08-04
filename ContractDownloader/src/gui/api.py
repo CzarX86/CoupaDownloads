@@ -686,10 +686,12 @@ class AppAPI:
                             current["errors"] += 1
 
                 if failed:
+                    diagnostic_log = result.get("diagnostic_log") or crawler.diagnostic_log_path
                     self._append_log(
                         session_id,
                         "Error",
-                        f"PO {po_number} failed: {(po_row or {}).get('error_message') or po_status}",
+                        f"PO {po_number} failed: {(po_row or {}).get('error_message') or po_status} "
+                        f"[diagnostic_log={diagnostic_log}]",
                     )
                 else:
                     self._append_log(session_id, "Success", f"PO {po_number} completed")
