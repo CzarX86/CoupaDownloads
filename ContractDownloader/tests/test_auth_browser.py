@@ -217,16 +217,17 @@ def test_profile_setup_opens_natively_outside_webdriver(monkeypatch, tmp_path, k
         return process
 
     monkeypatch.setattr("src.auth.browser.subprocess.Popen", fake_popen)
+    monkeypatch.setattr("src.auth.browser.sys.platform", "darwin")
     app_name = "Microsoft Edge" if kind is BrowserKind.EDGE else "Google Chrome"
-    executable = f"/Applications/{app_name}.app/Contents/MacOS/{app_name}"
+    executable = tmp_path / f"{app_name}.app" / "Contents" / "MacOS" / app_name
 
     result = open_browser_profile_setup(
-        BrowserInstallation(kind, kind.value, executable),
+        BrowserInstallation(kind, kind.value, str(executable)),
         tmp_path / "profile",
     )
 
     assert result is process
-    assert captured["command"][:4] == ["open", "-n", "-a", f"/Applications/{app_name}.app"]
+    assert captured["command"][:4] == ["open", "-n", "-a", str(executable.parents[2])]
     assert f"--user-data-dir={tmp_path / 'profile'}" in captured["command"]
     assert not any("coupahost.com" in argument for argument in captured["command"])
 
