@@ -20,6 +20,14 @@ from typing import Any, Optional
 class CliProcessSupervisor:
     """Presentation-layer adapter around the canonical process_all_pos.py pipeline."""
 
+    @staticmethod
+    def _process_creationflags() -> int:
+        if os.name != "nt":
+            return 0
+        return getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) | getattr(
+            subprocess, "CREATE_NO_WINDOW", 0x08000000
+        )
+
     def __init__(self) -> None:
         self.project_root = Path(__file__).resolve().parents[2]
         self.script = self.project_root / "process_all_pos.py"
@@ -427,7 +435,6 @@ class CliProcessSupervisor:
                 concurrency=concurrency,
             )
             try:
-                creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) if os.name == "nt" else 0
                 self.process = subprocess.Popen(
                     command,
                     cwd=str(self.project_root),
@@ -437,7 +444,7 @@ class CliProcessSupervisor:
                     stderr=subprocess.STDOUT,
                     text=True,
                     bufsize=1,
-                    creationflags=creationflags,
+                    creationflags=self._process_creationflags(),
                 )
             except OSError as exc:
                 self.process = None

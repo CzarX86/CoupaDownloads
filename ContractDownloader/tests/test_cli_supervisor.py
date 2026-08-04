@@ -93,6 +93,16 @@ def test_pythonw_gui_uses_console_python_for_cli_worker(monkeypatch, tmp_path):
     assert command[1].endswith("process_all_pos.py")
 
 
+def test_windows_cli_worker_does_not_create_a_console_window(monkeypatch):
+    import src.gui.cli_supervisor as supervisor_module
+
+    monkeypatch.setattr(supervisor_module.os, "name", "nt")
+
+    flags = CliProcessSupervisor._process_creationflags()
+
+    assert flags & 0x08000000
+
+
 def test_retry_file_update_replaces_po_and_adds_remark(tmp_path):
     from openpyxl import Workbook, load_workbook
 

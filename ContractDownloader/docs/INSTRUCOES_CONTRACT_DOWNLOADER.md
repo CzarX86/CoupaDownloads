@@ -19,6 +19,7 @@ Abra duas vezes o arquivo:
 Não é necessário instalar Python, instalar bibliotecas ou executar como administrador.
 
 Na primeira abertura, o Windows pode demorar alguns segundos para preparar o aplicativo.
+Durante os downloads, o processo auxiliar roda sem abrir uma janela de terminal; o painel de logs permanece dentro do aplicativo.
 
 ## 3. Fazer o login
 
