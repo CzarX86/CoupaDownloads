@@ -43,31 +43,40 @@ class SessionValidator:
             ),
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         }
+        cookie_jar = httpx.Cookies()
+        cookie_domain = urlparse(self.base_url).hostname or ""
+        for name, value in normalised.items():
+            cookie_jar.set(name, value, domain=cookie_domain, path="/")
         for attempt in range(self.attempts):
             try:
                 async with httpx.AsyncClient(
-                    cookies=normalised,
+                    cookies=cookie_jar,
                     headers=headers,
                     follow_redirects=True,
                     timeout=self.timeout,
                     verify=system_ssl_context(),
                 ) as client:
                     response = await client.get(f"{self.base_url}/order_headers")
+                    cookie_jar = client.cookies
+                    refreshed = {
+                        str(cookie.name): str(cookie.value)
+                        for cookie in cookie_jar.jar
+                    } or normalised
                 final_url = str(response.url)
                 if response.status_code == 200 and self._is_coupa_host(final_url) and not self._is_auth_redirect(final_url):
-                    return SessionCheck(AuthState.VALID, "Cached Coupa session is valid.", normalised, "cache")
+                    return SessionCheck(AuthState.VALID, "Cached Coupa session is valid.", refreshed, "cache")
                 if response.status_code in {401, 403} or self._is_auth_redirect(final_url):
                     if attempt + 1 < self.attempts:
                         await asyncio.sleep(0.25)
                         continue
-                    return SessionCheck(AuthState.EXPIRED, "Cached Coupa session expired.", normalised, "cache")
+                    return SessionCheck(AuthState.EXPIRED, "Cached Coupa session expired.", refreshed, "cache")
                 if response.status_code >= 500:
                     if attempt + 1 < self.attempts:
                         await asyncio.sleep(0.25)
                         continue
-                    return SessionCheck(AuthState.UNAVAILABLE, "Coupa is temporarily unavailable.", normalised, "cache")
+                    return SessionCheck(AuthState.UNAVAILABLE, "Coupa is temporarily unavailable.", refreshed, "cache")
                 else:
-                    return SessionCheck(AuthState.EXPIRED, "Coupa rejected the cached session.", normalised, "cache")
+                    return SessionCheck(AuthState.EXPIRED, "Coupa rejected the cached session.", refreshed, "cache")
             except (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError):
                 pass
             except Exception as exc:

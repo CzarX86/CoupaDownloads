@@ -561,10 +561,15 @@ class BrowserLogin:
             if authenticated_handle:
                 self._report(status_callback, "checking", "Coupa is open; checking the current session…")
             else:
+                work_account_hint = (
+                    " To reduce future prompts, sign this dedicated Edge profile into your work account with sync off."
+                    if installation.kind is BrowserKind.EDGE
+                    else ""
+                )
                 self._report(
                     status_callback,
                     "user_action_required",
-                    f"Complete the Coupa sign-in in {installation.name}.",
+                    f"Complete the Coupa sign-in in {installation.name}.{work_account_hint}",
                 )
 
             deadline = time.monotonic() + self.wait_timeout

@@ -40,6 +40,8 @@ class AuthService:
         cached = self.store.load()
         result = await self.validator.validate(cached)
         if result.state in {AuthState.VALID, AuthState.UNAVAILABLE} and result.has_cached_session:
+            if result.state is AuthState.VALID:
+                self.store.save(result.cookies)
             self.set_cookies(result.cookies)
             return result
         self.set_cookies(None)

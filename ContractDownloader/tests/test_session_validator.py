@@ -18,6 +18,7 @@ class FakeClient:
 
     def __init__(self, **kwargs):
         self.kwargs = kwargs
+        self.cookies = kwargs.get("cookies") or httpx.Cookies()
 
     async def __aenter__(self):
         return self
@@ -82,3 +83,25 @@ def test_validator_retries_transient_network_failure(monkeypatch):
 
     assert result.state is AuthState.VALID
     assert RetryingClient.calls == 2
+
+
+def test_validator_returns_cookie_refreshed_by_coupa(monkeypatch):
+    class RefreshingClient(FakeClient):
+        instance = None
+
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            type(self).instance = self
+
+        async def get(self, url):
+            current = next(iter(self.cookies.jar))
+            self.cookies.set("_coupa_session", "refreshed", domain=current.domain, path="/")
+            return FakeResponse(200, "https://unilever.coupahost.com/order_headers")
+
+    monkeypatch.setattr("src.auth.session_validator.httpx.AsyncClient", RefreshingClient)
+
+    result = asyncio.run(SessionValidator().validate({"_coupa_session": "cached"}))
+
+    assert result.state is AuthState.VALID
+    assert result.cookies["_coupa_session"] == "refreshed"
+    assert [cookie.value for cookie in RefreshingClient.instance.cookies.jar] == ["refreshed"]

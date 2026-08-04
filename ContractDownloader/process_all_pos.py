@@ -906,6 +906,7 @@ async def main():
         request_delay=0.03,
         enable_circuit_breaker=not args.disable_circuit_breaker,
         preserve_existing_files=bool(args.retry_po or args.retry_in_place_po or args.retry_in_place_errors),
+        cookie_store=auth_service.store,
     )
 
     resume_in_place = args.resume_in_place_session_id is not None

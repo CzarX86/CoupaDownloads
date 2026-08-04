@@ -5,7 +5,7 @@ import re
 import shutil
 import time
 import zipfile
-from urllib.parse import unquote
+from urllib.parse import unquote, urlparse
 from typing import Optional, List, Dict, Any
 
 import httpx
@@ -16,6 +16,7 @@ from src.engine.coupa_metadata import CoupaMetadataExtractor
 from src.engine.rate_limiter import RateLimiter
 from src.db.coupa_metadata import CoupaMetadataRepository
 from src.engine.tls import system_ssl_context
+from src.auth.cookie_store import CookieStore, CookieStoreError
 
 
 class CoupaCrawler:
@@ -32,6 +33,7 @@ class CoupaCrawler:
         enable_circuit_breaker: Optional[bool] = None,
         preserve_existing_files: bool = False,
         metadata_repository: Optional[CoupaMetadataRepository] = None,
+        cookie_store: Optional[CookieStore] = None,
     ):
         self.db = db
         self.session_id = session_id
@@ -41,6 +43,7 @@ class CoupaCrawler:
         self.request_delay = request_delay
         self.timeout = timeout
         self.preserve_existing_files = preserve_existing_files
+        self.cookie_store = cookie_store
         if metadata_repository is not None:
             self.metadata_repository = metadata_repository
         elif hasattr(db, "conn"):
@@ -65,11 +68,15 @@ class CoupaCrawler:
             "Accept-Language": "en-US,en;q=0.9",
         }
         self.cookies = cookies or {}
+        cookie_jar = httpx.Cookies()
+        cookie_domain = urlparse(self.base_url).hostname or ""
+        for name, value in self.cookies.items():
+            cookie_jar.set(name, value, domain=cookie_domain, path="/")
 
         limits = httpx.Limits(max_keepalive_connections=concurrency, max_connections=concurrency * 2)
         self.client = httpx.AsyncClient(
             http2=True,
-            cookies=self.cookies,
+            cookies=cookie_jar,
             headers=self.headers,
             limits=limits,
             follow_redirects=True,
@@ -342,6 +349,16 @@ class CoupaCrawler:
         return await asyncio.gather(*tasks)
 
     async def close(self) -> None:
+        if self.cookie_store:
+            refreshed = {
+                str(cookie.name): str(cookie.value)
+                for cookie in self.client.cookies.jar
+            }
+            if refreshed.get("_coupa_session"):
+                try:
+                    self.cookie_store.save(refreshed)
+                except CookieStoreError as exc:
+                    print(f"[AUTH][WARNING] Refreshed Coupa session could not be cached: {exc}")
         await self.client.aclose()
 
 

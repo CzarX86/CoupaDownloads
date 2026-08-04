@@ -90,6 +90,31 @@ def test_worker_mode_keeps_cached_session_when_validation_is_unavailable(tmp_pat
     assert login.calls == 0
 
 
+def test_validated_session_refresh_is_persisted(tmp_path):
+    class RefreshingValidator:
+        async def validate(self, cookies):
+            return SessionCheck(
+                AuthState.VALID,
+                "valid",
+                {"_coupa_session": "refreshed"},
+                "cache",
+            )
+
+    store = FakeStore({"_coupa_session": "cached"})
+    service = AuthService(
+        store=store,
+        validator=RefreshingValidator(),
+        catalog=FakeCatalog,
+        profiles=FakeProfiles(tmp_path),
+        browser_login=FakeLogin(),
+    )
+
+    result = asyncio.run(service.check())
+
+    assert result.state is AuthState.VALID
+    assert store.saved == {"_coupa_session": "refreshed"}
+
+
 def test_interactive_mode_reauthenticates_after_expiry(tmp_path):
     store = FakeStore({"_coupa_session": "expired"})
     login = FakeLogin()

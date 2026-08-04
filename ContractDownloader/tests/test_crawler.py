@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from src.engine.crawler import CoupaCrawler, RateLimitError, AuthError
 from src.engine.rate_limiter import RateLimiter
+from src.auth.cookie_store import CookieStore
 
 
 class MockSessionDB:
@@ -355,3 +356,21 @@ async def test_process_batch_concurrent(tmp_download_dir):
     assert len(results) == 3
     assert all(r["success"] for r in results)
     await crawler.close()
+
+
+@pytest.mark.asyncio
+async def test_close_persists_cookie_refreshed_during_download(tmp_path):
+    store = CookieStore(tmp_path / "cookies.json", tmp_path / "auth_cache.db")
+    crawler = CoupaCrawler(
+        db=MockSessionDB(),
+        session_id=1,
+        base_download_dir=str(tmp_path),
+        cookies={"_coupa_session": "cached"},
+        cookie_store=store,
+    )
+    current = next(iter(crawler.client.cookies.jar))
+    crawler.client.cookies.set("_coupa_session", "refreshed", domain=current.domain, path="/")
+
+    await crawler.close()
+
+    assert store.load()["_coupa_session"] == "refreshed"

@@ -655,6 +655,7 @@ class AppAPI:
             download_dir,
             concurrency=concurrency,
             cookies=cookies,
+            cookie_store=self.auth_service.store,
         )
         self._set_session_status(session_id, "RUNNING")
         self._append_log(
