@@ -113,25 +113,26 @@ class AuthService:
         validation = await self.validator.validate(cookies)
         if validation.state is AuthState.EXPIRED:
             raise RuntimeError("Coupa rejected the captured session. Complete the sign-in and try again.")
+        current_cookies = dict(validation.cookies) if validation.has_cached_session else cookies
 
         try:
-            self.store.save(cookies)
+            self.store.save(current_cookies)
         except CookieStoreError:
             raise
-        self.set_cookies(cookies)
+        self.set_cookies(current_cookies)
 
         if validation.state is AuthState.UNAVAILABLE:
             result = SessionCheck(
                 AuthState.UNAVAILABLE,
                 "Sign-in completed; Coupa session validation is temporarily unavailable. The cached session will be tried during the run.",
-                cookies,
+                current_cookies,
                 "capture",
             )
             if status_callback:
                 status_callback("success", result.message)
             return result
 
-        result = SessionCheck(AuthState.VALID, "Coupa session captured and validated.", cookies, "capture")
+        result = SessionCheck(AuthState.VALID, "Coupa session captured and validated.", current_cookies, "capture")
         if status_callback:
             status_callback("success", result.message)
         return result

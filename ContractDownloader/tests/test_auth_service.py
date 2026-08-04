@@ -134,6 +134,37 @@ def test_interactive_mode_reauthenticates_after_expiry(tmp_path):
     assert store.saved == {"_coupa_session": "new-session"}
 
 
+def test_interactive_login_persists_cookie_refreshed_by_validation(tmp_path):
+    class RefreshingValidator:
+        def __init__(self):
+            self.calls = 0
+
+        async def validate(self, cookies):
+            self.calls += 1
+            if self.calls == 1:
+                return SessionCheck(AuthState.EXPIRED, "expired", cookies or {}, "cache")
+            return SessionCheck(
+                AuthState.VALID,
+                "valid",
+                {"_coupa_session": "refreshed-after-login"},
+                "cache",
+            )
+
+    store = FakeStore({"_coupa_session": "expired"})
+    service = AuthService(
+        store=store,
+        validator=RefreshingValidator(),
+        catalog=FakeCatalog,
+        profiles=FakeProfiles(tmp_path),
+        browser_login=FakeLogin(),
+    )
+
+    result = asyncio.run(service.ensure_session(interactive=True))
+
+    assert result.cookies["_coupa_session"] == "refreshed-after-login"
+    assert store.saved == {"_coupa_session": "refreshed-after-login"}
+
+
 def test_reset_only_delegates_to_cache_and_app_profiles(tmp_path):
     store = FakeStore({"_coupa_session": "cached"})
     profiles = FakeProfiles(tmp_path)

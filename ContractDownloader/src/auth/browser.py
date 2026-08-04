@@ -4,6 +4,7 @@ import json
 import os
 import plistlib
 import re
+import signal
 import shutil
 import subprocess
 import sys
@@ -298,8 +299,10 @@ class BrowserProfileManager:
     def ensure(self, kind: BrowserKind) -> Path:
         path = self.path_for(kind)
         path.mkdir(parents=True, exist_ok=True)
-        if self.is_locked(path) and not self.clear_stale_lock(path):
-            raise RuntimeError(f"Close the Contract Downloader sign-in browser before retrying {kind.value} sign-in.")
+        if self.is_locked(path):
+            recovered = self._reap_orphaned_webdriver(path) or self.clear_stale_lock(path)
+            if not recovered:
+                raise RuntimeError(f"Close the Contract Downloader sign-in browser before retrying {kind.value} sign-in.")
         try:
             os.chmod(self.root.parent, 0o700)
             os.chmod(self.root, 0o700)
@@ -330,19 +333,24 @@ class BrowserProfileManager:
         }
 
     @staticmethod
-    def _lock_owner_alive(path: Path) -> bool:
+    def _lock_owner_pid(path: Path) -> int | None:
         lock = path / "SingletonLock"
         if not lock.is_symlink():
-            return False
+            return None
         try:
             target = os.readlink(lock)
         except OSError:
-            return False
+            return None
         match = re.search(r"-(\d+)$", target)
-        if not match:
+        return int(match.group(1)) if match else None
+
+    @classmethod
+    def _lock_owner_alive(cls, path: Path) -> bool:
+        pid = cls._lock_owner_pid(path)
+        if pid is None:
             return False
         try:
-            os.kill(int(match.group(1)), 0)
+            os.kill(pid, 0)
         except ProcessLookupError:
             return False
         except PermissionError:
@@ -350,6 +358,58 @@ class BrowserProfileManager:
         except OSError:
             return False
         return True
+
+    @staticmethod
+    def _process_info(pid: int) -> tuple[int, str] | None:
+        try:
+            result = subprocess.run(
+                ["ps", "-o", "ppid=,command=", "-p", str(pid)],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=2,
+            )
+            line = result.stdout.strip()
+            if result.returncode != 0 or not line:
+                return None
+            parent, command = line.split(maxsplit=1)
+            return int(parent), command
+        except (OSError, subprocess.SubprocessError, TypeError, ValueError):
+            return None
+
+    @classmethod
+    def _reap_orphaned_webdriver(cls, path: Path) -> bool:
+        """Stop only an orphaned WebDriver tree using this app-owned profile."""
+        if sys.platform != "darwin":
+            return False
+        owner_pid = cls._lock_owner_pid(path)
+        owner = cls._process_info(owner_pid) if owner_pid is not None else None
+        if not owner:
+            return False
+        parent_pid, owner_command = owner
+        profile_argument = f"--user-data-dir={path}"
+        if profile_argument not in owner_command or "--test-type=webdriver" not in owner_command:
+            return False
+
+        process_ids = [owner_pid]
+        if parent_pid != 1:
+            parent = cls._process_info(parent_pid)
+            if not parent or parent[0] != 1 or "msedgedriver" not in parent[1]:
+                return False
+            process_ids.append(parent_pid)
+
+        for pid in process_ids:
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            except OSError:
+                return False
+
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline and cls._lock_owner_alive(path):
+            time.sleep(0.1)
+        return cls.clear_stale_lock(path)
 
     @classmethod
     def clear_stale_lock(cls, path: Path) -> bool:
@@ -432,6 +492,33 @@ def build_browser_options(
     return options
 
 
+def open_browser_profile_setup(
+    installation: BrowserInstallation,
+    profile_dir: Path,
+) -> subprocess.Popen[bytes]:
+    """Open account setup outside WebDriver so the OS sign-in broker can render."""
+    browser_arguments = [
+        f"--user-data-dir={profile_dir}",
+        "--no-first-run",
+        "--no-default-browser-check",
+        "--new-window",
+    ]
+    command = [installation.executable, *browser_arguments]
+    if sys.platform == "darwin":
+        app_bundle = Path(installation.executable).parents[2]
+        command = ["open", "-n", "-a", str(app_bundle), "--args", *browser_arguments]
+    try:
+        return subprocess.Popen(
+            command,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except OSError as exc:
+        raise RuntimeError(
+            f"Could not open {installation.name} profile setup: {exc}"
+        ) from exc
+
+
 class SeleniumBrowserLauncher:
     def launch(self, installation: BrowserInstallation, profile_dir: Path, *, headless: bool = False) -> Any:
         options = build_browser_options(installation, profile_dir, headless=headless)
@@ -454,12 +541,14 @@ class BrowserLogin:
         poll_interval: float = 0.25,
         wait_timeout: float = 900.0,
         final_navigation_timeout: float = 15.0,
+        profile_setup_launcher: Callable[[BrowserInstallation, Path], Any] | None = None,
     ):
         self.launcher = launcher or SeleniumBrowserLauncher()
         self.base_url = base_url.rstrip("/")
         self.poll_interval = poll_interval
         self.wait_timeout = wait_timeout
         self.final_navigation_timeout = final_navigation_timeout
+        self.profile_setup_launcher = profile_setup_launcher or open_browser_profile_setup
 
     @staticmethod
     def _report(callback: Callable[[str, str], None] | None, state: str, message: str) -> None:
@@ -492,6 +581,16 @@ class BrowserLogin:
             return [str(handle) for handle in driver.window_handles]
         except Exception:
             return []
+
+    @staticmethod
+    def _profile_has_browser_account(profile_dir: Path) -> bool:
+        try:
+            preferences = json.loads(
+                (profile_dir / "Default" / "Preferences").read_text(encoding="utf-8")
+            )
+            return bool(preferences.get("account_info"))
+        except (OSError, TypeError, ValueError, json.JSONDecodeError):
+            return False
 
     def _authenticated_window(self, driver: Any) -> str | None:
         """Find a logged-in window, including SSO-created tabs/windows.
@@ -529,6 +628,42 @@ class BrowserLogin:
             and self._has_session_cookie(driver)
         )
 
+    @staticmethod
+    def _wait_for_profile_unlock(profile_dir: Path) -> None:
+        deadline = time.monotonic() + 5.0
+        while BrowserProfileManager.is_locked(profile_dir):
+            if BrowserProfileManager.clear_stale_lock(profile_dir):
+                return
+            if time.monotonic() >= deadline:
+                raise RuntimeError(
+                    "Close the browser profile setup window before continuing Coupa sign-in."
+                )
+            time.sleep(0.1)
+
+    @classmethod
+    def _close_profile_setup(cls, process: Any, profile_dir: Path) -> None:
+        try:
+            if process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=2)
+        except (OSError, subprocess.SubprocessError):
+            pass
+        owner_pid = BrowserProfileManager._lock_owner_pid(profile_dir)
+        if owner_pid is not None and BrowserProfileManager._lock_owner_alive(profile_dir):
+            try:
+                os.kill(owner_pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            except OSError as exc:
+                raise RuntimeError(
+                    "Close the browser profile setup window before continuing Coupa sign-in."
+                ) from exc
+        cls._wait_for_profile_unlock(profile_dir)
+
     def capture(
         self,
         installation: BrowserInstallation,
@@ -542,9 +677,49 @@ class BrowserLogin:
             "starting",
             f"Opening {installation.name} with the Contract Downloader profile…",
         )
-        driver = self.launcher.launch(installation, profile_dir, headless=headless)
+        driver = None
+        profile_setup = None
         try:
             login_url = f"{self.base_url}/order_headers"
+            if not headless and not self._profile_has_browser_account(profile_dir):
+                sso_note = (
+                    "Click the profile icon, choose Sign in, and select your work account. "
+                    "Sync is not required; Coupa will open automatically for SSO."
+                    if installation.kind is BrowserKind.EDGE
+                    else "Click the profile icon and sign in. Coupa will open automatically for SSO "
+                    "when your organization enables it in Chrome."
+                )
+                self._report(
+                    status_callback,
+                    "user_action_required",
+                    f"Sign in to this dedicated {installation.name} profile with your work account. {sso_note}",
+                )
+                self._wait_for_profile_unlock(profile_dir)
+                try:
+                    profile_setup = self.profile_setup_launcher(installation, profile_dir)
+                    deadline = time.monotonic() + min(self.wait_timeout, 90.0)
+                    while time.monotonic() < deadline:
+                        if self._profile_has_browser_account(profile_dir):
+                            break
+                        time.sleep(self.poll_interval)
+                finally:
+                    if profile_setup is not None:
+                        self._close_profile_setup(profile_setup, profile_dir)
+                        profile_setup = None
+
+                account_connected = self._profile_has_browser_account(profile_dir)
+                if not account_connected and installation.kind is BrowserKind.EDGE:
+                    raise TimeoutError(
+                        "The dedicated Edge profile was not connected. Try again and sign in from the profile icon."
+                    )
+                message = (
+                    "Browser profile connected; opening Coupa with SSO…"
+                    if account_connected
+                    else "Browser profile setup was not completed; opening the Coupa sign-in…"
+                )
+                self._report(status_callback, "checking", message)
+
+            driver = self.launcher.launch(installation, profile_dir, headless=headless)
             try:
                 driver.get(login_url)
             except WebDriverException as exc:
@@ -558,18 +733,18 @@ class BrowserLogin:
                 )
 
             authenticated_handle = self._authenticated_window(driver)
+            sso_deadline = time.monotonic() + min(self.wait_timeout, 3.0)
+            while not authenticated_handle and time.monotonic() < sso_deadline:
+                time.sleep(self.poll_interval)
+                authenticated_handle = self._authenticated_window(driver)
+
             if authenticated_handle:
                 self._report(status_callback, "checking", "Coupa is open; checking the current session…")
             else:
-                work_account_hint = (
-                    " To reduce future prompts, sign this dedicated Edge profile into your work account with sync off."
-                    if installation.kind is BrowserKind.EDGE
-                    else ""
-                )
                 self._report(
                     status_callback,
                     "user_action_required",
-                    f"Complete the Coupa sign-in in {installation.name}.{work_account_hint}",
+                    f"Complete the Coupa sign-in in {installation.name}.",
                 )
 
             deadline = time.monotonic() + self.wait_timeout
@@ -600,7 +775,10 @@ class BrowserLogin:
                 raise RuntimeError("The Coupa sign-in completed, but no Coupa session cookie was found.")
             return cookies
         finally:
+            if profile_setup is not None:
+                self._close_profile_setup(profile_setup, profile_dir)
             try:
-                driver.quit()
+                if driver is not None:
+                    driver.quit()
             except Exception:
                 pass
