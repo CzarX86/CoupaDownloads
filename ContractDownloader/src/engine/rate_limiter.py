@@ -31,17 +31,27 @@ class RateLimiter:
     def report_success(self) -> None:
         self._consecutive_429s = max(0, self._consecutive_429s - 1)
 
+    @staticmethod
+    async def _sleep_at_least(duration: float) -> None:
+        """Sleep for at least ``duration`` on low-resolution Windows clocks."""
+        deadline = time.monotonic() + max(0.0, duration)
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return
+            await asyncio.sleep(remaining)
+
     async def wait(self) -> None:
         now = time.monotonic()
         if now < self._backoff_until:
-            await asyncio.sleep(self._backoff_until - now)
+            await self._sleep_at_least(self._backoff_until - now)
             return
         delay = self.base_delay
         self._request_count += 1
         if self._request_count > self.cooldown_threshold:
             delay = self.base_delay * 3
         if delay > 0:
-            await asyncio.sleep(delay)
+            await self._sleep_at_least(delay)
 
     def reset(self) -> None:
         self._consecutive_429s = 0

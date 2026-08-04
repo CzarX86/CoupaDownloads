@@ -1,0 +1,2 @@
+# Vendored minified JavaScript is integrity-pinned; preserve exact bytes on every OS.
+ContractDownloader/src/gui/web/vendor/sortablejs/Sortable.min.js -text
