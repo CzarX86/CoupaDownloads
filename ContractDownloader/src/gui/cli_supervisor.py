@@ -238,10 +238,16 @@ class CliProcessSupervisor:
             if entry:
                 self._logs.append(entry)
         return_code = process.wait()
-        self._logs.append({
-            "type": "Success" if return_code == 0 else "Error",
-            "message": "Download pipeline finished." if return_code == 0 else f"Download pipeline exited with code {return_code}.",
-        })
+        if return_code == 0 and self.stop_requested:
+            self._logs.append({
+                "type": "System",
+                "message": "Download pipeline paused safely; pending POs remain queued for resume.",
+            })
+        else:
+            self._logs.append({
+                "type": "Success" if return_code == 0 else "Error",
+                "message": "Download pipeline finished." if return_code == 0 else f"Download pipeline exited with code {return_code}.",
+            })
         self._protect_archived_inputs()
 
     @staticmethod
@@ -288,6 +294,7 @@ class CliProcessSupervisor:
         retry_po: Optional[str] = None,
         retry_in_place_po: Optional[str] = None,
         retry_in_place_errors: bool = False,
+        resume_in_place_session_id: Optional[int] = None,
         provisional_retry_attempt_id: Optional[int] = None,
         retry_staging_dir: Optional[str] = None,
         source_session_id: Optional[int] = None,
@@ -316,6 +323,8 @@ class CliProcessSupervisor:
             command.append("--retry-in-place-errors")
             if source_session_id:
                 command.extend(["--retry-session-id", str(source_session_id)])
+        elif resume_in_place_session_id:
+            command.extend(["--resume-in-place-session-id", str(resume_in_place_session_id)])
         if provisional_retry_attempt_id:
             command.extend([
                 "--provisional-retry",
@@ -349,6 +358,7 @@ class CliProcessSupervisor:
         retry_po: Optional[str] = None,
         retry_in_place_po: Optional[str] = None,
         retry_in_place_errors: bool = False,
+        resume_in_place_session_id: Optional[int] = None,
         provisional_retry_attempt_id: Optional[int] = None,
         retry_staging_dir: Optional[str] = None,
         source_session_id: Optional[int] = None,
@@ -360,6 +370,7 @@ class CliProcessSupervisor:
         deduplicate_files: bool = True,
         description: Optional[str] = None,
         column_mapping: Optional[dict[str, str]] = None,
+        auth_browser: Optional[str] = None,
     ) -> dict[str, Any]:
         with self._lock:
             if self.process and self.process.poll() is None:
@@ -368,7 +379,7 @@ class CliProcessSupervisor:
             self.download_root = str(Path(download_root or self.default_download_root).expanduser().resolve())
             self.source_session_id = source_session_id
             self.run_dir = run_dir
-            self.session_id = source_session_id if (retry_in_place_po or retry_in_place_errors or provisional_retry_attempt_id) else None
+            self.session_id = source_session_id if (retry_in_place_po or retry_in_place_errors or resume_in_place_session_id or provisional_retry_attempt_id) else None
             self.stop_requested = False
             self.cancel_requested = False
             self.started_at = time.time()
@@ -395,12 +406,20 @@ class CliProcessSupervisor:
             env["COUPA_RETRY_ATTEMPTS"] = str(max(1, min(3, int(retry_attempts or 1))))
             env["COUPA_MSG_PROCESSING"] = msg_processing if msg_processing in {"disabled", "convert", "convert_extract"} else "convert_extract"
             env["COUPA_DEDUPLICATE_FILES"] = "1" if deduplicate_files else "0"
+            # GUI authentication is completed before the worker starts. The
+            # worker validates the shared cache but never opens an untracked
+            # second browser; direct CLI invocation keeps its own interactive
+            # default because it does not pass this environment flag.
+            env["COUPA_AUTH_INTERACTIVE"] = "0"
+            if auth_browser in {"auto", "edge", "chrome"}:
+                env["COUPA_AUTH_BROWSER"] = auth_browser
             command = self._command(
                 retry_errors=retry_errors,
                 retry_incomplete=retry_incomplete,
                 retry_po=retry_po,
                 retry_in_place_po=retry_in_place_po,
                 retry_in_place_errors=retry_in_place_errors,
+                resume_in_place_session_id=source_session_id if resume_in_place_session_id else None,
                 provisional_retry_attempt_id=provisional_retry_attempt_id,
                 retry_staging_dir=retry_staging_dir,
                 source_session_id=source_session_id,
@@ -630,7 +649,7 @@ class CliProcessSupervisor:
             **self.start(
                 self.input_path,
                 self.download_root or str(self.default_download_root),
-                retry_incomplete=True,
+                resume_in_place_session_id=source,
                 source_session_id=source,
                 run_dir=self.run_dir,
             ),
@@ -738,8 +757,8 @@ class CliProcessSupervisor:
             return {"success": False, "error": "A PO number is required."}
         if original == edited:
             return self.retry_po(session_id, original)
-        if not re.fullmatch(r"(?i)(?:PO|PM)?[0-9]+", edited):
-            return {"success": False, "error": "Enter a valid PO number using digits, PO, or PM."}
+        if not re.fullmatch(r"(?i)(?:PO|PM)[0-9]+", edited):
+            return {"success": False, "error": "Enter a valid PO number using PO or PM followed by digits."}
 
         context = self._session_context(session_id, original)
         run_dir = context.get("run_dir") or self.run_dir

@@ -50,8 +50,11 @@ INIT_BRIDGE_SCRIPT = r"""
       select_file: async () => call('select_file'),
       generate_input_template: async () => call('generate_input_template'),
       validate_input_file: async (filepath) => call('validate_input_file', filepath),
-      repair_input_file: async (filepath, actions) => call('repair_input_file', filepath, actions),
+      repair_input_file: async (filepath, actions, expectedFingerprint) => call('repair_input_file', filepath, actions, expectedFingerprint),
+      preview_repair_input_file: async (filepath, action) => call('preview_repair_input_file', filepath, action),
       inspect_input_file: async (filepath) => call('inspect_input_file', filepath),
+      open_filtered_input_view: async (filepath) => call('open_filtered_input_view', filepath),
+      validate_download_directory: async (filepath) => call('validate_download_directory', filepath),
       check_auth: async () => call('check_auth'),
       authenticate: async () => call('authenticate'),
       check_updates: async () => call('check_updates'),
@@ -105,8 +108,14 @@ class MockBridge:
             return {"valid": True, "errors": [], "warnings": [], "valid_po_count": 15, "total_rows": 15, "file_state": {"ready": True, "mtime_ns": 1, "size": 1}}
         if method == "repair_input_file":
             return {"success": True, "message": "Safe repairs applied.", "backup_path": "input.backup.csv"}
+        if method == "preview_repair_input_file":
+            return {"success": True, "changes": [{"row": 2, "column": "PO_NUMBER", "old": "PO-1", "new": "PO1"}], "total_changes": 1, "expected_fingerprint": "1:1"}
         if method == "inspect_input_file":
             return {"ready": True, "open_detected": False, "stable": True, "mtime_ns": 1, "size": 1}
+        if method == "open_filtered_input_view":
+            return {"success": True, "path": str(Path(self.download_dir) / "filtered.xlsx"), "filtered_rows": 1}
+        if method == "validate_download_directory":
+            return {"success": True, "path": self.download_dir}
         if method == "check_auth":
             return {"authenticated": True, "state": "cached", "message": "Mock session"}
         if method == "authenticate":
@@ -276,10 +285,33 @@ class RealBridge:
     def call(self, method: str, args: list[Any]) -> Any:
         if method == "select_directory":
             return self.api.default_download_dir
+        if method == "get_default_download_directory":
+            return self.api.get_default_download_directory()
+        if method == "get_app_settings":
+            return self.api.get_app_settings()
+        if method == "get_concurrency_estimates":
+            return {str(value): {"minutes_100": None, "samples": 0} for value in (2, 4, 6, 8)}
         if method == "select_file":
             return {"success": False, "error": "Use the browser file picker in probe mode."}
         if method == "generate_input_template":
             return {"success": True, "path": str(self.run_dir / "input_template.csv")}
+        if method == "get_input_columns":
+            filepath = str(args[0]) if args else ""
+            file_candidate = Path(filepath)
+            if not file_candidate.exists() and file_candidate.name:
+                fallback = self.run_dir / file_candidate.name
+                if fallback.exists():
+                    filepath = str(fallback)
+            return self.api.get_input_columns(filepath)
+        if method == "map_input_columns":
+            filepath = str(args[0]) if args else ""
+            mapping = dict(args[1]) if len(args) > 1 else {}
+            file_candidate = Path(filepath)
+            if not file_candidate.exists() and file_candidate.name:
+                fallback = self.run_dir / file_candidate.name
+                if fallback.exists():
+                    filepath = str(fallback)
+            return self.api.map_input_columns(filepath, mapping)
         if method == "validate_input_file":
             filepath = str(args[0]) if args else ""
             file_candidate = Path(filepath)
@@ -291,7 +323,11 @@ class RealBridge:
         if method == "repair_input_file":
             filepath = str(args[0]) if args else ""
             actions = list(args[1]) if len(args) > 1 else []
-            return self.api.repair_input_file(filepath, actions)
+            expected = str(args[2]) if len(args) > 2 and args[2] else None
+            return self.api.repair_input_file(filepath, actions, expected)
+        if method == "preview_repair_input_file":
+            filepath = str(args[0]) if args else ""
+            return self.api.preview_repair_input_file(filepath, str(args[1]) if len(args) > 1 else "")
         if method == "inspect_input_file":
             filepath = str(args[0]) if args else ""
             file_candidate = Path(filepath)
@@ -300,6 +336,12 @@ class RealBridge:
                 if fallback.exists():
                     filepath = str(fallback)
             return self.api.inspect_input_file(filepath)
+        if method == "open_filtered_input_view":
+            filepath = str(args[0]) if args else ""
+            return self.api.open_filtered_input_view(filepath)
+        if method == "validate_download_directory":
+            filepath = str(args[0]) if args else ""
+            return self.api.validate_download_directory(filepath)
         if method == "check_auth":
             return {"authenticated": True, "state": "cached", "message": "Probe session"}
         if method == "authenticate":
@@ -424,9 +466,9 @@ def start_server(web_root: Path) -> tuple[ThreadingHTTPServer, threading.Thread]
 def create_sample_csv(path: Path) -> Path:
     path.write_text(
         "PO_NUMBER;Legal Entity\n"
-        "PO-001;ACME-BR\n"
-        "PO-002;ACME-BR\n"
-        "PO-003;ACME-US\n",
+        "PO001;ACME-BR\n"
+        "PO002;ACME-BR\n"
+        "PO003;ACME-US\n",
         encoding="utf-8",
     )
     return path

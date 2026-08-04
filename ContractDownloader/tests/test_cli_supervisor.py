@@ -1,4 +1,5 @@
 from collections import deque
+from io import StringIO
 from pathlib import Path
 
 import pytest
@@ -43,6 +44,24 @@ def test_actionable_logs_keep_progress_and_drop_timing_noise():
     assert entry == {
         "type": "Warning",
         "message": "Progress: 25/100 POs · 23 succeeded · 2 failed · 41 attachments",
+    }
+
+
+def test_supervisor_reports_resumable_pause_as_safe_completion():
+    class FinishedProcess:
+        stdout = StringIO("[INFO] Run paused safely; pending POs remain queued for resume.\\n")
+
+        @staticmethod
+        def wait():
+            return 0
+
+    supervisor = CliProcessSupervisor()
+    supervisor.stop_requested = True
+    supervisor._read_output(FinishedProcess())
+
+    assert supervisor._logs[-1] == {
+        "type": "System",
+        "message": "Download pipeline paused safely; pending POs remain queued for resume.",
     }
 
 
@@ -112,8 +131,16 @@ def test_history_status_translation_preserves_filter_inputs():
     assert 'class="coupa-link po-number-link"' in javascript
     assert 'id="btn-check-updates"' in html
     assert 'id="btn-start-over"' in html
+    assert 'accept=".xlsx,.xls,.xlsm,.csv"' in html
+    assert 'id="destination-feedback"' in html
     assert 'reset_new_run' in javascript
     assert 'get_authentication_status' in javascript
+    assert 'await initializeAuth()' in javascript
+    assert 'renderAffectedValues' in javascript
+    assert 'open_filtered_input_view' in javascript
+    assert 'btn-open-filtered-view' in javascript
+    assert 'validateDestinationPath' in javascript
+    assert 'hierarchyColumnsLoaded' in javascript
     assert 'Action required' in javascript
     assert 'checkForUpdates(true)' in javascript
     assert '$("#modal-pos-tbody").addEventListener("click"' in javascript

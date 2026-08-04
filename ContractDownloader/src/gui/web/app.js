@@ -12,11 +12,18 @@ document.addEventListener("DOMContentLoaded", () => {
     let selectedFileValidated = false;
     let hierarchyOrder = [];
     let disabledHierarchyColumns = [];
+    let hierarchyColumnsLoaded = false;
     let mappingColumns = [];
-    let draggedHierarchyItem = null;
+    let mappingProbeToken = 0;
+    let mappingDetected = null;
+    let mappingSuggestions = { po: [], supplier: [] };
+    let validationCopyValues = new Map();
+    let validationCopyId = 0;
+    let hierarchySorter = null;
     let runInProgress = false;
+    let startRequestActive = false;
     let pendingUpdate = null;
-    let appSettings = { download_root: "", concurrency: 4, retry_attempts: 1, msg_processing: "convert_extract", deduplicate_files: true, auto_updates: true, retention: "all", language: "en", font_scale: 1.1, python_portable: false };
+    let appSettings = { download_root: "", concurrency: 4, retry_attempts: 1, msg_processing: "convert_extract", deduplicate_files: true, auto_updates: true, retention: "all", auth_browser: "auto", language: "en", font_scale: 1.1, python_portable: false };
     let journeyStep = 1;
     let journeyMaxStep = 1;
     const journeyContent = {
@@ -35,6 +42,12 @@ document.addEventListener("DOMContentLoaded", () => {
             5: ["Revise e inicie", "Confirme as configurações e inicie o download."],
         },
     };
+
+    function getJourneyCopy(step) {
+        const numericStep = Number(step);
+        const languageCopy = journeyContent[appSettings.language] || journeyContent.en;
+        return languageCopy[numericStep] || journeyContent.en[numericStep] || journeyContent.en[1];
+    }
 
     const api = () => window.pywebview && window.pywebview.api ? window.pywebview.api : null;
     const hasApi = (name) => Boolean(api() && typeof api()[name] === "function");
@@ -70,20 +83,20 @@ document.addEventListener("DOMContentLoaded", () => {
     function applyLanguage() {
         const selectors = { "#btn-new": "newRun", "#btn-progress": "activeRun", "#btn-history": "history", "#btn-learn": "learn", "#btn-settings": "settings", "#btn-download-template": "createTemplate", "#btn-browse": "chooseFile", "#btn-open-selected-input": "openInput",  "#btn-next-input": "continueValidation", "#btn-next-hierarchy": "continueFolders", "#btn-next-destination": "continueDestination", "#btn-next-review": "reviewRun", "#btn-start-run": "start", "#btn-start-over": "startOver", "#btn-validate-file": "validate", "#btn-choose-dir": "chooseFolder", "#btn-save-settings": "saveSettings", "#btn-reset-settings": "resetDefaults" };
         Object.entries(selectors).forEach(([selector, key]) => { const element = $(selector); if (element) element.innerText = t(key); });
-        const content = journeyContent[appSettings.language] || journeyContent.en;
-        $("#journey-title").innerText = content[journeyStep][0];
-        $("#journey-subtitle").innerText = content[journeyStep][1];
+        const content = getJourneyCopy(journeyStep);
+        $("#journey-title").innerText = content[0];
+        $("#journey-subtitle").innerText = content[1];
         document.querySelectorAll("[data-journey-step] span").forEach((element, index) => { element.innerText = (appSettings.language === "pt-BR" ? ["Input", "Validar", "Pastas", "Destino", "Iniciar"] : ["Input", "Validate", "Folders", "Destination", "Start"])[index]; });
         document.querySelectorAll(".learn-card h3").forEach((element, index) => { element.innerText = (appSettings.language === "pt-BR" ? ["Prepare o input", "Siga a jornada", "O que acontece durante uma execução?", "Erros e retries", "Histórico e relatórios", "Autenticação e privacidade"] : ["Prepare the input", "Follow the journey", "What happens during a run?", "Errors and retries", "History and reports", "Authentication and privacy"])[index]; });
-        const learnParagraphs = appSettings.language === "pt-BR" ? ["Use um arquivo Excel ou CSV com PO_NUMBER e SUPPLIER. O template inclui o separador <|>. Salve e feche o Excel antes de validar.", "A jornada possui cinco etapas: input, validação, pastas, destino e revisão. A execução só é criada após a confirmação final.", "O app usa requisições HTTP autenticadas para o Coupa, lê páginas de PO e PR, encontra anexos e os salva na pasta da execução.", "Abra Active Run para acompanhar o progresso e os logs. Retries automáticos podem ser configurados em Settings, e POs com erro também podem ser refeitos pelo histórico.", "O histórico armazena resultados por PO, retries, inputs preservados, relatórios e links para o Coupa. É possível excluir uma execução ou todo o histórico.", "A autenticação reutiliza o perfil do Edge e a sessão em cache até o Coupa invalidá-la. O app não envia telemetria." ] : ["Use an Excel or CSV file with PO_NUMBER and SUPPLIER. The template includes the <|> separator. Save and close Excel before validating.", "The journey has five stages: input, validation, folders, destination, and review. A run is created only after final confirmation.", "The app uses authenticated HTTP requests to Coupa, reads PO and PR pages, discovers attachments, and saves them inside the run folder.", "Open Active Run to monitor progress and logs. Automatic retries can be configured in Settings, and failed POs can also be retried manually from History.", "History stores PO-level results, retry history, preserved inputs, reports, and Coupa links. You can delete one run or clear all history.", "Authentication reuses the Edge profile and cached session until Coupa invalidates it. The app does not send telemetry."];
+        const learnParagraphs = appSettings.language === "pt-BR" ? ["Use um arquivo Excel ou CSV com PO_NUMBER e SUPPLIER. O template inclui o separador <|>. Salve e feche o Excel antes de validar.", "A jornada possui cinco etapas: input, validação, pastas, destino e revisão. A execução só é criada após a confirmação final.", "O app usa requisições HTTP autenticadas para o Coupa, lê páginas de PO e PR, encontra anexos e os salva na pasta da execução.", "Abra Active Run para acompanhar o progresso e os logs. Retries automáticos podem ser configurados em Settings, e POs com erro também podem ser refeitos pelo histórico.", "O histórico armazena resultados por PO, retries, inputs preservados, relatórios e links para o Coupa. É possível excluir uma execução ou todo o histórico.", "A autenticação usa um perfil separado do aplicativo e reutiliza a sessão em cache até o Coupa invalidá-la. Links externos seguem o navegador padrão do sistema e o app não envia telemetria." ] : ["Use an Excel or CSV file with PO_NUMBER and SUPPLIER. The template includes the <|> separator. Save and close Excel before validating.", "The journey has five stages: input, validation, folders, destination, and review. A run is created only after final confirmation.", "The app uses authenticated HTTP requests to Coupa, reads PO and PR pages, discovers attachments, and saves them inside the run folder.", "Open Active Run to monitor progress and logs. Automatic retries can be configured in Settings, and failed POs can also be retried manually from History.", "History stores PO-level results, retry history, preserved inputs, reports, and Coupa links. You can delete one run or clear all history.", "Authentication uses a separate app profile and reuses the cached session until Coupa invalidates it. External links follow the operating system default browser and the app does not send telemetry."];
         document.querySelectorAll(".learn-card p").forEach((element, index) => { element.innerText = learnParagraphs[index]; });
         const learnNotes = appSettings.language === "pt-BR" ? ["Colunas após <|> viram níveis de pasta. Campos obrigatórios vazios são informados antes do download.", "Etapas concluídas continuam disponíveis; etapas futuras explicam o que ainda falta.", "Downloads simultâneos são limitados a 8, com backoff adaptativo quando o Coupa aplica rate limit.", "O retry usa a mesma pasta e preserva arquivos válidos existentes.", "Excluir uma execução remove sua pasta; inputs originais fora dela são preservados.", "Telemetria não é enviada. Cookies, credenciais e documentos permanecem na máquina local."] : ["Columns after <|> become folder levels. Blank required fields are reported before downloading.", "Completed steps remain available; future steps explain what is still missing.", "Downloads simultaneous is capped at 8, with adaptive backoff when Coupa rate-limits requests.", "A retry uses the same folder and preserves valid existing files.", "Deleting a run removes its folder; original inputs outside it are preserved.", "No telemetry is sent. Cookies, credentials, and documents remain on the local machine."];
         document.querySelectorAll(".learn-note").forEach((element, index) => { element.innerText = learnNotes[index]; });
-        const settingsHeadings = appSettings.language === "pt-BR" ? ["Idioma", "Tamanho do texto", "Downloads", "Downloads simultâneos", "Política de retry", "Arquivos de e-mail (.msg)", "Arquivos duplicados", "Atualizações", "Login do Coupa", "Começar limpo", "Retenção do histórico"] : ["Language", "Text size", "Downloads", "Downloads simultaneous", "Retry policy", "Email files (.msg)", "Duplicate files", "Updates", "Coupa sign-in", "Start clean", "History retention"];
+        const settingsHeadings = appSettings.language === "pt-BR" ? ["Idioma", "Tamanho do texto", "Downloads", "Downloads simultâneos", "Política de retry", "Arquivos de e-mail (.msg)", "Arquivos duplicados", "Atualizações", "Navegador do Contract Downloader", "Login do Coupa", "Começar limpo", "Retenção do histórico"] : ["Language", "Text size", "Downloads", "Downloads simultaneous", "Retry policy", "Email files (.msg)", "Duplicate files", "Updates", "Contract Downloader browser", "Coupa sign-in", "Start clean", "History retention"];
         document.querySelectorAll(".settings-section h3").forEach((element, index) => { element.innerText = settingsHeadings[index]; });
         const panelHeadings = appSettings.language === "pt-BR" ? ["Escolha o input", "Valide o input", "Organize a hierarquia de pastas", "Escolha o local de salvamento", "Revise e inicie"] : ["Choose your input", "Validate your input", "Arrange folder hierarchy", "Choose the save location", "Review and start"];
         document.querySelectorAll("[data-journey-panel] .card-heading h3").forEach((element, index) => { element.innerText = panelHeadings[index]; });
-        const settingsDescriptions = appSettings.language === "pt-BR" ? ["Altera o idioma da interface. A saída do CLI e os logs permanecem em inglês.", "Ajusta a escala da interface para facilitar a leitura. A prévia é aplicada imediatamente e salva neste computador.", "Escolha a pasta base. Cada execução recebe uma subpasta com timestamp.", "Quantos POs o app processa ao mesmo tempo. Valores maiores podem aumentar a carga no servidor.", "Tentativas automáticas para um PO antes de marcá-lo como erro. O retry manual continua disponível no histórico.", "Escolha se arquivos de e-mail baixados são convertidos para PDF e se seus anexos são extraídos.", "Compara arquivos com SHA-256. Arquivos idênticos usam hard link quando possível ou um arquivo de referência.", "A verificação ao iniciar é opcional. Você sempre pode verificar, baixar, validar e instalar uma atualização manualmente.", "Usa o perfil existente do Edge quando possível. Se o Edge estiver aberto, usa um perfil Coupa separado para não interromper o usuário.", "Esquece o histórico local e o login, preservando arquivos baixados, relatórios e inputs.", "A limpeza automática só se aplica a execuções concluídas e nunca remove uma execução ativa."] : ["Changes the application interface language. CLI output and logs remain in English.", "Adjusts the interface scale for readability. The preview is applied immediately and saved on this computer.", "Choose the base folder. Each run receives its own timestamped subfolder.", "How many POs the app processes at the same time. Higher values may increase server load.", "Automatic attempts for a PO before marking it as failed. Manual retry remains available from History.", "Choose whether downloaded email files are converted to PDF and whether their attachments are extracted.", "Compare files with SHA-256. Identical files use a hard link when possible or a reference sidecar.", "Startup checks are optional. You can always check, download, verify, and install an update manually.", "Use the existing Edge profile when possible. If Edge is open, use a separate persistent Coupa profile so the user does not need to close Edge.", "Forget local run history and sign-in state while preserving downloaded files, reports, and original inputs.", "Automatic cleanup only applies to completed runs and never removes an active run."];
+        const settingsDescriptions = appSettings.language === "pt-BR" ? ["Altera o idioma da interface. A saída do CLI e os logs permanecem em inglês.", "Ajusta a escala da interface para facilitar a leitura. A prévia é aplicada imediatamente e salva neste computador.", "Escolha a pasta base. Cada execução recebe uma subpasta com timestamp.", "Quantos POs o app processa ao mesmo tempo. Valores maiores podem aumentar a carga no servidor.", "Tentativas automáticas para um PO antes de marcá-lo como erro. O retry manual continua disponível no histórico.", "Escolha se arquivos de e-mail baixados são convertidos para PDF e se seus anexos são extraídos.", "Compara arquivos com SHA-256. Arquivos idênticos usam hard link quando possível ou um arquivo de referência.", "A verificação ao iniciar é opcional. Você sempre pode verificar, baixar, validar e instalar uma atualização manualmente.", "Escolha o navegador usado pelo Contract Downloader para o login do Coupa. Links externos seguem o navegador padrão do sistema.", "Usa um perfil separado do aplicativo para o login; seus perfis pessoais não são alterados nem bloqueados.", "Esquece o histórico local e o login, preservando arquivos baixados, relatórios e inputs.", "A limpeza automática só se aplica a execuções concluídas e nunca remove uma execução ativa."] : ["Changes the application interface language. CLI output and logs remain in English.", "Adjusts the interface scale for readability. The preview is applied immediately and saved on this computer.", "Choose the base folder. Each run receives its own timestamped subfolder.", "How many POs the app processes at the same time. Higher values may increase server load.", "Automatic attempts for a PO before marking it as failed. Manual retry remains available from History.", "Choose whether downloaded email files are converted to PDF and whether their attachments are extracted.", "Compare files with SHA-256. Identical files use a hard link when possible or a reference sidecar.", "Startup checks are optional. You can always check, download, verify, and install an update manually.", "Choose the browser used by Contract Downloader for Coupa sign-in. External links follow the operating system default browser.", "Use a separate app-owned profile for sign-in; personal browser profiles are not changed or locked.", "Forget local run history and sign-in state while preserving downloaded files, reports, and original inputs.", "Automatic cleanup only applies to completed runs and never removes an active run."];
         document.querySelectorAll(".settings-section > div:first-child p").forEach((element, index) => { element.innerText = settingsDescriptions[index]; });
         const setMany = (selector, values) => document.querySelectorAll(selector).forEach((element, index) => { if (values[index] !== undefined) element.innerText = values[index]; });
         const pt = appSettings.language === "pt-BR";
@@ -109,8 +122,11 @@ document.addEventListener("DOMContentLoaded", () => {
         setMany("#active-run-banner span", [pt ? "Volte para Execução ativa para acompanhar." : "Return to Active run to monitor it."]);
         setMany("#btn-go-active-run", [pt ? "Ver execução ativa" : "View active run"]);
         setMany("#mapping-title, #mapping-subtitle", pt ? ["Mapeie as colunas do arquivo", "As colunas obrigatórias não foram encontradas automaticamente. Informe quais colunas contêm o número da PO e o fornecedor."] : ["Map the file columns", "The required columns were not found automatically. Tell the app which columns hold the PO number and the supplier."]);
+        setMany("#btn-map-columns", [pt ? "Mapear colunas" : "Map columns"]);
+        setMany("#mapping-notice-title", [pt ? "Este arquivo não tem as colunas padrão." : "This file does not have the standard columns."]);
+        setMany("#mapping-notice-text", [pt ? "Mapeie as colunas de PO e fornecedor para continuar." : "Map the PO and supplier columns to continue."]);
         setMany("#btn-apply-mapping", [pt ? "Aplicar mapeamento e validar" : "Apply mapping and validate"]);
-        setMany("#column-mapping-card .mapping-fields label", pt ? ["Coluna de número da PO", "Coluna de fornecedor"] : ["PO number column", "Supplier column"]);
+        setMany("#column-mapping-card .mapping-fields label span", pt ? ["Coluna de número da PO", "Coluna de fornecedor"] : ["PO number column", "Supplier column"]);
         setMany("#hierarchy-disabled h4", [pt ? "Colunas desativadas" : "Disabled columns"]);
         setMany("#hierarchy-disabled p", [pt ? "Estas colunas permanecem no input e no relatório final, mas não criam pastas." : "These columns stay in the input and in the final report, but do not create folders."]);
         setMany("#run-description-input", [pt ? "Por que esta execução foi feita? Para quem?" : "Why was this run made? For whom?"]);
@@ -124,6 +140,8 @@ document.addEventListener("DOMContentLoaded", () => {
         setMany("#screen-learn .intro-block p:not(.eyebrow)", [pt ? "Guia prático para preparar inputs, baixar anexos e recuperar erros com segurança." : "A practical guide to prepare inputs, download attachments, and recover safely from errors."]);
         setMany("#screen-settings .intro-block .eyebrow", [pt ? "CONFIGURAÇÕES" : "SETTINGS"]);
         setMany("#screen-settings .intro-block p:not(.eyebrow)", [pt ? "Controle downloads, retries, atualizações e o tempo de permanência no histórico." : "Control downloads, retries, updates, and how long runs remain in history."]);
+        setMany("#settings-auth-browser-section h3", [pt ? "Navegador do Contract Downloader" : "Contract Downloader browser"]);
+        setMany("#settings-auth-browser-section p", [pt ? "Escolha o navegador usado pelo Contract Downloader para o login do Coupa. Links externos continuam usando o navegador padrão do sistema." : "Choose the browser used by Contract Downloader for Coupa sign-in. External links continue to use your operating system default browser."]);
         setMany("#btn-check-updates", [pt ? "Verificar agora" : "Check now"]);
         setMany("#btn-reset-auth", [pt ? "Zerar estado do login" : "Reset sign-in state"]);
         setMany("#btn-reset-application", [pt ? "Zerar estado local" : "Reset local state"]);
@@ -133,8 +151,10 @@ document.addEventListener("DOMContentLoaded", () => {
         setMany("#settings-retry option", pt ? ["Sem retry automático", "Tentar novamente uma vez", "Tentar novamente duas vezes"] : ["No automatic retry", "Retry once", "Retry twice"]);
         setMany("#settings-retention option", pt ? ["Tudo", "Últimas 10 execuções", "Últimas 30 execuções", "Execuções dos últimos 90 dias"] : ["Everything", "Last 10 runs", "Last 30 runs", "Runs from the last 90 days"]);
         setMany("#settings-msg-processing option", pt ? ["Desabilitado", "Converter para PDF", "Converter para PDF e extrair anexos"] : ["Disabled", "Convert to PDF", "Convert to PDF and extract attachments"]);
+        setMany("#settings-auth-browser option", pt ? ["Automático", "Microsoft Edge", "Google Chrome"] : ["Automatic", "Microsoft Edge", "Google Chrome"]);
+        syncAuthBrowserOptions();
         setMany("#settings-field-does-not-exist", []);
-        setMany("#screen-settings .settings-field label", pt ? ["Idioma da interface", "Tamanho do texto da interface", "Pasta padrão de download", "Perfil de velocidade", "Retry automático", "Processamento automático", "Manter"] : ["Interface language", "Interface text size", "Default download folder", "Speed profile", "Automatic retry", "Automatic processing", "Keep"]);
+        setMany("#screen-settings .settings-field label", pt ? ["Idioma da interface", "Tamanho do texto da interface", "Pasta padrão de download", "Perfil de velocidade", "Retry automático", "Processamento automático", "Navegador do Contract Downloader", "Manter"] : ["Interface language", "Interface text size", "Default download folder", "Speed profile", "Automatic retry", "Automatic processing", "Contract Downloader browser", "Keep"]);
         setMany("#folder-confirm-modal .modal-header .eyebrow, #folder-confirm-modal .modal-header h3, #folder-confirm-modal .modal-description", pt ? ["CONFIRMAR DESTINO", "Revise a estrutura de pastas", "Os anexos serão salvos usando esta estrutura:"] : ["CONFIRM DESTINATION", "Review folder structure", "Attachments will be saved using this structure:"]);
         setMany("#btn-cancel-folder-run, #btn-confirm-folder-run", pt ? ["Cancelar", "Confirmar e iniciar"] : ["Cancel", "Confirm and start"]);
         setMany("#details-modal .modal-header .eyebrow, #modal-title, #btn-open-input", pt ? ["DETALHES DA EXECUÇÃO", "Detalhes da sessão", "Abrir arquivo de input"] : ["RUN DETAILS", "Session details", "Open input file"]);
@@ -193,7 +213,6 @@ document.addEventListener("DOMContentLoaded", () => {
                     }
                 });
                 panel.querySelectorAll("input, select").forEach((field) => { field.disabled = locked; });
-                panel.querySelectorAll("[draggable='true']").forEach((item) => { item.draggable = !locked; });
             }
         });
         document.querySelectorAll("[data-journey-step]").forEach((button) => {
@@ -202,9 +221,9 @@ document.addEventListener("DOMContentLoaded", () => {
             button.classList.toggle("completed", value < journeyMaxStep);
             button.classList.toggle("locked", value > journeyMaxStep);
             button.disabled = false;
-            button.title = value > journeyMaxStep ? journeyRequirement(value) : `Go to ${(journeyContent[appSettings.language] || journeyContent.en)[value]?.[0] || "step"}`;
+            button.title = value > journeyMaxStep ? journeyRequirement(value) : `Go to ${getJourneyCopy(value)[0]}`;
         });
-        const content = (journeyContent[appSettings.language] || journeyContent.en)[target];
+        const content = getJourneyCopy(target);
         if (content) {
             $("#journey-title").innerText = locked ? (appSettings.language === "pt-BR" ? `Etapa ${target} bloqueada` : `Step ${target} is locked`) : content[0];
             $("#journey-subtitle").innerText = locked ? journeyRequirement(target) : content[1];
@@ -213,6 +232,7 @@ document.addEventListener("DOMContentLoaded", () => {
         const lockMessage = $("#journey-lock-message");
         lockMessage.hidden = true;
         lockMessage.innerText = "";
+        if (hierarchySorter) hierarchySorter.setDisabled(target !== 3 || locked);
         if (target === 2 && selectedFilePath) $("#validation-filename").innerText = $("#selected-filename").innerText;
         if (target === 4 && !locked) { renderDestinationPreview(); ensureDefaultDestination(); }
         if (target === 5 && !locked) renderJourneyReview();
@@ -225,7 +245,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
     function renderJourneyReview() {
         const inputPath = selectedFilePath || $("#selected-filename").innerText || "—";
-        $("#review-file").innerText = inputPath;
+        const inputName = $("#selected-filename").innerText || inputPath.split(/[\\/]/).pop();
+        $("#review-file").innerText = inputName;
         $("#review-file").title = inputPath;
         $("#review-hierarchy").innerText = hierarchyOrder.length ? hierarchyOrder.join(" / ") : "Default folder structure";
         const destination = $("#download-dir").value || "—";
@@ -256,6 +277,7 @@ document.addEventListener("DOMContentLoaded", () => {
         navButtons.new.title = runInProgress ? (appSettings.language === "pt-BR" ? "Bloqueado durante a execução" : "Locked while a run is active") : "";
         $("#active-run-banner").hidden = !(screenKey === "new" && runInProgress);
         if (screenKey === "new" && runInProgress) $("#btn-start-run").disabled = true;
+        if (screenKey === "new" && !runInProgress) $("#btn-start-run").disabled = false;
         syncUpdateButton();
         if (screenKey === "history") loadHistory();
         if (screenKey === "settings") loadSettings();
@@ -313,7 +335,7 @@ document.addEventListener("DOMContentLoaded", () => {
             topLabel.innerText = pt ? "Sessão Coupa pronta" : "Coupa session ready";
         } else if (state === "auth_starting") {
             text.innerText = pt ? "Preparando login…" : "Preparing sign-in…";
-            detailEl.innerText = pt ? "Abrindo o Edge e carregando o Coupa" : "Opening Edge and loading Coupa";
+            detailEl.innerText = pt ? "Abrindo o perfil dedicado do Contract Downloader" : "Opening the Contract Downloader profile";
             topLabel.innerText = pt ? "Abrindo o Coupa" : "Opening Coupa";
         } else if (state === "auth_browser_ready") {
             text.innerText = pt ? "Verificando o Coupa…" : "Checking Coupa…";
@@ -321,7 +343,7 @@ document.addEventListener("DOMContentLoaded", () => {
             topLabel.innerText = pt ? "Verificando sessão" : "Checking session";
         } else if (state === "auth_user_action_required") {
             text.innerText = pt ? "Ação necessária" : "Action required";
-            detailEl.innerText = pt ? "Conclua o login na janela do Edge" : "Complete sign-in in the Edge window";
+            detailEl.innerText = pt ? "Conclua o login na janela do navegador do aplicativo" : "Complete sign-in in the app browser window";
             topLabel.innerText = pt ? "Aguardando sua ação" : "Waiting for your action";
         } else if (state === "auth_checking") {
             text.innerText = pt ? "Verificando sessão…" : "Checking session…";
@@ -348,15 +370,17 @@ document.addEventListener("DOMContentLoaded", () => {
             detailEl.innerText = detail || (pt ? "Clique para autenticar" : "Click to authenticate");
             topLabel.innerText = pt ? "Login necessário" : "Login required";
         }
-        $("#btn-authenticate").classList.toggle("is-authenticated", state === "authenticated");
+        const cachedSessionUnavailable = state === "unavailable" && /cached coupa session found/i.test(String(detail || ""));
+        $("#btn-authenticate").classList.toggle("is-authenticated", state === "authenticated" || cachedSessionUnavailable);
         const action = $("#btn-authenticate .auth-action");
         if (action) {
-            // One state at a time: when already authenticated the status text
-            // is enough, so the redundant "Sign in/Entrar" action disappears.
-            action.style.display = state === "authenticated" ? "none" : "";
-            action.innerText = state === "authenticated" ? (pt ? "Autenticado" : "Ready") : (state.startsWith("auth_") || state === "authenticating" ? (pt ? "Aguarde…" : "Please wait…") : (pt ? "Entrar" : "Sign in"));
+            // A cached session must not turn a temporary network outage into a
+            // repeated sign-in request. Explicit expiry/missing states still
+            // expose the sign-in action.
+            action.style.display = state === "authenticated" || cachedSessionUnavailable ? "none" : "";
+            action.innerText = state === "authenticated" || cachedSessionUnavailable ? (pt ? "Sessão em cache" : "Cached session") : (state.startsWith("auth_") || state === "authenticating" ? (pt ? "Aguarde…" : "Please wait…") : (pt ? "Entrar" : "Sign in"));
         }
-        $("#btn-authenticate").disabled = state.startsWith("auth_") || state === "authenticating";
+        $("#btn-authenticate").disabled = state.startsWith("auth_") || state === "authenticating" || cachedSessionUnavailable;
     }
 
     const authStateLabels = {
@@ -396,8 +420,13 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     }
 
-    function syncHierarchyLevels(list) {
-        list.querySelectorAll("li[data-column]").forEach((item, index) => {
+    function destroyHierarchySorter() {
+        if (hierarchySorter) hierarchySorter.destroy();
+        hierarchySorter = null;
+    }
+
+    function syncHierarchyLevels(sortableList) {
+        sortableList.querySelectorAll(":scope > li[data-column]").forEach((item, index) => {
             item.dataset.level = String(index + 2);
             item.style.setProperty("--hierarchy-level", String(index + 1));
             const level = item.querySelector(".hierarchy-level");
@@ -405,36 +434,62 @@ document.addEventListener("DOMContentLoaded", () => {
         });
     }
 
+    function applyHierarchyOrder(order, source) {
+        hierarchyOrder = order;
+        const sortableList = $("#hierarchy-sortable");
+        if (sortableList) syncHierarchyLevels(sortableList);
+        renderDestinationPreview();
+        const status = $("#hierarchy-reorder-status");
+        if (status) {
+            const orderText = hierarchyOrder.join(" / ");
+            status.innerText = appSettings.language === "pt-BR"
+                ? `Hierarquia reordenada por ${source === "drag" ? "arraste" : "botão"}: ${orderText}.`
+                : `Hierarchy reordered by ${source}: ${orderText}.`;
+        }
+    }
+
     function renderHierarchy() {
-        const list = $("#folder-hierarchy");
+        const container = $("#folder-hierarchy");
         const levelLabel = appSettings.language === "pt-BR" ? "Nível" : "Level";
         const supplierLabel = appSettings.language === "pt-BR" ? "Fornecedor (sempre primeiro)" : "Supplier (always first)";
         const poLabel = appSettings.language === "pt-BR" ? "PO (sempre último)" : "PO (always last)";
         const disableLabel = appSettings.language === "pt-BR" ? "Desativar" : "Disable";
         const enableLabel = appSettings.language === "pt-BR" ? "Ativar" : "Enable";
-        if (!hierarchyOrder.length && !disabledHierarchyColumns.length) {
-            list.innerHTML = '<li class="hierarchy-empty">Validate the input to load its folder levels.</li>';
-            $("#hierarchy-disabled").hidden = true;
+        const dragLabel = appSettings.language === "pt-BR" ? "Arrastar para reordenar" : "Drag to reorder";
+        const moveUpLabel = appSettings.language === "pt-BR" ? "Mover para cima" : "Move up";
+        const moveDownLabel = appSettings.language === "pt-BR" ? "Mover para baixo" : "Move down";
+        const noLevelsLabel = appSettings.language === "pt-BR" ? "Nenhum nível opcional está ativo." : "No optional folder levels are enabled.";
+        const disabledBox = $("#hierarchy-disabled");
+        const disabledList = $("#hierarchy-disabled-list");
+
+        destroyHierarchySorter();
+        if (!hierarchyColumnsLoaded) {
+            container.innerHTML = `<div class="hierarchy-empty">${appSettings.language === "pt-BR" ? "Valide o input para carregar os níveis de pasta." : "Validate the input to load its folder levels."}</div>`;
+            disabledBox.hidden = true;
+            disabledList.innerHTML = "";
             return;
         }
-        const items = [
-            `<li class="hierarchy-fixed" data-fixed="supplier"><span class="hierarchy-branch" aria-hidden="true">└</span><span class="hierarchy-level">${levelLabel} 1</span><span class="hierarchy-lock" aria-hidden="true">🔒</span><strong>${supplierLabel}</strong></li>`,
-            ...hierarchyOrder.map((column, index) => `<li draggable="true" data-column="${escapeHtml(column)}" data-level="${index + 2}" style="--hierarchy-level:${index + 1}"><span class="hierarchy-branch" aria-hidden="true">└</span><span class="hierarchy-level">${levelLabel} ${index + 2}</span><span class="drag-handle" aria-hidden="true">☷</span><span>${escapeHtml(column)}</span><button class="hierarchy-toggle" data-toggle-column="${escapeHtml(column)}" title="${disableLabel}" type="button">×</button></li>`),
-            `<li class="hierarchy-fixed" data-fixed="po"><span class="hierarchy-branch" aria-hidden="true">└</span><span class="hierarchy-level">${levelLabel} ${hierarchyOrder.length + 2}</span><span class="hierarchy-lock" aria-hidden="true">🔒</span><strong>${poLabel}</strong></li>`,
-        ];
-        list.innerHTML = items.join("");
-        list.querySelectorAll(".hierarchy-toggle[data-toggle-column]").forEach((button) => {
+
+        const sortableItems = hierarchyOrder.length
+            ? hierarchyOrder.map((column, index) => `<li class="hierarchy-row hierarchy-item" data-column="${escapeHtml(column)}" data-level="${index + 2}" style="--hierarchy-level:${index + 1}"><span class="hierarchy-branch" aria-hidden="true">└</span><span class="hierarchy-level">${levelLabel} ${index + 2}</span><span class="hierarchy-column-name">${escapeHtml(column)}</span><div class="hierarchy-actions"><button class="drag-handle" type="button" title="${dragLabel}" aria-label="${dragLabel}: ${escapeHtml(column)}">☷</button><button class="hierarchy-move" data-move-direction="up" type="button" title="${moveUpLabel}" aria-label="${moveUpLabel}: ${escapeHtml(column)}">↑</button><button class="hierarchy-move" data-move-direction="down" type="button" title="${moveDownLabel}" aria-label="${moveDownLabel}: ${escapeHtml(column)}">↓</button><button class="hierarchy-toggle" data-toggle-column="${escapeHtml(column)}" title="${disableLabel}" aria-label="${disableLabel}: ${escapeHtml(column)}" type="button">×</button></div></li>`).join("")
+            : `<li class="hierarchy-empty hierarchy-sortable-empty">${noLevelsLabel}</li>`;
+
+        container.innerHTML = [
+            `<div class="hierarchy-row hierarchy-fixed" data-fixed="supplier"><span class="hierarchy-branch" aria-hidden="true">└</span><span class="hierarchy-level">${levelLabel} 1</span><span class="hierarchy-lock" aria-hidden="true">🔒</span><strong>${supplierLabel}</strong></div>`,
+            `<ol class="hierarchy-sortable" id="hierarchy-sortable" aria-label="${appSettings.language === "pt-BR" ? "Níveis de pasta reordenáveis" : "Reorderable folder levels"}">${sortableItems}</ol>`,
+            `<div class="hierarchy-row hierarchy-fixed" data-fixed="po" style="--hierarchy-level:${hierarchyOrder.length + 1}"><span class="hierarchy-branch" aria-hidden="true">└</span><span class="hierarchy-level">${levelLabel} ${hierarchyOrder.length + 2}</span><span class="hierarchy-lock" aria-hidden="true">🔒</span><strong>${poLabel}</strong></div>`,
+        ].join("");
+
+        container.querySelectorAll(".hierarchy-toggle[data-toggle-column]").forEach((button) => {
             button.addEventListener("click", () => {
                 const column = button.dataset.toggleColumn;
                 hierarchyOrder = hierarchyOrder.filter((value) => value !== column);
                 disabledHierarchyColumns.push(column);
                 renderHierarchy();
+                renderDestinationPreview();
             });
         });
 
-        // Disabled columns list (kept in the report, not used as folders).
-        const disabledBox = $("#hierarchy-disabled");
-        const disabledList = $("#hierarchy-disabled-list");
         disabledBox.hidden = disabledHierarchyColumns.length === 0;
         disabledList.innerHTML = disabledHierarchyColumns.map((column) => `<li><span>${escapeHtml(column)}</span><button class="hierarchy-toggle" data-reenable-column="${escapeHtml(column)}" title="${enableLabel}" type="button">+</button></li>`).join("");
         disabledList.querySelectorAll(".hierarchy-toggle[data-reenable-column]").forEach((button) => {
@@ -443,73 +498,19 @@ document.addEventListener("DOMContentLoaded", () => {
                 disabledHierarchyColumns = disabledHierarchyColumns.filter((value) => value !== column);
                 hierarchyOrder.push(column);
                 renderHierarchy();
+                renderDestinationPreview();
             });
         });
 
-        let pointerDrag = null;
-        const finishHierarchyDrag = () => {
-            const item = draggedHierarchyItem;
-            const placeholder = list.querySelector(".hierarchy-placeholder");
-            if (!item) return;
-            if (placeholder) placeholder.replaceWith(item);
-            item.style.display = "";
-            item.classList.remove("dragging");
-            draggedHierarchyItem = null;
-            pointerDrag = null;
-            hierarchyOrder = [...list.querySelectorAll("li[data-column]")].map((node) => node.dataset.column);
-            syncHierarchyLevels(list);
-            list.classList.remove("drag-active");
-            renderDestinationPreview();
-        };
-
-        const placeHierarchyPlaceholder = (clientY) => {
-            if (!draggedHierarchyItem) return;
-            let placeholder = list.querySelector(".hierarchy-placeholder");
-            if (!placeholder) {
-                placeholder = document.createElement("li");
-                placeholder.className = "hierarchy-placeholder";
-            }
-            const candidates = [...list.querySelectorAll("li[data-column]:not(.dragging)")];
-            const target = candidates.find((item) => clientY < item.getBoundingClientRect().top + item.getBoundingClientRect().height / 2);
-            const targetIndex = target ? candidates.indexOf(target) : candidates.length;
-            placeholder.style.setProperty("--hierarchy-level", String(targetIndex));
-            if (target) list.insertBefore(placeholder, target); else list.appendChild(placeholder);
-        };
-
-        // Pointer events are used instead of native HTML5 drag events. The
-        // latter are inconsistent in WebKit/pywebview and made reordering feel
-        // stuck or fail altogether.
-        list.querySelectorAll("li[data-column]").forEach((item) => {
-            item.addEventListener("pointerdown", (event) => {
-                if (event.button !== 0 || event.target.closest(".hierarchy-toggle")) return;
-                pointerDrag = { item, pointerId: event.pointerId, startY: event.clientY, active: false };
-                try { item.setPointerCapture(event.pointerId); } catch (_) { /* best effort */ }
+        const sortableList = $("#hierarchy-sortable");
+        if (window.HierarchySorter) {
+            hierarchySorter = new window.HierarchySorter(sortableList, {
+                disabled: journeyStep !== 3 || journeyStep > journeyMaxStep,
+                onChange: applyHierarchyOrder,
             });
-            item.addEventListener("pointermove", (event) => {
-                if (!pointerDrag || pointerDrag.item !== item || pointerDrag.pointerId !== event.pointerId) return;
-                if (!pointerDrag.active && Math.abs(event.clientY - pointerDrag.startY) < 5) return;
-                if (!pointerDrag.active) {
-                    pointerDrag.active = true;
-                    draggedHierarchyItem = item;
-                    item.classList.add("dragging");
-                    item.style.display = "none";
-                    list.classList.add("drag-active");
-                }
-                event.preventDefault();
-                placeHierarchyPlaceholder(event.clientY);
-            });
-            item.addEventListener("pointerup", () => {
-                if (pointerDrag && pointerDrag.active) finishHierarchyDrag();
-                else pointerDrag = null;
-            });
-            item.addEventListener("pointercancel", finishHierarchyDrag);
-        });
-        list.addEventListener("pointermove", (event) => {
-            if (pointerDrag && pointerDrag.active) {
-                event.preventDefault();
-                placeHierarchyPlaceholder(event.clientY);
-            }
-        });
+        } else {
+            logToConsole("Error", "The folder reordering component could not be loaded.");
+        }
     }
 
     function renderDestinationPreview() {
@@ -533,11 +534,14 @@ document.addEventListener("DOMContentLoaded", () => {
             : `The column “${escapeHtml(column)}” is completely empty in the input and will not be used to create folders.`}</div>`).join("");
     }
 
-    function setHierarchyColumns(columns) {
-        const available = (columns || []).map(String);
-        const kept = hierarchyOrder.filter((column) => available.includes(column));
-        hierarchyOrder = kept.concat(available.filter((column) => !kept.includes(column)));
+    function setHierarchyColumns(columns, emptyColumns = []) {
+        const empty = new Set((emptyColumns || []).map(String));
+        const available = (columns || []).map(String).filter((column) => !empty.has(column));
+        hierarchyColumnsLoaded = true;
         disabledHierarchyColumns = disabledHierarchyColumns.filter((column) => available.includes(column));
+        const disabled = new Set(disabledHierarchyColumns);
+        const kept = hierarchyOrder.filter((column) => available.includes(column) && !disabled.has(column));
+        hierarchyOrder = kept.concat(available.filter((column) => !disabled.has(column) && !kept.includes(column)));
         renderHierarchy();
         renderDestinationPreview();
     }
@@ -547,6 +551,15 @@ document.addEventListener("DOMContentLoaded", () => {
         selectedFilePath = filePath || null;
         selectedFileValidated = false;
         validatedFingerprint = null;
+        mappingDetected = null;
+        mappingSuggestions = { po: [], supplier: [] };
+        hierarchyOrder = [];
+        disabledHierarchyColumns = [];
+        hierarchyColumnsLoaded = false;
+        hideMappingNotice();
+        $("#validation-feedback").hidden = true;
+        $("#destination-feedback").hidden = true;
+        renderHierarchy();
         if (!selectedFilePath) {
             updateReadyState("unauthenticated", "Choose an input file", "Use the native picker so the full path is available.");
             return;
@@ -563,17 +576,88 @@ document.addEventListener("DOMContentLoaded", () => {
         $("#btn-next-input").disabled = Boolean(hasApi("inspect_input_file"));
         updateReadyState("unauthenticated", "File selected", "Validate the file before starting.");
         startFileMonitor();
+        // Detect non-standard files immediately so the user can map the
+        // columns without waiting for the validation step.
+        probeColumnsForMapping();
     }
+
+    function showMappingNotice() {
+        const notice = $("#mapping-notice");
+        if (notice) notice.hidden = false;
+    }
+
+    function hideMappingNotice() {
+        const notice = $("#mapping-notice");
+        if (notice) notice.hidden = true;
+    }
+
+    async function probeColumnsForMapping() {
+        if (!selectedFilePath || !hasApi("get_input_columns")) return;
+        const requestedPath = selectedFilePath;
+        const probeToken = ++mappingProbeToken;
+        try {
+            const info = await api().get_input_columns(requestedPath);
+            if (requestedPath !== selectedFilePath || probeToken !== mappingProbeToken || !info || !info.success) return;
+            mappingColumns = info.columns || [];
+            mappingDetected = info.detected || {};
+            mappingSuggestions = info.suggestions || { po: [], supplier: [] };
+            const missingPo = !mappingDetected.po;
+            const missingSupplier = !mappingDetected.supplier;
+            if (missingPo || missingSupplier) {
+                $("#mapping-notice-title").innerText = appSettings.language === "pt-BR"
+                    ? (missingPo && missingSupplier
+                        ? "Este arquivo não tem as colunas padrão."
+                        : missingPo
+                            ? "A coluna de PO não foi encontrada."
+                            : "A coluna de fornecedor não foi encontrada.")
+                    : (missingPo && missingSupplier
+                        ? "This file does not have the standard columns."
+                        : missingPo
+                            ? "The PO column was not found."
+                            : "The supplier column was not found.");
+                $("#mapping-notice-text").innerText = appSettings.language === "pt-BR"
+                    ? "Mapeie as colunas de PO e fornecedor para continuar."
+                    : "Map the PO and supplier columns to continue.";
+                showMappingNotice();
+            } else {
+                hideMappingNotice();
+            }
+        } catch (_) { /* best effort */ }
+    }
+
+    $("#btn-map-columns").addEventListener("click", async () => {
+        if (!selectedFilePath) return;
+        // Refresh the column list, then open the mapping card in step 2.
+        if (hasApi("get_input_columns")) {
+            const info = await api().get_input_columns(selectedFilePath);
+            if (info && info.success) {
+                mappingColumns = info.columns || [];
+                mappingDetected = info.detected || {};
+                mappingSuggestions = info.suggestions || { po: [], supplier: [] };
+            }
+        }
+        completeJourneyStep(2);
+        renderMappingCard(mappingColumns, mappingDetected, mappingSuggestions);
+    });
 
     function clearFile() {
         selectedFilePath = null;
         selectedFileValidated = false;
         validatedFingerprint = null;
+        mappingDetected = null;
+        mappingSuggestions = { po: [], supplier: [] };
+        mappingColumns = [];
+        hierarchyOrder = [];
+        disabledHierarchyColumns = [];
+        hierarchyColumnsLoaded = false;
+        mappingProbeToken += 1;
+        hideMappingNotice();
         if (fileMonitorInterval) clearInterval(fileMonitorInterval);
         $("#file-input").value = "";
         $("#dropzone").hidden = false;
         $("#file-details").hidden = true;
         $("#validation-feedback").hidden = true;
+        $("#destination-feedback").hidden = true;
         $("#file-state").hidden = true;
         $("#btn-next-input").disabled = true;
         $("#btn-next-hierarchy").disabled = true;
@@ -646,6 +730,35 @@ document.addEventListener("DOMContentLoaded", () => {
 
     $("#btn-start-over").addEventListener("click", startOver);
 
+    function showDestinationFeedback(message) {
+        const box = $("#destination-feedback");
+        if (!box) return;
+        box.innerText = message || "";
+        box.hidden = !message;
+    }
+
+    async function validateDestinationPath() {
+        const value = $("#download-dir").value.trim();
+        if (!value) {
+            showDestinationFeedback(appSettings.language === "pt-BR" ? "Escolha uma pasta de destino." : "Choose a download folder.");
+            return false;
+        }
+        if (!hasApi("validate_download_directory")) return true;
+        try {
+            const result = await api().validate_download_directory(value);
+            if (!result || !result.success) {
+                showDestinationFeedback(result?.error || (appSettings.language === "pt-BR" ? "A pasta de destino não está disponível." : "The download destination is not available."));
+                return false;
+            }
+            showDestinationFeedback("");
+            if (result.path) $("#download-dir").value = result.path;
+            return true;
+        } catch (error) {
+            showDestinationFeedback(error?.message || String(error));
+            return false;
+        }
+    }
+
     async function ensureDefaultDestination() {
         if ($("#download-dir").value) {
             $("#btn-next-review").disabled = false;
@@ -664,13 +777,18 @@ document.addEventListener("DOMContentLoaded", () => {
     $("#btn-choose-dir").addEventListener("click", async () => {
         if (hasApi("select_directory")) {
             const path = await api().select_directory();
-            if (path) $("#download-dir").value = path;
+            if (path) {
+                $("#download-dir").value = path;
+                showDestinationFeedback("");
+            }
         } else {
             $("#download-dir").value = "Downloads/CoupaAttachments";
+            showDestinationFeedback("");
         }
         $("#btn-next-review").disabled = !$("#download-dir").value;
     });
     $("#download-dir").addEventListener("input", () => {
+        showDestinationFeedback("");
         $("#btn-next-review").disabled = !$("#download-dir").value.trim();
     });
     $("#download-dir").addEventListener("change", async () => {
@@ -702,22 +820,23 @@ document.addEventListener("DOMContentLoaded", () => {
         const panel = $("#file-state");
         const dot = $("#file-state-dot");
         const label = $("#file-state-text");
+        const pt = appSettings.language === "pt-BR";
         panel.hidden = false;
         panel.classList.remove("ready", "blocked");
         if (state.open_detected) {
             panel.classList.add("blocked");
             dot.className = "status-dot unauthenticated";
-            label.innerText = "Excel appears to be open — save and close it";
+            label.innerText = pt ? "O Excel parece estar aberto — salve e feche o arquivo" : "Excel appears to be open — save and close it";
             selectedFileValidated = false;
             $("#btn-next-input").disabled = true;
         } else if (state.ready) {
             panel.classList.add("ready");
             dot.className = "status-dot authenticated";
-            label.innerText = "File saved and ready to validate";
+            label.innerText = pt ? "Arquivo salvo e pronto para validar" : "File saved and ready to validate";
             $("#btn-next-input").disabled = false;
         } else {
             dot.className = "status-dot authenticating";
-            label.innerText = "Waiting for the file to finish saving…";
+            label.innerText = pt ? "Aguardando o arquivo terminar de salvar…" : "Waiting for the file to finish saving…";
             $("#btn-next-input").disabled = true;
         }
     }
@@ -744,16 +863,29 @@ document.addEventListener("DOMContentLoaded", () => {
         fileMonitorInterval = setInterval(pollFileState, 800);
     }
 
-    function renderMappingCard(columns, detected) {
+    function renderMappingCard(columns, detected, suggestions = mappingSuggestions) {
         const card = $("#column-mapping-card");
-        if (!card || !Array.isArray(columns) || !columns.length) { card.hidden = true; return; }
+        if (!card) return;
+        if (!Array.isArray(columns) || !columns.length) { card.hidden = true; return; }
         const poSelect = $("#mapping-po-select");
         const supplierSelect = $("#mapping-supplier-select");
+        if (!poSelect || !supplierSelect) return;
         const options = (placeholder) => `<option value="">${placeholder}</option>` + columns.map((column) => `<option value="${escapeHtml(column)}">${escapeHtml(column)}</option>`).join("");
         poSelect.innerHTML = options(appSettings.language === "pt-BR" ? "— selecione a coluna de PO —" : "— select the PO column —");
         supplierSelect.innerHTML = options(appSettings.language === "pt-BR" ? "— selecione a coluna de fornecedor —" : "— select the supplier column —");
+        const best = (role) => (suggestions?.[role] || [])[0];
         if (detected && detected.po) poSelect.value = detected.po;
+        else if (best("po")) poSelect.value = best("po").column;
         if (detected && detected.supplier) supplierSelect.value = detected.supplier;
+        else if (best("supplier")) supplierSelect.value = best("supplier").column;
+        const hint = (role) => {
+            const item = best(role);
+            if (!item) return "";
+            const examples = (item.examples || []).slice(0, 3).join(", ");
+            return `${item.confidence}% confidence${examples ? ` · e.g. ${examples}` : ""}`;
+        };
+        $("#mapping-po-hint").innerText = hint("po");
+        $("#mapping-supplier-hint").innerText = hint("supplier");
         mappingColumns = columns;
         card.hidden = false;
     }
@@ -773,16 +905,105 @@ document.addEventListener("DOMContentLoaded", () => {
             logToConsole("Error", appSettings.language === "pt-BR" ? "Selecione as colunas de PO e fornecedor." : "Select the PO and supplier columns first.");
             return;
         }
-        const button = $("#btn-apply-mapping");
-        button.disabled = true;
-        const result = await api().map_input_columns(selectedFilePath, mapping);
-        button.disabled = false;
-        if (!result.success) {
-            logToConsole("Error", result.error || "Could not apply the column mapping.");
+        if (mapping.po === mapping.supplier) {
+            const message = appSettings.language === "pt-BR" ? "PO e fornecedor precisam estar em colunas diferentes." : "PO Number and Supplier must use different columns.";
+            logToConsole("Error", message);
+            $("#validation-feedback").innerHTML = `<div class="validation-error">${escapeHtml(message)}</div>`;
+            $("#validation-feedback").hidden = false;
             return;
         }
-        logToConsole("Success", appSettings.language === "pt-BR" ? `Mapeamento aplicado: PO → ${result.mapping.po}, Fornecedor → ${result.mapping.supplier}.` : `Mapping applied: PO → ${result.mapping.po}, Supplier → ${result.mapping.supplier}.`);
-        renderValidation(result);
+        const button = $("#btn-apply-mapping");
+        button.disabled = true;
+        try {
+            const result = await api().map_input_columns(selectedFilePath, mapping);
+            if (!result || !result.success) throw new Error(result?.error || (appSettings.language === "pt-BR" ? "Não foi possível aplicar o mapeamento." : "Could not apply the column mapping."));
+            logToConsole("Success", appSettings.language === "pt-BR" ? `Mapeamento aplicado: PO → ${result.mapping.po}, Fornecedor → ${result.mapping.supplier}.` : `Mapping applied: PO → ${result.mapping.po}, Supplier → ${result.mapping.supplier}.`);
+            await renderValidation(result);
+        } catch (error) {
+            const message = error?.message || String(error);
+            logToConsole("Error", message);
+            const feedback = $("#validation-feedback");
+            feedback.innerHTML = `<div class="validation-error">${escapeHtml(message)}</div>`;
+            feedback.hidden = false;
+        } finally {
+            button.disabled = false;
+        }
+    }
+
+    function renderAffectedValues(group, pt) {
+        const details = Array.isArray(group.row_details) ? group.row_details : [];
+        const isRows = ["blank_rows", "partial_rows", "excel_cell_errors", "required_value_whitespace", "placeholder_supplier", "multiple_pos_in_cell", "ambiguous_po_value", "folder_value_safety"].includes(group.id) || group.rows_are_excel_rows;
+        const rowPrefix = pt ? "Linha" : "Row";
+        const values = details.length
+            ? details.map((detail) => `${rowPrefix} ${detail.row}: ${(detail.parts || []).join(" · ")}`)
+            : (Array.isArray(group.rows) ? group.rows.map(String) : []);
+        if (!values.length) return "";
+        const maxVisible = 200;
+        const visible = values.slice(0, maxVisible).map((value) => escapeHtml(value)).join("\n");
+        const remaining = values.length - Math.min(values.length, maxVisible);
+        const label = isRows ? (pt ? "linhas afetadas" : "affected rows") : "POs";
+        const copyLabel = isRows ? (pt ? "Copiar detalhes" : "Copy details") : (pt ? "Copiar POs" : "Copy POs");
+        const more = remaining > 0
+            ? (pt ? ` · mais ${remaining} não exibidos` : ` · ${remaining} more not shown`)
+            : "";
+        const copyId = `validation-values-${++validationCopyId}`;
+        validationCopyValues.set(copyId, values.join("\n"));
+        return `<details class="validation-affected"><summary>${pt ? "Ver" : "View"} ${values.length} ${label}${more}</summary><div class="validation-affected-values"><div class="validation-affected-toolbar"><button class="btn btn-quiet btn-copy-affected" data-copy-id="${copyId}" type="button">${copyLabel}</button></div><code>${visible}</code></div></details>`;
+    }
+
+    function validationGroupCopy(group, pt) {
+        const copy = {
+            blank_rows: ["Blank rows", "Row(s) completely empty.", "Linhas vazias", "Há linhas completamente vazias."],
+            partial_rows: ["Rows with missing PO or Supplier", "Rows without PO Number or Supplier.", "Linhas sem PO ou fornecedor", "Há linhas sem PO ou fornecedor."],
+            required_value_whitespace: ["Whitespace around PO or Supplier values", "Leading and trailing whitespace is ignored, but can be removed from the source file.", "Espaços em PO ou fornecedor", "Espaços no início e no fim são ignorados, mas podem ser removidos do arquivo."],
+            multiple_pos_in_cell: ["Multiple POs in one cell", "Each row must contain one PO. Review the proposed split before applying it.", "Múltiplas POs na mesma célula", "Cada linha deve conter uma PO. Revise a divisão proposta antes de aplicar."],
+            ambiguous_po_value: ["Ambiguous PO value", "The value contains a separator but cannot be split safely.", "PO ambígua", "O valor contém um separador, mas não pode ser dividido com segurança."],
+            duplicate_pos: ["Duplicate PO numbers", "PO(s) repeated with the same Supplier.", "POs duplicadas", "Há POs repetidas com o mesmo fornecedor."],
+            po_supplier_conflict: ["POs linked to multiple Suppliers", "Review these POs manually; automatic deduplication could discard a supplier relationship.", "POs ligadas a vários fornecedores", "Revise manualmente; a correção automática pode descartar um fornecedor."],
+            invalid_chars: ["PO numbers with unusual characters", "PO values contain unsupported characters.", "POs com caracteres inválidos", "Há caracteres não permitidos nos valores de PO."],
+            unusual_format: ["PO numbers with an invalid format", "PO values must start with PO/PM and contain digits only after the prefix.", "POs com formato inválido", "As POs devem começar com PO/PM e conter apenas números depois do prefixo."],
+            unusual_po_length: ["PO numbers with an unusual length", "Most PO numbers contain 8 digits after PO or PM. Confirm values with another length.", "POs com quantidade de dígitos incomum", "A maioria das POs contém 8 dígitos depois de PO ou PM. Confirme valores com outro tamanho."],
+            placeholder_pos: ["Placeholder PO values", "Replace placeholders such as UNK, N/A or TBD with real PO numbers.", "POs de preenchimento", "Substitua valores como UNK, N/A ou TBD por POs reais."],
+            placeholder_supplier: ["Placeholder Supplier values", "Replace placeholder Supplier values such as Unknown, N/A or TBD.", "Fornecedor de preenchimento", "Substitua valores de fornecedor como Unknown, N/A ou TBD."],
+            excel_cell_errors: ["Excel error values", "Replace formula errors such as #REF!, #VALUE! or #N/A.", "Erros nas células do Excel", "Substitua erros de fórmula como #REF!, #VALUE! ou #N/A."],
+            excel_numeric_coercion: ["PO values may have been converted by Excel", "Format the PO column as text and restore lost leading zeros.", "POs convertidas pelo Excel", "Formate a coluna como texto e restaure zeros à esquerda perdidos."],
+            empty_headers: ["Empty or unnamed headers", "Rename empty or unnamed columns before continuing.", "Cabeçalhos vazios ou sem nome", "Renomeie as colunas vazias ou sem nome."],
+            duplicate_required_headers: ["Duplicate required headers", "The PO or Supplier column appears more than once.", "Cabeçalhos obrigatórios duplicados", "A coluna de PO ou fornecedor aparece mais de uma vez."],
+            duplicate_headers: ["Similar column headers", "Review columns with the same base name before choosing folder levels.", "Cabeçalhos semelhantes", "Revise colunas com o mesmo nome-base antes de escolher as pastas."],
+            folder_value_safety: ["Folder names will be sanitized", "Warning only: the download can continue. Unsafe characters such as '/' or backslash become '_' in folder names; reserved names, long values and collisions are also normalized.", "Nomes de pasta serão normalizados", "Aviso apenas: o download pode continuar. Caracteres inseguros como '/' ou barra invertida viram '_' nos nomes de pasta; nomes reservados, valores longos e colisões também são normalizados."],
+            empty_hierarchy_columns: ["Empty hierarchy columns", "These columns contain no values and will not create folder levels.", "Colunas de hierarquia vazias", "Estas colunas não têm valores e não criarão níveis de pasta."],
+            missing_po_column: ["Missing PO Number column", "Map the column that contains the PO Number.", "Coluna de PO ausente", "Mapeie a coluna que contém o número da PO."],
+            missing_supplier_column: ["Missing Supplier/Company column", "Map the column that contains the Supplier.", "Coluna de fornecedor ausente", "Mapeie a coluna que contém o fornecedor."],
+            mapping_same_column: ["PO and Supplier use the same column", "Choose two different columns for PO Number and Supplier.", "PO e fornecedor usam a mesma coluna", "Escolha colunas diferentes para PO e fornecedor."],
+        }[group.id];
+        if (!copy) return { title: group.title || group.id, message: group.message || "" };
+        return { title: pt ? copy[2] : copy[0], message: pt ? copy[3] : copy[1] };
+    }
+
+    async function copyValidationValues(button, pt) {
+        const values = validationCopyValues.get(button.dataset.copyId);
+        if (!values) return;
+        let copied = false;
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            try {
+                await navigator.clipboard.writeText(values);
+                copied = true;
+            } catch (_) { copied = false; }
+        }
+        if (!copied) {
+            const area = document.createElement("textarea");
+            area.value = values;
+            area.setAttribute("readonly", "true");
+            area.style.position = "fixed";
+            area.style.opacity = "0";
+            document.body.appendChild(area);
+            area.select();
+            copied = document.execCommand("copy");
+            area.remove();
+        }
+        const original = button.innerText;
+        button.innerText = copied ? (pt ? "Copiado" : "Copied") : (pt ? "Falhou" : "Copy failed");
+        setTimeout(() => { button.innerText = original; }, 1800);
     }
 
     async function renderValidation(result) {
@@ -792,9 +1013,12 @@ document.addEventListener("DOMContentLoaded", () => {
         const fixes = Array.isArray(result.fixes) ? result.fixes : [];
         const groups = Array.isArray(result.groups) ? result.groups : [];
         const mapping = result.mapping || {};
+        validationCopyValues.clear();
+        mappingDetected = mapping.po || mapping.supplier ? mapping : (mappingDetected || {});
+        mappingSuggestions = result.mapping_suggestions || mappingSuggestions;
         const pt = appSettings.language === "pt-BR";
         let html = "";
-        setHierarchyColumns(result.hierarchy_columns || []);
+        setHierarchyColumns(result.hierarchy_columns || [], result.empty_hierarchy_columns || []);
         renderHierarchyWarnings(result.empty_hierarchy_columns || []);
         const needsMapping = groups.some((group) => group.mapping);
         if (needsMapping) {
@@ -802,13 +1026,25 @@ document.addEventListener("DOMContentLoaded", () => {
         } else {
             hideMappingCard();
         }
+        const issueCount = groups.length || errors.length || warnings.length;
         if (result.valid) html += `<div class="validation-success">${pt ? `Arquivo válido — ${result.valid_po_count || 0} PO(s) prontos.` : `File is valid — ${result.valid_po_count || 0} PO(s) ready.`}</div>`;
-        else html += `<div class="validation-error-header">${pt ? `O arquivo precisa de correção (${groups.length} grupo(s) de problema)` : `File needs correction (${groups.length} issue group(s))`}</div>`;
+        else html += `<div class="validation-error-header">${pt ? `O arquivo precisa de correção (${issueCount} grupo(s) de problema)` : `File needs correction (${issueCount} issue group(s))`}</div>`;
+        if ((groups.length || (result.empty_hierarchy_columns || []).length) && hasApi("open_filtered_input_view")) {
+            const csvInput = /\.csv$/i.test(String(selectedFilePath || ""));
+            const actionLabel = csvInput
+                ? (pt ? "Converter e abrir no Excel" : "Convert and open in Excel")
+                : (pt ? "Abrir input filtrado no Excel" : "Open filtered input in Excel");
+            const actionNote = csvInput
+                ? (pt ? "O CSV original será preservado; uma cópia XLSX anotada será criada para edição." : "The original CSV stays unchanged; an annotated XLSX working copy will be created for editing.")
+                : (pt ? "O arquivo original será anotado; um backup será criado antes." : "The original input will be annotated; a backup is created first.");
+            html += `<div class="validation-excel-actions"><button class="btn btn-primary btn-small btn-open-filtered-view" type="button">${actionLabel}</button><small>${actionNote}</small></div>`;
+        }
         if (groups.length) {
             html += `<div class="validation-dashboard">`;
             groups.forEach((group) => {
                 const severityClass = group.severity === "warning" ? "validation-warning" : "validation-error";
-                html += `<div class="validation-group"><div class="validation-group-head ${severityClass}"><strong>${escapeHtml(group.title || group.id)}</strong><span>${group.count || 0}</span></div><p>${escapeHtml(group.message || "")}</p>`;
+                const groupCopy = validationGroupCopy(group, pt);
+                html += `<div class="validation-group"><div class="validation-group-head ${severityClass}"><strong>${escapeHtml(groupCopy.title)}</strong><span>${group.count || 0}</span></div><p>${escapeHtml(groupCopy.message)}</p>${renderAffectedValues(group, pt)}`;
                 if (group.fixable && hasApi("repair_input_file")) {
                     html += `<button class="btn btn-secondary btn-small btn-fix-group" data-fix="${escapeHtml(group.fix_action)}" type="button">${pt ? "Corrigir" : "Fix"}</button>`;
                 } else if (group.fixable === false && group.id !== "missing_po_column" && group.id !== "missing_supplier_column") {
@@ -818,26 +1054,92 @@ document.addEventListener("DOMContentLoaded", () => {
             });
             html += `</div>`;
         }
-        errors.forEach((error) => { html += `<div class="validation-error">${escapeHtml(error)}</div>`; });
-        warnings.forEach((warning) => { html += `<div class="validation-warning">${escapeHtml(warning)}</div>`; });
+        const standaloneErrors = groups.length ? errors.filter((error) => String(error).toLowerCase().includes("no valid po")) : errors;
+        const standaloneWarnings = groups.length ? [] : warnings;
+        standaloneErrors.forEach((error) => { html += `<div class="validation-error">${escapeHtml(error)}</div>`; });
+        standaloneWarnings.forEach((warning) => { html += `<div class="validation-warning">${escapeHtml(warning)}</div>`; });
         fixes.forEach((fix) => { html += `<div class="validation-info">${pt ? "Correção sugerida:" : "Suggested fix:"} ${escapeHtml(fix.description || fix.action)}</div>`; });
         feedback.innerHTML = html;
+        feedback.querySelectorAll(".btn-copy-affected").forEach((button) => {
+            button.addEventListener("click", () => copyValidationValues(button, pt));
+        });
+        const filteredViewButton = feedback.querySelector(".btn-open-filtered-view");
+        if (filteredViewButton) {
+            filteredViewButton.addEventListener("click", async () => {
+                filteredViewButton.disabled = true;
+                filteredViewButton.innerText = pt ? "Preparando input…" : "Preparing input…";
+                try {
+                    const opened = await api().open_filtered_input_view(selectedFilePath);
+                    if (!opened || !opened.success) throw new Error(opened?.error || (pt ? "Não foi possível preparar o input para correção." : "Could not prepare the input for correction."));
+                    if (opened.path && opened.path !== selectedFilePath) {
+                        selectedFilePath = opened.path;
+                        selectedFileValidated = false;
+                        validatedFingerprint = null;
+                        const workingName = String(opened.path).split(/[\\/]/).pop();
+                        $("#selected-filename").innerText = workingName;
+                        $("#validation-filename").innerText = workingName;
+                        $("#selected-filesize").innerText = pt ? "Cópia de trabalho XLSX" : "XLSX working copy";
+                        $(".file-type").innerText = "XLSX";
+                        $("#btn-next-hierarchy").disabled = true;
+                        startFileMonitor();
+                        probeColumnsForMapping();
+                        updateReadyState("unauthenticated", pt ? "Cópia XLSX criada" : "XLSX working copy created", pt ? "Edite o arquivo no Excel, salve, feche e valide novamente." : "Edit the Excel file, save, close it, and validate again.");
+                    }
+                    logToConsole("Success", `${opened.message} ${opened.filtered_rows || 0} row(s) filtered.`);
+                    filteredViewButton.innerText = pt ? "Input aberto" : "Input opened";
+                } catch (error) {
+                    const message = error?.message || String(error);
+                    logToConsole("Error", message);
+                    filteredViewButton.innerText = pt ? "Falha ao abrir" : "Open failed";
+                    filteredViewButton.disabled = false;
+                }
+            });
+        }
         feedback.querySelectorAll(".btn-fix-group").forEach((button) => {
             button.addEventListener("click", async () => {
-                button.disabled = true;
-                button.innerText = pt ? "Corrigindo…" : "Applying…";
-                const repaired = await api().repair_input_file(selectedFilePath, [button.dataset.fix]);
-                if (!repaired.success) {
-                    logToConsole("Error", repaired.error || "Could not repair the file.");
-                    button.disabled = false;
-                    button.innerText = pt ? "Corrigir" : "Fix";
+                const action = button.dataset.fix || button.getAttribute("data-fix");
+                if (!action || !selectedFilePath || !hasApi("repair_input_file")) {
+                    const message = pt ? "Não foi possível identificar esta correção." : "This repair action could not be identified.";
+                    logToConsole("Error", message);
+                    feedback.insertAdjacentHTML("afterbegin", `<div class="validation-error">${escapeHtml(message)}</div>`);
                     return;
                 }
-                selectedFileValidated = false;
-                validatedFingerprint = null;
-                logToConsole("Success", `${repaired.message} Backup: ${repaired.backup_path}`);
-                feedback.innerHTML = `<div class="validation-success">${escapeHtml(repaired.message)} ${pt ? "Revalidando…" : "Revalidating…"}</div>`;
-                setTimeout(validateCurrentFile, 1000);
+                button.disabled = true;
+                button.innerText = pt ? "Corrigindo…" : "Applying…";
+                try {
+                    const preview = hasApi("preview_repair_input_file")
+                        ? await api().preview_repair_input_file(selectedFilePath, action)
+                        : { success: true, changes: [], total_changes: 0 };
+                    if (!preview || !preview.success) {
+                        throw new Error(preview?.error || (pt ? "Não foi possível preparar a correção." : "Could not prepare the repair preview."));
+                    }
+                    const changes = Array.isArray(preview.changes) ? preview.changes : [];
+                    const previewLines = changes.slice(0, 30).map((change) => `Row ${change.row} · ${change.column}: ${JSON.stringify(change.old)} → ${JSON.stringify(change.new)}`).join("\n");
+                    const more = Number(preview.total_changes || changes.length) > changes.length ? `\n… and ${Number(preview.total_changes) - changes.length} more` : "";
+                    const confirmation = pt
+                        ? `Alterações propostas:\n${previewLines || "Nenhuma alteração de valor."}${more}\n\nSalvar estas alterações no input?`
+                        : `Proposed changes:\n${previewLines || "No value changes."}${more}\n\nSave these changes to the input?`;
+                    if (!window.confirm(confirmation)) {
+                        button.disabled = false;
+                        button.innerText = pt ? "Corrigir" : "Fix";
+                        return;
+                    }
+                    const repaired = await api().repair_input_file(selectedFilePath, [action], preview.expected_fingerprint);
+                    if (!repaired || !repaired.success) {
+                        throw new Error(repaired?.error || (pt ? "Não foi possível corrigir o arquivo." : "Could not repair the file."));
+                    }
+                    selectedFileValidated = false;
+                    validatedFingerprint = null;
+                    logToConsole("Success", `${repaired.message} Backup: ${repaired.backup_path}`);
+                    feedback.innerHTML = `<div class="validation-success">${escapeHtml(repaired.message)} ${pt ? "Revalidando…" : "Revalidating…"}</div>`;
+                    await validateCurrentFile();
+                } catch (error) {
+                    const message = error?.message || String(error);
+                    logToConsole("Error", message);
+                    feedback.insertAdjacentHTML("afterbegin", `<div class="validation-error">${escapeHtml(message)}</div>`);
+                    button.disabled = false;
+                    button.innerText = pt ? "Corrigir" : "Fix";
+                }
             });
         });
         feedback.querySelectorAll(".btn-open-fix").forEach((button) => {
@@ -863,7 +1165,8 @@ document.addEventListener("DOMContentLoaded", () => {
             const info = await api().get_input_columns(selectedFilePath);
             if (info && info.success) {
                 mappingColumns = info.columns || [];
-                renderMappingCard(mappingColumns, info.detected);
+                mappingSuggestions = info.suggestions || { po: [], supplier: [] };
+                renderMappingCard(mappingColumns, info.detected, mappingSuggestions);
                 return mappingColumns;
             }
         } catch (_) { /* best effort */ }
@@ -885,7 +1188,7 @@ document.addEventListener("DOMContentLoaded", () => {
             return renderValidation(result);
         } finally {
             $("#btn-validate-file").disabled = false;
-            $("#btn-validate-file").innerText = "Validate file";
+            $("#btn-validate-file").innerText = t("validate");
         }
     }
 
@@ -901,11 +1204,15 @@ document.addEventListener("DOMContentLoaded", () => {
         renderDestinationPreview();
         completeJourneyStep(4);
     });
-    $("#btn-next-review").addEventListener("click", () => {
-        if (!$("#download-dir").value) {
-            logToConsole("Error", "Choose a destination folder before continuing.");
-            return;
-        }
+    $("#btn-next-review").addEventListener("click", async () => {
+        const button = $("#btn-next-review");
+        if (button.disabled) return;
+        button.disabled = true;
+        button.innerText = appSettings.language === "pt-BR" ? "Verificando…" : "Checking…";
+        const valid = await validateDestinationPath();
+        button.innerText = t("reviewRun");
+        button.disabled = !valid;
+        if (!valid) return;
         completeJourneyStep(5);
     });
     document.querySelectorAll("[data-journey-back]").forEach((button) => button.addEventListener("click", () => showJourneyStep(Math.min(Number(button.dataset.journeyBack), journeyMaxStep))));
@@ -915,7 +1222,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     // The folder structure is confirmed between steps 3 and 4 (preview in the
     // destination panel). The old modal no longer interrupts the start action.
-    $("#btn-start-run").addEventListener("click", async () => {
+    async function startRunFlow() {
         if (!selectedFilePath) {
             logToConsole("Error", "Please select an input file before starting.");
             alert("Please select an input file before starting.");
@@ -924,6 +1231,10 @@ document.addEventListener("DOMContentLoaded", () => {
         const validation = await validateCurrentFile();
         if (!validation.valid) {
             logToConsole("Error", "Fix the validation errors and validate the file again.");
+            return;
+        }
+        if (!(await validateDestinationPath())) {
+            logToConsole("Error", appSettings.language === "pt-BR" ? "Corrija a pasta de destino antes de iniciar." : "Fix the download destination before starting.");
             return;
         }
 
@@ -980,6 +1291,20 @@ document.addEventListener("DOMContentLoaded", () => {
         logToConsole("Success", `Run ${importedSessionId} started with ${imported.total_pos} PO(s).`);
         showScreen("progress");
         startTelemetryPolling(importedSessionId);
+    }
+
+    $("#btn-start-run").addEventListener("click", async () => {
+        if (startRequestActive || runInProgress) return;
+        startRequestActive = true;
+        $("#btn-start-run").disabled = true;
+        try {
+            await startRunFlow();
+        } catch (error) {
+            logToConsole("Error", error?.message || String(error));
+        } finally {
+            startRequestActive = false;
+            if (!runInProgress) $("#btn-start-run").disabled = false;
+        }
     });
 
     let lastStatus = "PENDING";
@@ -1120,6 +1445,16 @@ document.addEventListener("DOMContentLoaded", () => {
         renderConcurrencyEstimate();
     }
 
+    function syncAuthBrowserOptions() {
+        const option = $("#settings-auth-browser option[value='auto']");
+        if (!option) return;
+        const defaultName = appSettings.auth_browsers?.system_default_name;
+        const pt = appSettings.language === "pt-BR";
+        option.innerText = defaultName
+            ? (pt ? `Automático — padrão do sistema: ${defaultName}` : `Automatic — system default: ${defaultName}`)
+            : (pt ? "Automático — navegador suportado disponível" : "Automatic — available supported browser");
+    }
+
     async function loadSettings() {
         if (!hasApi("get_app_settings")) {
             renderConcurrencyEstimate();
@@ -1135,6 +1470,11 @@ document.addEventListener("DOMContentLoaded", () => {
         $("#settings-download-root").value = appSettings.download_root || "";
         $("#settings-concurrency").value = String(appSettings.concurrency || 4);
         $("#settings-retry").value = String(appSettings.retry_attempts || 1);
+        $("#settings-auth-browser").value = String(appSettings.auth_browser || "auto");
+        const availableBrowsers = new Set((appSettings.auth_browsers?.available || []).map((item) => item.id));
+        $("#settings-auth-browser").querySelectorAll("option[value='edge'], option[value='chrome']").forEach((option) => {
+            option.disabled = availableBrowsers.size > 0 && !availableBrowsers.has(option.value);
+        });
         $("#settings-msg-processing").value = String(appSettings.msg_processing || "convert_extract");
         $("#settings-deduplicate").checked = Boolean(appSettings.deduplicate_files);
         $("#settings-auto-updates").checked = Boolean(appSettings.auto_updates);
@@ -1147,6 +1487,7 @@ document.addEventListener("DOMContentLoaded", () => {
             download_root: $("#settings-download-root").value.trim(),
             concurrency: Number($("#settings-concurrency").value),
             retry_attempts: Number($("#settings-retry").value),
+            auth_browser: $("#settings-auth-browser").value,
             msg_processing: $("#settings-msg-processing").value,
             deduplicate_files: $("#settings-deduplicate").checked,
             auto_updates: $("#settings-auto-updates").checked,
@@ -1186,8 +1527,8 @@ document.addEventListener("DOMContentLoaded", () => {
         if (!hasApi("reset_authentication")) return;
         const pt = appSettings.language === "pt-BR";
         const confirmed = confirm(pt
-            ? "Zerar o login do Coupa? O cache será removido. Seu perfil Edge existente, downloads, inputs e relatórios serão preservados. Feche todas as janelas do Edge antes de continuar."
-            : "Reset Coupa sign-in? The cache will be removed. Your existing Edge profile, downloads, inputs, and reports will be preserved. Close all Edge windows first.");
+            ? "Zerar o login do Coupa? O cache e o perfil exclusivo do aplicativo serão removidos. Seus perfis pessoais, downloads, inputs e relatórios serão preservados. Feche uma janela de login do aplicativo se ela ainda estiver aberta."
+            : "Reset Coupa sign-in? The cache and the app-owned sign-in profile will be removed. Your personal browser profiles, downloads, inputs, and reports will be preserved. Close an app sign-in window if it is still open.");
         if (!confirmed) return;
         const button = $("#btn-reset-auth");
         button.disabled = true;
@@ -1205,6 +1546,7 @@ document.addEventListener("DOMContentLoaded", () => {
         $("#settings-download-root").value = "";
         $("#settings-concurrency").value = "4";
         $("#settings-retry").value = "1";
+        $("#settings-auth-browser").value = "auto";
         $("#settings-font-scale").value = "1.1";
         applyFontScale(1.1);
         $("#settings-msg-processing").value = "convert_extract";
@@ -1219,8 +1561,8 @@ document.addEventListener("DOMContentLoaded", () => {
         if (!hasApi("reset_application_state")) return;
         const pt = appSettings.language === "pt-BR";
         const confirmed = confirm(pt
-            ? "Começar limpo? O histórico local, sessões e login serão apagados. Downloads, relatórios e inputs serão preservados. Feche o Edge e pare qualquer execução antes de continuar."
-            : "Start clean? Local history, sessions, and sign-in state will be cleared. Downloads, reports, and inputs will be preserved. Close Edge and stop any active run before continuing.");
+            ? "Começar limpo? O histórico local, sessões e login serão apagados. Downloads, relatórios e inputs serão preservados. Feche uma janela de login do aplicativo e pare qualquer execução antes de continuar."
+            : "Start clean? Local history, sessions, and sign-in state will be cleared. Downloads, reports, and inputs will be preserved. Close an app sign-in window and stop any active run before continuing.");
         if (!confirmed) return;
         const button = $("#btn-reset-application");
         button.disabled = true;
@@ -1655,8 +1997,25 @@ document.addEventListener("DOMContentLoaded", () => {
         if (!hasApi("check_auth")) { updateAuthUI("authenticated", "Browser preview"); return; }
         try {
             const result = await api().check_auth();
-            updateAuthUI(result.authenticated ? "authenticated" : (result.state || "unauthenticated"), result.message);
-        } catch (error) { updateAuthUI("unauthenticated", error.message); }
+            if (result.authenticated || result.state === "unavailable") {
+                updateAuthUI(result.authenticated ? "authenticated" : "unavailable", result.message);
+                return;
+            }
+
+            // First launch and an expired Coupa session both require one
+            // explicit, visible sign-in in the app-owned browser profile.
+            const authResult = await authenticateWithProgress();
+            if (authResult.success) {
+                updateAuthUI("authenticated");
+                logToConsole("Success", appSettings.language === "pt-BR" ? "Login do Coupa concluído." : "Coupa sign-in completed.");
+            } else {
+                updateAuthUI("expired", authResult.error);
+                logToConsole("Error", authResult.error || "Authentication failed.");
+            }
+        } catch (error) {
+            updateAuthUI("unavailable", error.message);
+            logToConsole("Warning", error.message || "Could not check the Coupa session.");
+        }
     }
 
     async function checkForUpdates(manual = false) {
@@ -1733,8 +2092,13 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     let startupChecksDone = false;
+    let startupChecksStarted = false;
     async function runStartupChecks() {
-        if (startupChecksDone) return;
+        // pywebviewready and the fallback timer can fire close together. Set
+        // the guard before awaiting the bridge so startup cannot start two
+        // authentication flows and two browser windows.
+        if (startupChecksDone || startupChecksStarted) return;
+        startupChecksStarted = true;
         // The pywebview bridge may not be exposed yet when the fallback timer
         // fires; retry until the API is actually available so the saved
         // language/font settings are applied on the first render.
@@ -1743,8 +2107,8 @@ document.addEventListener("DOMContentLoaded", () => {
             await new Promise((resolve) => setTimeout(resolve, 250));
             attempts += 1;
         }        startupChecksDone = true;
-        initializeAuth();
         await loadSettings();
+        await initializeAuth();
         checkForUpdates();
     }
     window.addEventListener("pywebviewready", runStartupChecks);

@@ -12,7 +12,9 @@ import httpx
 
 from src.db.session_db import SessionDB
 from src.engine.parser import CoupaParser
+from src.engine.coupa_metadata import CoupaMetadataExtractor
 from src.engine.rate_limiter import RateLimiter
+from src.db.coupa_metadata import CoupaMetadataRepository
 from src.engine.tls import system_ssl_context
 
 
@@ -29,6 +31,7 @@ class CoupaCrawler:
         timeout: float = 10.0,
         enable_circuit_breaker: Optional[bool] = None,
         preserve_existing_files: bool = False,
+        metadata_repository: Optional[CoupaMetadataRepository] = None,
     ):
         self.db = db
         self.session_id = session_id
@@ -38,6 +41,13 @@ class CoupaCrawler:
         self.request_delay = request_delay
         self.timeout = timeout
         self.preserve_existing_files = preserve_existing_files
+        if metadata_repository is not None:
+            self.metadata_repository = metadata_repository
+        elif hasattr(db, "conn"):
+            self.metadata_repository = CoupaMetadataRepository(db)
+        else:
+            # Lightweight crawler test doubles do not need persistence.
+            self.metadata_repository = None
         if enable_circuit_breaker is None:
             disable_env = os.environ.get("COUPA_DISABLE_CIRCUIT_BREAKER", "").strip().lower()
             self.enable_circuit_breaker = disable_env not in {"1", "true", "yes", "on"}
@@ -70,15 +80,6 @@ class CoupaCrawler:
     def _po_url(self, po_number: str) -> str:
         order_number = po_number[2:] if po_number.upper().startswith(("PO", "PM")) else po_number
         return f"{self.base_url}/order_headers/{order_number}"
-
-    def _po_url_candidates(self, po_number: str) -> List[str]:
-        primary = self._po_url(po_number)
-        original = f"{self.base_url}/order_headers/{po_number}"
-        if original == primary:
-            return [primary]
-        # Prefer the original PO/PM identifier first; stripping the prefix can
-        # resolve to a different valid page with unrelated content.
-        return [original, primary]
 
     async def _fetch_html(self, url: str, label: str = "") -> str:
         t0 = time.monotonic()
@@ -259,19 +260,23 @@ class CoupaCrawler:
         po_dir = os.path.join(self.base_download_dir, *po_dir_parts, po_number)
         dir_created = False
         start_time = time.time()
+        metadata_saved = False
 
         try:
-            html_content = ""
-            po_urls = self._po_url_candidates(po_number)
-            for index, po_url in enumerate(po_urls):
+            po_url = self._po_url(po_number)
+            html_content = await self._fetch_html(po_url, label=f"PO {po_number}")
+
+            if self.metadata_repository is not None:
                 try:
-                    html_content = await self._fetch_html(po_url, label=f"PO {po_number}")
-                    break
-                except httpx.HTTPStatusError as exc:
-                    is_404 = exc.response is not None and exc.response.status_code == 404
-                    is_last_candidate = index == len(po_urls) - 1
-                    if not is_404 or is_last_candidate:
-                        raise
+                    metadata = CoupaMetadataExtractor.extract(
+                        html_content,
+                        po_number=po_number,
+                        source_url=po_url,
+                    )
+                    self.metadata_repository.save(self.session_id, metadata)
+                except Exception as metadata_error:
+                    self.metadata_repository.save_error(self.session_id, po_number, str(metadata_error), po_url)
+                metadata_saved = True
 
             po_attachments = CoupaParser.extract_attachments(html_content, base_url=self.base_url)
 
@@ -320,6 +325,11 @@ class CoupaCrawler:
             }
 
         except Exception as e:
+            if self.metadata_repository is not None and not metadata_saved:
+                try:
+                    self.metadata_repository.save_error(self.session_id, po_number, str(e), locals().get("po_url", ""))
+                except Exception:
+                    pass
             if dir_created and os.path.exists(po_dir) and not self.preserve_existing_files:
                 shutil.rmtree(po_dir, ignore_errors=True)
             error_msg = str(e)

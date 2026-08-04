@@ -24,9 +24,11 @@ Na primeira abertura, o Windows pode demorar alguns segundos para preparar o apl
 
 Quando solicitado:
 
-1. Conclua o login do Coupa na janela do Edge.
-2. Retorne ao Contract Downloader.
-3. Aguarde a confirmação da sessão.
+1. O Contract Downloader detecta Edge/Chrome instalados e, em modo automático, usa o navegador padrão do sistema quando ele for suportado.
+2. Conclua o login do Coupa na janela do navegador dedicada ao aplicativo.
+3. Retorne ao Contract Downloader e aguarde a confirmação da sessão.
+
+O perfil dedicado é criado e reutilizado pelo aplicativo. Para escolher outro navegador, use **Settings**; isso não altera o navegador padrão do sistema nem os links externos.
 
 ## 4. Executar uma lista de POs
 

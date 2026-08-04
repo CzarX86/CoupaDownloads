@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 import pytest
 import pandas as pd
 from unittest.mock import MagicMock, AsyncMock, patch
@@ -270,6 +271,106 @@ def test_validate_input_file_detects_blank_rows_in_xlsx(temp_db, tmp_path):
     assert result["valid"] is False
 
 
+def test_validate_input_file_detects_blank_csv_lines_and_canonical_duplicates(temp_db, tmp_path):
+    csv_path = tmp_path / "blank_lines.csv"
+    csv_path.write_text("PO_NUMBER;SUPPLIER\nPO1;CompA\n\n PO1 ;CompA\n", encoding="utf-8")
+    result = AppAPI(temp_db, "/tmp/downloads").validate_input_file(str(csv_path))
+
+    groups = {group["id"]: group for group in result["groups"]}
+    assert result["total_rows"] == 3
+    assert groups["blank_rows"]["rows"] == [3]
+    assert groups["duplicate_pos"]["rows"] == ["PO1"]
+
+
+def test_validate_input_file_blocks_multiple_pos_in_one_cell(temp_db, tmp_path):
+    csv_path = tmp_path / "multiple_pos.csv"
+    csv_path.write_text("PO_NUMBER;SUPPLIER\nPO123 - PO456;CompA\n", encoding="utf-8")
+    result = AppAPI(temp_db, "/tmp/downloads").validate_input_file(str(csv_path))
+    groups = {group["id"]: group for group in result["groups"]}
+    assert result["valid"] is False
+    assert groups["multiple_pos_in_cell"]["rows"] == [2]
+    assert groups["multiple_pos_in_cell"]["fix_action"] == "split_multiple_pos"
+
+
+def test_validate_input_file_normalizes_required_whitespace(temp_db, tmp_path):
+    csv_path = tmp_path / "whitespace.csv"
+    csv_path.write_text("PO_NUMBER;SUPPLIER\n  PO1 ; CompA \n", encoding="utf-8")
+    api = AppAPI(temp_db, "/tmp/downloads")
+
+    result = api.validate_input_file(str(csv_path))
+    groups = {group["id"]: group for group in result["groups"]}
+    assert result["valid"] is True
+    assert groups["required_value_whitespace"]["fix_action"] == "normalize_required_values"
+
+    repaired = api.repair_input_file(str(csv_path), ["normalize_required_values"])
+    assert repaired["success"] is True
+    assert "  PO1 " not in csv_path.read_text(encoding="utf-8-sig")
+
+
+def test_validate_input_file_blocks_supplier_conflicts_and_placeholders(temp_db, tmp_path):
+    conflict = tmp_path / "conflict.csv"
+    conflict.write_text("PO_NUMBER;SUPPLIER\nPO1;CompA\nPO1;CompB\n", encoding="utf-8")
+    placeholder = tmp_path / "placeholder.csv"
+    placeholder.write_text("PO_NUMBER;SUPPLIER\nUNK;CompA\n", encoding="utf-8")
+    api = AppAPI(temp_db, "/tmp/downloads")
+
+    conflict_result = api.validate_input_file(str(conflict))
+    placeholder_result = api.validate_input_file(str(placeholder))
+
+    assert "po_supplier_conflict" in {group["id"] for group in conflict_result["groups"]}
+    assert not any(group.get("fixable") for group in conflict_result["groups"] if group["id"] == "po_supplier_conflict")
+    assert "placeholder_pos" in {group["id"] for group in placeholder_result["groups"]}
+    repair = api.repair_input_file(str(conflict), ["remove_duplicate_pos"])
+    assert repair["success"] is False
+    imported = api.import_file(str(conflict))
+    assert imported["success"] is False
+
+
+def test_validate_input_file_detects_excel_error_cells(temp_db, tmp_path):
+    csv_path = tmp_path / "formula_error.csv"
+    csv_path.write_text("PO_NUMBER;SUPPLIER;Year\nPO1;CompA;#REF!\n", encoding="utf-8")
+    result = AppAPI(temp_db, "/tmp/downloads").validate_input_file(str(csv_path))
+    assert "excel_cell_errors" in {group["id"] for group in result["groups"]}
+
+
+def test_validate_input_file_suggests_mapping_from_column_values(temp_db, tmp_path):
+    csv_path = tmp_path / "value_mapped.csv"
+    csv_path.write_text("Document;Vendor Name\nPO100;CompA\nPO101;CompB\n", encoding="utf-8")
+    result = AppAPI(temp_db, "/tmp/downloads").validate_input_file(str(csv_path))
+    assert result["valid"] is True
+    assert result["mapping"] == {"po": "Document", "supplier": "Vendor Name"}
+
+
+def test_map_input_columns_rejects_same_required_column(temp_db, tmp_path):
+    csv_path = tmp_path / "mapped.csv"
+    csv_path.write_text("Document;Vendor\nPO1;CompA\n", encoding="utf-8")
+    result = AppAPI(temp_db, "/tmp/downloads").map_input_columns(
+        str(csv_path), {"po": "Document", "supplier": "Document"}
+    )
+    assert result["success"] is False
+    assert result["mapping_conflict"] is True
+
+
+def test_validate_download_directory_checks_writability(temp_db, tmp_path):
+    api = AppAPI(temp_db, "/tmp/downloads")
+    result = api.validate_download_directory(str(tmp_path / "new-run"))
+    assert result["success"] is True
+    assert result["path"] == str(tmp_path / "new-run")
+
+
+def test_repair_preview_and_split_multiple_pos(temp_db, tmp_path):
+    csv_path = tmp_path / "split.csv"
+    csv_path.write_text("PO_NUMBER;SUPPLIER;Year\nPO123/PO456;CompA;2026\n", encoding="utf-8")
+    api = AppAPI(temp_db, "/tmp/downloads")
+
+    preview = api.preview_repair_input_file(str(csv_path), "split_multiple_pos")
+    assert preview["success"] is True
+    assert [change["new"] for change in preview["changes"]] == ["PO123", "PO456"]
+    repaired = api.repair_input_file(str(csv_path), ["split_multiple_pos"], preview["expected_fingerprint"])
+    assert repaired["success"] is True
+    assert pd.read_csv(csv_path, sep=";") ["PO_NUMBER"].tolist() == ["PO123", "PO456"]
+
+
 def test_repair_input_file_cleans_invalid_chars(temp_db, tmp_path):
     csv_path = tmp_path / "dirty.csv"
     csv_path.write_text(
@@ -286,6 +387,25 @@ def test_repair_input_file_cleans_invalid_chars(temp_db, tmp_path):
     content = csv_path.read_text(encoding="utf-8-sig")
     assert "PO2" in content
     assert "PO@2" not in content
+
+
+def test_repair_input_file_uses_persisted_column_mapping(temp_db, tmp_path):
+    csv_path = tmp_path / "mapped_dirty.csv"
+    csv_path.write_text(
+        "Document;Vendor Name\n"
+        "PO@2;CompB\n"
+        "PO3;CompA\n",
+        encoding="utf-8",
+    )
+    api = AppAPI(temp_db, "/tmp/downloads")
+    mapped = api.map_input_columns(str(csv_path), {"po": "Document", "supplier": "Vendor Name"})
+    assert mapped["success"] is True
+
+    result = api.repair_input_file(str(csv_path), ["clean_invalid_chars"])
+
+    assert result["success"] is True
+    assert result["cleaned_invalid_chars"] == 1
+    assert "PO2" in csv_path.read_text(encoding="utf-8-sig")
 
 
 def test_map_input_columns_enables_nonstandard_file(temp_db, tmp_path):
@@ -312,6 +432,14 @@ def test_map_input_columns_enables_nonstandard_file(temp_db, tmp_path):
     imported = api.import_file(str(csv_path))
     assert imported["success"] is True
     assert imported["total_pos"] == 2
+
+
+def test_import_file_deduplicates_canonical_po_values(temp_db, tmp_path):
+    csv_path = tmp_path / "canonical.csv"
+    csv_path.write_text("PO_NUMBER;SUPPLIER\nPO1;CompA\n PO1 ;CompA\n", encoding="utf-8")
+    result = AppAPI(temp_db, "/tmp/downloads").import_file(str(csv_path))
+    assert result["success"] is True
+    assert result["total_pos"] == 1
 
 
 def test_import_file_supplier_is_always_first_level(temp_db, tmp_path):
@@ -342,6 +470,84 @@ def test_validate_input_file_reports_empty_hierarchy_columns(temp_db, tmp_path):
     result = api.validate_input_file(str(csv_path))
     assert "Country" in result["empty_hierarchy_columns"]
     assert "Year" not in result["empty_hierarchy_columns"]
+
+
+def test_open_filtered_input_view_annotates_original_xlsx_with_backup(temp_db, monkeypatch, tmp_path):
+    from openpyxl import load_workbook
+
+    monkeypatch.setattr("src.gui.api.Path.home", lambda: tmp_path)
+    xlsx_path = tmp_path / "input.xlsx"
+    pd.DataFrame({
+        "PO_NUMBER": ["PO00000001", "PO00000001", "PO00000002"],
+        "SUPPLIER": ["CompA", "CompA", "CompB"],
+    }).to_excel(xlsx_path, index=False)
+    original = xlsx_path.read_bytes()
+    api = AppAPI(temp_db, "/tmp/downloads")
+    api._open_spreadsheet_path = lambda path: None
+
+    result = api.open_filtered_input_view(str(xlsx_path))
+
+    assert result["success"] is True
+    assert result["path"] == str(xlsx_path)
+    assert result["backup_path"]
+    assert Path(result["backup_path"]).exists()
+    assert xlsx_path.read_bytes() != original
+    sheet = load_workbook(xlsx_path).active
+    assert sheet.max_column == 2
+    assert sheet.row_dimensions[2].hidden is not True
+    assert sheet.row_dimensions[4].hidden is True
+    assert sheet["A2"].comment is not None
+    assert "Duplicate PO" in sheet["A2"].comment.text
+    assert sheet.auto_filter.ref.endswith(f"{sheet.max_row}")
+
+
+def test_open_filtered_input_view_converts_csv_to_annotated_xlsx_and_preserves_source(temp_db, monkeypatch, tmp_path):
+    from openpyxl import load_workbook
+
+    monkeypatch.setattr("src.gui.api.Path.home", lambda: tmp_path)
+    csv_path = tmp_path / "input.csv"
+    original = "PO_NUMBER;SUPPLIER\nPO@00000001;CompA\nPO00000002;CompB\n"
+    csv_path.write_text(original, encoding="utf-8")
+    api = AppAPI(temp_db, "/tmp/downloads")
+    api._open_spreadsheet_path = lambda path: None
+
+    result = api.open_filtered_input_view(str(csv_path))
+
+    working_path = tmp_path / "input.xlsx"
+    assert result["success"] is True
+    assert result["path"] == str(working_path)
+    assert result["original_path"] == str(csv_path)
+    assert result["converted_from_csv"] == str(csv_path)
+    assert csv_path.read_text(encoding="utf-8") == original
+    assert result["backup_path"]
+    assert Path(result["backup_path"]).exists()
+    sheet = load_workbook(working_path).active
+    assert sheet.row_dimensions[2].hidden is not True
+    assert sheet.row_dimensions[3].hidden is True
+    assert sheet["A2"].comment is not None
+    assert sheet.auto_filter.filterColumn[0].colId == 0
+    assert result["filtered_rows"] == 1
+
+
+def test_validate_input_file_explains_folder_safety_rows(temp_db, tmp_path):
+    csv_path = tmp_path / "folder-values.csv"
+    csv_path.write_text(
+        "PO_NUMBER;SUPPLIER;Year\n"
+        "PO00000001;ACME/BR;2026\n"
+        "PO00000002;ACME_BR;2026\n",
+        encoding="utf-8",
+    )
+    result = AppAPI(temp_db, "/tmp/downloads").validate_input_file(str(csv_path))
+
+    group = next(group for group in result["groups"] if group["id"] == "folder_value_safety")
+    assert group["rows"] == [2, 3]
+    assert {item["row"] for item in group["row_details"]} == {2, 3}
+    assert group["severity"] == "warning"
+    assert group["title"] == "Folder names will be sanitized"
+    assert "download can continue" in group["message"]
+    assert any("path separator" in item["reason"] for item in group["row_details"])
+    assert any("replaced with '_'" in item["reason"] for item in group["row_details"])
+    assert any("collapse" in item["reason"] for item in group["row_details"])
 
 
 # ── Run description (audit context) ──────────────────────────────────────

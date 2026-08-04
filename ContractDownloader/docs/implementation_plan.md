@@ -1,5 +1,7 @@
 # Plan: Bootstrapping Contract Downloader (Independent Standalone App)
 
+> **Nota de arquitetura (2026-08-02):** A autenticação descrita neste plano histórico foi desacoplada em `src/auth/`. Consulte [`authentication-architecture.md`](authentication-architecture.md) para as regras atuais de cache, Edge/Chrome, perfis e navegador externo.
+
 Este plano descreve as etapas técnicas detalhadas para criar, estruturar, implementar e empacotar a nova aplicação portátil **Contract Downloader** na pasta isolada `/ContractDownloader`.
 
 ## User Review Required

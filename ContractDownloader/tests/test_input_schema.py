@@ -5,11 +5,32 @@ import json
 import pytest
 
 from src.engine.input_schema import (
+    canonicalize_po_value,
+    detect_csv_separator,
+    detect_po_parts,
     detect_required_columns,
+    is_valid_canonical_po,
     normalize_column_name,
     parse_mapping_env,
     resolve_mapping,
 )
+
+
+def test_po_canonicalization_is_strict_and_uppercase():
+    assert canonicalize_po_value(" po-17 105 916 ") == "PO17105916"
+    assert is_valid_canonical_po("po-17105916") is True
+    assert is_valid_canonical_po("POA16839021") is False
+    assert is_valid_canonical_po("AB17105916") is False
+
+
+def test_multiple_po_parts_are_detected_before_cleanup():
+    result = detect_po_parts("PO123 - PO456 / PO789")
+    assert result["multiple"] is True
+    assert [part["canonical"] for part in result["parts"]] == ["PO123", "PO456", "PO789"]
+
+
+def test_csv_separator_detection_respects_quoted_commas():
+    assert detect_csv_separator('PO_NUMBER;SUPPLIER\nPO1;"ACME, Inc."\n') == ";"
 
 
 def test_normalize_column_name_strips_separators_and_case():

@@ -13,7 +13,8 @@ import webview
 from src.db.session_db import SessionDB
 from src.gui.api import AppAPI
 from src.gui.cli_supervisor import CliProcessSupervisor
-from src.engine.authenticator import clear_cached_authentication, get_coupa_cookies, load_cached_cookies
+from src.auth import AuthState
+from src.engine.authenticator import get_coupa_cookies
 from src.engine.benchmarker import benchmark
 from src.engine.updater import (
     apply_update_and_restart,
@@ -21,6 +22,8 @@ from src.engine.updater import (
     download_update as fetch_update,
     prepare_update,
 )
+
+_DEFAULT_GET_COUPA_COOKIES = get_coupa_cookies
 
 
 def resolve_path(relative_path: str) -> str:
@@ -65,13 +68,42 @@ class TurboAPI(AppAPI):
 
     def _authenticate_worker(self, fresh: bool) -> None:
         try:
-            cookies = asyncio.run(get_coupa_cookies(
-                load_from_file=not fresh,
-                fresh=fresh,
-                status_callback=self._set_auth_status,
-            ))
+            browser = self.get_app_settings().get("auth_browser", "auto")
+            auth_message = "Coupa session captured and validated."
+            if get_coupa_cookies is _DEFAULT_GET_COUPA_COOKIES:
+                result = asyncio.run(self.auth_service.authenticate(
+                    browser_preference=browser,
+                    fresh=fresh,
+                    status_callback=self._set_auth_status,
+                    # Startup already performed the shared cache check. Avoid
+                    # a duplicate Coupa request before opening the dedicated
+                    # browser profile.
+                    _skip_cache_check=True,
+                ))
+                if not result.cookies or result.state not in {AuthState.VALID, AuthState.UNAVAILABLE}:
+                    raise RuntimeError(result.message or "Coupa authentication did not produce a usable session.")
+                cookies = dict(result.cookies)
+                auth_message = result.message
+            else:
+                # Compatibility seam for integrations that replaced the
+                # historical function-level entry point.
+                try:
+                    cookies = asyncio.run(get_coupa_cookies(
+                        load_from_file=not fresh,
+                        fresh=fresh,
+                        status_callback=self._set_auth_status,
+                        browser=browser,
+                    ))
+                except TypeError as exc:
+                    if "browser" not in str(exc):
+                        raise
+                    cookies = asyncio.run(get_coupa_cookies(
+                        load_from_file=not fresh,
+                        fresh=fresh,
+                        status_callback=self._set_auth_status,
+                    ))
             self.set_auth_cookies(cookies)
-            self._set_auth_status("success", "Coupa session captured and validated.")
+            self._set_auth_status("success", auth_message)
         except Exception as exc:
             self._set_auth_status("error", str(exc))
         finally:
@@ -87,8 +119,8 @@ class TurboAPI(AppAPI):
         with self._auth_lock:
             if self._auth_thread and self._auth_thread.is_alive():
                 return {"success": False, "error": "Wait for the current Coupa sign-in attempt to finish."}
-        result = clear_cached_authentication(remove_app_profile=True)
-        if result.get("success"):
+        result = self.auth_service.reset()
+        if result.get("success") or "cookies" in result.get("removed", []):
             self._cookies = None
             self._fresh_auth_requested = True
             self._set_auth_status("idle", "Sign-in state reset.")
@@ -115,8 +147,11 @@ class TurboAPI(AppAPI):
     def run_benchmark(self, urls: list[str], base_url: str = "https://unilever.coupahost.com") -> dict:
         """Run network benchmark against sample URLs, return optimal params."""
         try:
-            cookies = asyncio.run(get_coupa_cookies(load_from_file=True))
-            result = asyncio.run(benchmark(urls, cookies=cookies, base_url=base_url))
+            browser = self.get_app_settings().get("auth_browser", "auto")
+            auth_result = asyncio.run(self.auth_service.ensure_session(interactive=True, browser_preference=browser))
+            if not auth_result.cookies or auth_result.state not in {AuthState.VALID, AuthState.UNAVAILABLE}:
+                raise RuntimeError(auth_result.message or "Coupa authentication is required before benchmarking.")
+            result = asyncio.run(benchmark(urls, cookies=dict(auth_result.cookies), base_url=base_url))
             return {"success": True, **result}
         except Exception as e:
             return {"success": False, "error": str(e)}
@@ -241,6 +276,7 @@ class TurboAPI(AppAPI):
             deduplicate_files=deduplicate_files,
             description=description,
             column_mapping=mapping,
+            auth_browser=str(settings.get("auth_browser", "auto")),
         )
 
     def set_run_description(self, session_id: int, description: str) -> dict:
@@ -392,13 +428,28 @@ def calculate_window_geometry(screen_width: int, screen_height: int, screen_x: i
     }
 
 
+def _run_cli_pipeline() -> None:
+    """Run the canonical worker and treat GUI pause cancellation as expected."""
+    import process_all_pos
+
+    try:
+        asyncio.run(process_all_pos.main())
+    except asyncio.CancelledError:
+        # The GUI sends SIGINT for pause/stop. In the frozen entrypoint,
+        # asyncio.run lives here (not under process_all_pos.__main__), so this
+        # boundary must also consume CancelledError to avoid PyInstaller's
+        # unhandled-exception report and exit code 1.
+        print("\\n[INFO] Run interrupted safely; pending POs remain queued for resume.", flush=True)
+    except KeyboardInterrupt:
+        print("\\n[INFO] Run interrupted by the user (Ctrl+C).", flush=True)
+
+
 def main():
     # The packaged GUI can also host the canonical CLI pipeline in a child
     # process, avoiding a second crawler implementation.
     if "--cli-pipeline" in sys.argv:
         sys.argv = [arg for arg in sys.argv if arg != "--cli-pipeline"]
-        import process_all_pos
-        asyncio.run(process_all_pos.main())
+        _run_cli_pipeline()
         return
 
     db_path = get_database_path()

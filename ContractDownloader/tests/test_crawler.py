@@ -256,33 +256,24 @@ async def test_circuit_breaker_can_be_disabled(tmp_download_dir):
 # ——— PO URL Resolution ———
 
 
-def test_po_url_candidates_include_original_for_prefixed_ids():
+def test_po_url_strips_prefix_for_coupa_endpoint():
     db = MockSessionDB()
     crawler = CoupaCrawler(db=db, session_id=1, base_download_dir="/tmp")
-    assert crawler._po_url_candidates("PO14718345") == [
-        "https://unilever.coupahost.com/order_headers/PO14718345",
-        "https://unilever.coupahost.com/order_headers/14718345",
-    ]
-    assert crawler._po_url_candidates("PM12345") == [
-        "https://unilever.coupahost.com/order_headers/PM12345",
-        "https://unilever.coupahost.com/order_headers/12345",
-    ]
-    assert crawler._po_url_candidates("12345") == ["https://unilever.coupahost.com/order_headers/12345"]
+    assert crawler._po_url("PO14718345") == "https://unilever.coupahost.com/order_headers/14718345"
+    assert crawler._po_url("PM12345") == "https://unilever.coupahost.com/order_headers/12345"
+    assert crawler._po_url("12345") == "https://unilever.coupahost.com/order_headers/12345"
 
 
 @pytest.mark.asyncio
-async def test_process_po_retries_original_url_when_primary_returns_404(tmp_download_dir):
+async def test_process_po_uses_only_numeric_coupa_route(tmp_download_dir):
     db = MockSessionDB()
     crawler = CoupaCrawler(db=db, session_id=1, base_download_dir=tmp_download_dir)
+    calls = []
 
     async def mock_fetch_html(url: str, label: str = ""):
-        if url.endswith("/order_headers/PO14718345"):
-            req = httpx.Request("GET", url)
-            resp = httpx.Response(404, request=req)
-            raise httpx.HTTPStatusError("404", request=req, response=resp)
-        if url.endswith("/order_headers/14718345"):
-            return "<html><body>No attachments</body></html>"
-        raise AssertionError(f"Unexpected URL called: {url}")
+        calls.append(url)
+        assert url == "https://unilever.coupahost.com/order_headers/14718345"
+        return "<html><body>No attachments</body></html>"
 
     crawler._fetch_html = mock_fetch_html
     crawler._download_attachment = AsyncMock()
@@ -290,6 +281,7 @@ async def test_process_po_retries_original_url_when_primary_returns_404(tmp_down
     result = await crawler.process_po(po_number="PO14718345", company_code="CC1")
 
     assert result["success"] is True
+    assert calls == ["https://unilever.coupahost.com/order_headers/14718345"]
     po_record = db.get_po(1, "PO14718345")
     assert po_record["status"] == "SUCCESS"
     await crawler.close()

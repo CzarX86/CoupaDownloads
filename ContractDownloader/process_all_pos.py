@@ -8,9 +8,12 @@ from datetime import datetime
 from pathlib import Path, PurePosixPath
 import pandas as pd
 from src.db.session_db import SessionDB
+from src.db.coupa_metadata import CoupaMetadataRepository
 from src.engine.crawler import CoupaCrawler
-from src.engine.authenticator import load_cached_cookies, validate_cookies_detailed, get_coupa_cookies
+from src.reports.coupa_excel import enrich_excel_report
+from src.auth import AuthService, AuthState
 from src.engine.msg_converter import find_msg_files, MsgToPdfConverter
+from src.engine.input_schema import canonicalize_po_value, clean_scalar, detect_csv_separator, detect_po_parts, is_excel_numeric_coercion, is_placeholder_po, is_placeholder_supplier, is_valid_canonical_po, normalize_po_value, normalize_supplier_value
 
 # CSV alongside this script (or override via INPUT_CSV env var)
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -90,6 +93,12 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=None,
         help="Retry only PENDING+ERROR rows from a specific interrupted session",
+    )
+    parser.add_argument(
+        "--resume-in-place-session-id",
+        type=int,
+        default=None,
+        help="Resume PENDING+ERROR rows in the existing session and preserve cumulative progress",
     )
     parser.add_argument(
         "--disable-circuit-breaker",
@@ -172,8 +181,8 @@ def _read_csv_text(filepath: str) -> str:
 
 
 def detect_separator(filepath: str) -> str:
-    sample = _read_csv_text(filepath)[:4096]
-    return ";" if sample.count(";") > sample.count(",") else ","
+    sample = _read_csv_text(filepath)[:8192]
+    return detect_csv_separator(sample)
 
 
 def read_input_dataframe(filepath: str) -> pd.DataFrame:
@@ -181,14 +190,15 @@ def read_input_dataframe(filepath: str) -> pd.DataFrame:
     path = Path(filepath)
     suffix = path.suffix.lower()
     if suffix in {".xlsx", ".xlsm", ".xltx", ".xltm"}:
-        return pd.read_excel(path, dtype=str).fillna("")
+        return pd.read_excel(path, sheet_name=0, dtype=str).fillna("")
     if suffix == ".xls":
-        return pd.read_excel(path, dtype=str).fillna("")
+        return pd.read_excel(path, sheet_name=0, dtype=str).fillna("")
     return pd.read_csv(
         path,
         sep=detect_separator(str(path)),
         dtype=str,
         encoding=_detect_csv_encoding(str(path)),
+        skip_blank_lines=False,
     ).fillna("")
 
 
@@ -273,10 +283,11 @@ def build_output_subdir_map_from_csv(input_csv: str) -> dict[str, str]:
     po_to_subdir: dict[str, str] = {}
 
     for _, row in df.iterrows():
-        po = str(row.get(po_name, "")).strip()
-        supplier = str(row.get(supplier_name, "")).strip()
-        if po and po.lower() != "nan" and supplier and supplier.lower() != "nan":
-            po_to_subdir[po] = _build_output_subdir(row, supplier, hierarchy_cols, has_hierarchy_data)
+        po = clean_scalar(row.get(po_name, ""))
+        supplier = clean_scalar(row.get(supplier_name, ""))
+        po_key = normalize_po_value(po)
+        if po_key and supplier:
+            po_to_subdir[po_key] = _build_output_subdir(row, supplier, hierarchy_cols, has_hierarchy_data)
     return po_to_subdir
 
 
@@ -400,6 +411,17 @@ def export_original_like_excel_report(
 
     os.makedirs(os.path.dirname(report_path), exist_ok=True)
     out_df.to_excel(report_path, index=False)
+    try:
+        metadata_repository = CoupaMetadataRepository(db)
+        enrich_excel_report(
+            report_path,
+            metadata_repository.list_po_metadata(session_id),
+            metadata_repository.list_line_metadata(session_id),
+        )
+    except Exception as metadata_error:
+        # The attachment report remains usable even if metadata enrichment
+        # fails; the error is visible in the CLI log for support diagnostics.
+        print(f"[REPORT][COUPA_METADATA][ERROR] {metadata_error}")
     return report_path
 
 
@@ -424,16 +446,40 @@ def create_session_from_csv(
     po_name = po_column or "PO_NUMBER"
     supplier_name = supplier_column or "SUPPLIER"
     count = 0
+    seen_suppliers: dict[str, str] = {}
     for _, row in df.iterrows():
-        po = str(row.get(po_name, "")).strip()
-        company = str(row.get(supplier_name, "")).strip()
-        if po and po.lower() != "nan" and company and company.lower() != "nan":
-            output_subdir = _build_output_subdir(row, company, hierarchy_cols, has_hierarchy_data)
-            cursor.execute(
-                "INSERT OR IGNORE INTO po_downloads (session_id, po_number, company_code, output_subdir, status) VALUES (?, ?, ?, ?, 'PENDING')",
-                (session_id, po, company, output_subdir),
-            )
+        po = clean_scalar(row.get(po_name, ""))
+        company = clean_scalar(row.get(supplier_name, ""))
+        if detect_po_parts(po)["multiple"] or detect_po_parts(po)["ambiguous"]:
+            raise ValueError(f"Multiple or ambiguous PO values in input cell: {po}")
+        po = canonicalize_po_value(po)
+        if not is_valid_canonical_po(po):
+            raise ValueError(f"Invalid PO value: {po}")
+        po_key = normalize_po_value(po)
+        supplier_key = normalize_supplier_value(company)
+        if not po_key or not company:
+            continue
+        if is_placeholder_po(po) or is_excel_numeric_coercion(po) or is_placeholder_supplier(company):
+            cursor.execute("DELETE FROM po_downloads WHERE session_id = ?", (session_id,))
+            cursor.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
+            db.conn.commit()
+            raise ValueError(f"Invalid PO value: {po}")
+        previous_supplier = seen_suppliers.get(po_key)
+        if previous_supplier is not None and previous_supplier != supplier_key:
+            cursor.execute("DELETE FROM po_downloads WHERE session_id = ?", (session_id,))
+            cursor.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
+            db.conn.commit()
+            raise ValueError(f"PO {po} is linked to multiple Suppliers.")
+        if previous_supplier is not None:
+            continue
+        output_subdir = _build_output_subdir(row, company, hierarchy_cols, has_hierarchy_data)
+        cursor.execute(
+            "INSERT OR IGNORE INTO po_downloads (session_id, po_number, company_code, output_subdir, status) VALUES (?, ?, ?, ?, 'PENDING')",
+            (session_id, po, company, output_subdir),
+        )
+        if cursor.rowcount:
             count += 1
+            seen_suppliers[po_key] = supplier_key
     db.conn.commit()
     return session_id, count
 
@@ -485,7 +531,7 @@ def create_retry_session_from_last_errors(
     for row in error_rows:
         output_subdir = row["output_subdir"]
         if (not output_subdir) and po_to_subdir:
-            output_subdir = po_to_subdir.get(str(row["po_number"]).strip(), "")
+            output_subdir = po_to_subdir.get(normalize_po_value(row["po_number"]), "")
         cursor.execute(
             "INSERT OR IGNORE INTO po_downloads (session_id, po_number, company_code, output_subdir, status) VALUES (?, ?, ?, ?, 'PENDING')",
             (session_id, row["po_number"], row["company_code"], output_subdir),
@@ -504,7 +550,7 @@ def prepare_in_place_retry(
     if po_number:
         rows = cursor.execute(
             "SELECT po_number, status FROM po_downloads WHERE session_id = ? AND po_number = ?",
-            (session_id, str(po_number).strip()),
+            (session_id, canonicalize_po_value(po_number)),
         ).fetchall()
     else:
         statuses = ("ERROR", "SKIPPED_VERIFICATION_REQUIRED") if errors_only else ("PENDING", "ERROR", "SKIPPED_VERIFICATION_REQUIRED")
@@ -534,7 +580,7 @@ def create_retry_session_for_po(
     execution_type: str = "PROD",
 ) -> tuple[int, int, int]:
     cursor = db.conn.cursor()
-    normalized_po = str(po_number or "").strip()
+    normalized_po = canonicalize_po_value(po_number)
     if source_session_id is None:
         source_row = cursor.execute(
             "SELECT session_id FROM po_downloads WHERE po_number = ? ORDER BY session_id DESC LIMIT 1",
@@ -600,7 +646,7 @@ def create_retry_session_from_incomplete(
     for row in rows:
         output_subdir = row["output_subdir"]
         if (not output_subdir) and po_to_subdir:
-            output_subdir = po_to_subdir.get(str(row["po_number"]).strip(), "")
+            output_subdir = po_to_subdir.get(normalize_po_value(row["po_number"]), "")
         cursor.execute(
             "INSERT OR IGNORE INTO po_downloads (session_id, po_number, company_code, output_subdir, status) VALUES (?, ?, ?, ?, 'PENDING')",
             (session_id, row["po_number"], row["company_code"], output_subdir),
@@ -622,20 +668,28 @@ async def main():
         sys.exit(1)
 
     # --- Authentication ---
-    cookies = load_cached_cookies()
-    if cookies:
-        print("[AUTH] Cached cookies loaded. Validating session...")
-        valid, reason = await validate_cookies_detailed(cookies)
-        if valid:
-            print("[AUTH] Coupa session is valid.\n")
-        elif reason == "unavailable":
-            print("[AUTH][WARNING] Coupa session could not be verified; keeping cached cookies and continuing.")
-        else:
-            print("[AUTH] Cached session expired. Sign-in is required.")
-            cookies = None
-
+    auth_service = AuthService()
+    interactive_auth = os.environ.get("COUPA_AUTH_INTERACTIVE", "1").strip().lower() not in {"0", "false", "no"}
+    browser_preference = os.environ.get("COUPA_AUTH_BROWSER", "auto")
+    auth_status = lambda state, message: print(f"[AUTH] {message}")
+    auth_result = await auth_service.ensure_session(
+        interactive=interactive_auth,
+        browser_preference=browser_preference,
+        status_callback=auth_status if interactive_auth else None,
+    )
+    cookies = dict(auth_result.cookies) if auth_result.cookies else None
+    if auth_result.state is AuthState.VALID:
+        print("[AUTH] Coupa session is valid.\n")
+    elif auth_result.state is AuthState.UNAVAILABLE and cookies:
+        print("[AUTH][WARNING] Coupa session could not be verified; keeping cached cookies and continuing.")
+    elif auth_result.state is AuthState.EXPIRED:
+        print("[AUTH] Cached session expired. Sign-in is required.")
     if not cookies:
-        cookies = await get_coupa_cookies(load_from_file=False)
+        if not interactive_auth:
+            print("[AUTH][ERROR] Authentication is required before the GUI pipeline can start.")
+            raise SystemExit(3)
+        print("[AUTH][ERROR] Coupa authentication did not produce a usable session.")
+        raise SystemExit(3)
 
     db = SessionDB(DB_PATH)
 
@@ -668,6 +722,28 @@ async def main():
             f"[INFO] Provisional retry: session={session_id}, "
             f"{attempt['original_po_number']} -> {attempt['edited_po_number']}, type={run_type}"
         )
+    elif args.resume_in_place_session_id is not None:
+        source_session_id = args.resume_in_place_session_id
+        run_type = resolve_execution_type(
+            args,
+            input_name=f"resume_in_place_{source_session_id}",
+            source_session_id=source_session_id,
+            db=db,
+        )
+        session_id = source_session_id
+        mode = "resume_in_place"
+        pending_count = db.conn.execute(
+            "SELECT COUNT(*) FROM po_downloads WHERE session_id = ? AND status IN ('PENDING', 'ERROR')",
+            (session_id,),
+        ).fetchone()[0]
+        if not pending_count:
+            print(f"[INFO] Session {session_id} has no pending or failed POs to resume.")
+            db.close()
+            return
+        # Keep the previous SUCCESS/ERROR rows in this same session. The
+        # worker retries ERROR rows directly, allowing the GUI to retain the
+        # cumulative progress denominator and counters.
+        print(f"[INFO] In-place resume: session={session_id}, pending_or_failed={pending_count}, type={run_type}")
     elif args.retry_in_place_po or args.retry_in_place_errors:
         source_session_id = args.retry_session_id
         if not source_session_id:
@@ -777,6 +853,15 @@ async def main():
                 hierarchy_order = None
         from src.engine.input_schema import parse_mapping_env
         column_mapping = parse_mapping_env() or {}
+        from src.gui.api import AppAPI
+        input_validation = AppAPI(db, args.download_root).validate_input_file(INPUT_CSV)
+        if not input_validation.get("valid"):
+            print("[ERROR] Input validation failed:")
+            for validation_error in input_validation.get("errors", []):
+                print(f"[ERROR] {validation_error}")
+            db.close()
+            sys.exit(2)
+        column_mapping = input_validation.get("mapping") or column_mapping
         run_description = os.environ.get("COUPA_RUN_DESCRIPTION") or None
         session_id, count = create_session_from_csv(
             db,
@@ -823,16 +908,31 @@ async def main():
         preserve_existing_files=bool(args.retry_po or args.retry_in_place_po or args.retry_in_place_errors),
     )
 
+    resume_in_place = args.resume_in_place_session_id is not None
+    status_filter = "status IN ('PENDING', 'ERROR')" if resume_in_place else "status = 'PENDING'"
     rows = cursor.execute(
-        "SELECT po_number, company_code FROM po_downloads WHERE session_id = ? AND status = 'PENDING'",
+        f"SELECT po_number, company_code, status, attachment_count FROM po_downloads WHERE session_id = ? AND {status_filter}",
         (session_id,),
     ).fetchall()
 
     pos_list = [(r["po_number"], r["company_code"]) for r in rows]
+    all_rows = cursor.execute(
+        "SELECT status, attachment_count FROM po_downloads WHERE session_id = ?",
+        (session_id,),
+    ).fetchall()
+    initial_success = sum(1 for row in all_rows if row["status"] == "SUCCESS")
+    initial_errors = sum(1 for row in all_rows if row["status"] == "ERROR")
+    initial_files = sum(int(row["attachment_count"] or 0) for row in all_rows if row["status"] == "SUCCESS")
+    initial_status = {str(row["po_number"]): str(row["status"]) for row in rows}
     print(f"[INFO] Processing {len(pos_list)} POs with {crawler.concurrency} concurrent workers...\n")
 
-    counters = {"done": 0, "ok": 0, "err": 0, "files": 0}
-    total = len(pos_list)
+    counters = {
+        "done": initial_success + initial_errors if resume_in_place else 0,
+        "ok": initial_success if resume_in_place else 0,
+        "err": initial_errors if resume_in_place else 0,
+        "files": initial_files if resume_in_place else 0,
+    }
+    total = len(all_rows) if resume_in_place else len(pos_list)
     start_ts = time.time()
 
     async def process_one(po_number, company_code):
@@ -842,12 +942,21 @@ async def main():
             if result.get("success") or attempt == args.retry_attempts - 1:
                 break
             await asyncio.sleep(min(5.0, 1.0 * (attempt + 1)))
-        counters["done"] += 1
-        if result.get("success"):
-            counters["ok"] += 1
-            counters["files"] += len(result.get("attachments", []))
+        previous_status = initial_status.get(str(po_number), "PENDING")
+        if resume_in_place and previous_status == "ERROR":
+            # An ERROR row was already counted before the pause. Retrying it
+            # changes the outcome but must not advance the unique-PO counter.
+            if result.get("success"):
+                counters["ok"] += 1
+                counters["err"] = max(0, counters["err"] - 1)
+                counters["files"] += len(result.get("attachments", []))
         else:
-            counters["err"] += 1
+            counters["done"] += 1
+            if result.get("success"):
+                counters["ok"] += 1
+                counters["files"] += len(result.get("attachments", []))
+            else:
+                counters["err"] += 1
         done = counters["done"]
         if done % 25 == 0 or done == total:
             elapsed = time.time() - start_ts
@@ -867,7 +976,16 @@ async def main():
         async with sem:
             return await process_one(po, co)
 
-    results = await asyncio.gather(*[bounded(po, co) for po, co in pos_list], return_exceptions=True)
+    try:
+        results = await asyncio.gather(*[bounded(po, co) for po, co in pos_list], return_exceptions=True)
+    except asyncio.CancelledError:
+        # SIGINT is used by the GUI for a resumable pause. Cancellation is
+        # expected here: completed rows are already committed and in-flight
+        # rows remain PENDING for the reconciliation/resume session.
+        await crawler.close()
+        db.close()
+        print("[INFO] Download pipeline interrupted safely; pending POs remain queued for resume.", flush=True)
+        raise
     results = [r for r in results if not isinstance(r, BaseException)]
     if args.retry_in_place_po or args.retry_in_place_errors:
         for result in results:
@@ -985,5 +1103,10 @@ async def main():
 if __name__ == "__main__":
     try:
         asyncio.run(main())
+    except asyncio.CancelledError:
+        # Some frozen Python runtimes propagate SIGINT as CancelledError
+        # instead of KeyboardInterrupt. A pause must not be reported as a
+        # crashed pipeline or return exit code 1.
+        print("\n[INFO] Run paused safely; pending POs remain queued for resume.", flush=True)
     except KeyboardInterrupt:
         print("\n[INFO] Run interrupted by the user (Ctrl+C).")
