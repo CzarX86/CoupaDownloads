@@ -1,2 +1,5 @@
 src-tauri/target/
 src-tauri/gen/
+!python/sample_data.csv
+!src-tauri/Cargo.lock
+!src-tauri/icons/icon.png
