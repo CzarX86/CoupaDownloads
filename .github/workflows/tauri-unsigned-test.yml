@@ -47,13 +47,34 @@ jobs:
           }
           Get-Item "target/release/tauri-unsigned-test.exe" | Format-List Name,Length,LastWriteTime
 
-      - name: Verify Authenticode signature is absent
+      - name: Sign executable with Azure Trusted Signing
+        if: ${{ secrets.AZURE_CLIENT_ID != '' }}
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Apply Authenticode signature
+        if: ${{ secrets.AZURE_CLIENT_ID != '' }}
+        uses: azure/trusted-signing-action@v0
+        with:
+          endpoint: ${{ vars.TRUSTED_SIGNING_ENDPOINT }}
+          trusted-signing-account-name: ${{ vars.TRUSTED_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ vars.TRUSTED_SIGNING_CERT_PROFILE }}
+          files: tauri-unsigned-test/src-tauri/target/release/tauri-unsigned-test.exe
+          time-stamp-rfc3161-url: http://timestamp.acs.microsoft.com
+
+      - name: Verify Authenticode signature
         shell: pwsh
         run: |
           $sig = Get-AuthenticodeSignature "target/release/tauri-unsigned-test.exe"
           Write-Host "Signature status: $($sig.Status)"
-          if ($sig.Status -eq "Valid") {
-            throw "Executable unexpectedly has a valid signature"
+          if ('${{ secrets.AZURE_CLIENT_ID }}' -ne '') {
+            if ($sig.Status -ne "Valid") { throw "Expected a valid signature, got $($sig.Status)" }
+            Write-Host "Signer: $($sig.SignerCertificate.Subject)"
+          } else {
+            if ($sig.Status -eq "Valid") { throw "Executable unexpectedly has a valid signature" }
           }
 
       - name: Package executable with Python sidecar
