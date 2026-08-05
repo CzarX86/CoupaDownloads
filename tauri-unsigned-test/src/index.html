@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Tauri Unsigned Test</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header>
+    <h1>Tauri unsigned test</h1>
+    <p>Minimal architecture replica: Rust shell + Python sidecar (pandas, Power BI dataset access)</p>
+  </header>
+
+  <main>
+    <section class="card">
+      <h2>1 · Python backend</h2>
+      <p class="hint">Spawns <code>python sidecar.py ping</code> from Rust.</p>
+      <button data-action="ping">Run ping</button>
+      <pre class="out" id="out-ping">-</pre>
+    </section>
+
+    <section class="card">
+      <h2>2 · Pandas processing</h2>
+      <p class="hint">Reads <code>sample_data.csv</code> with pandas and aggregates by status.</p>
+      <button data-action="process_csv">Process CSV</button>
+      <pre class="out" id="out-csv">-</pre>
+    </section>
+
+    <section class="card">
+      <h2>3 · Power BI dataset access</h2>
+      <p class="hint">Fabric CLI (<code>fab</code>) DAX query with offline mock fallback.</p>
+      <button data-action="powerbi_status">Check auth status</button>
+      <button data-action="powerbi_query">Run DAX query</button>
+      <pre class="out" id="out-pbi">-</pre>
+    </section>
+
+    <section class="card">
+      <h2>4 · Shell</h2>
+      <p class="hint">Pure Rust command, no Python involved.</p>
+      <button data-action="app_info">App info</button>
+      <pre class="out" id="out-info">-</pre>
+    </section>
+  </main>
+
+  <footer>
+    <span id="status-dot" class="dot"></span>
+    <span id="status-text">idle</span>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>

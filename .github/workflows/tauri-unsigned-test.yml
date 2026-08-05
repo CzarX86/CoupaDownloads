@@ -1,0 +1,74 @@
+name: Build Tauri unsigned test
+
+# Builds a minimal, unsigned Tauri Windows executable so we can validate
+# whether Windows runs it without a code-signing certificate.
+# Trigger: manual dispatch or any change under tauri-unsigned-test/.
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "tauri-unsigned-test/**"
+      - ".github/workflows/tauri-unsigned-test.yml"
+
+jobs:
+  build-windows:
+    name: Build unsigned Windows executable
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: tauri-unsigned-test/src-tauri
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo build
+        uses: actions/cache@v4
+        with:
+          path: |
+            tauri-unsigned-test/src-tauri/target
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: tauri-unsigned-test-${{ runner.os }}-${{ hashFiles('tauri-unsigned-test/src-tauri/Cargo.toml', 'tauri-unsigned-test/src-tauri/Cargo.lock') }}
+          restore-keys: |
+            tauri-unsigned-test-${{ runner.os }}-
+
+      - name: Build release executable
+        run: cargo build --release --locked
+
+      - name: Verify executable exists
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "target/release/tauri-unsigned-test.exe")) {
+            throw "Tauri unsigned test executable was not generated"
+          }
+          Get-Item "target/release/tauri-unsigned-test.exe" | Format-List Name,Length,LastWriteTime
+
+      - name: Verify Authenticode signature is absent
+        shell: pwsh
+        run: |
+          $sig = Get-AuthenticodeSignature "target/release/tauri-unsigned-test.exe"
+          Write-Host "Signature status: $($sig.Status)"
+          if ($sig.Status -eq "Valid") {
+            throw "Executable unexpectedly has a valid signature"
+          }
+
+      - name: Package executable with Python sidecar
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist/release | Out-Null
+          Copy-Item "target/release/tauri-unsigned-test.exe" "dist/release/"
+          Copy-Item -Recurse "../../python" "dist/release/python"
+          Compress-Archive -Path "dist/release/*" -DestinationPath "dist/tauri-unsigned-test-windows-x64.zip" -Force
+          Get-ChildItem -Recurse dist/release | Select-Object FullName,Length
+
+      - name: Upload executable package
+        uses: actions/upload-artifact@v4
+        with:
+          name: tauri-unsigned-test-windows-x64
+          path: tauri-unsigned-test/src-tauri/dist/tauri-unsigned-test-windows-x64.zip
+          if-no-files-found: error
+          retention-days: 14
