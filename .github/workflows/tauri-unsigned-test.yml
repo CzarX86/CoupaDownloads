@@ -61,7 +61,7 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force -Path dist/release | Out-Null
           Copy-Item "target/release/tauri-unsigned-test.exe" "dist/release/"
-          Copy-Item -Recurse "../../python" "dist/release/python"
+          Copy-Item -Recurse "../python" "dist/release/python"
           Compress-Archive -Path "dist/release/*" -DestinationPath "dist/tauri-unsigned-test-windows-x64.zip" -Force
           Get-ChildItem -Recurse dist/release | Select-Object FullName,Length
 
